@@ -1,0 +1,18 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model WebsiteMetric {
+  id              String   @id @default(cuid())
+  totalMouseMiles Float    @default(0)
+  totalVisits     Int      @default(0)
+  totalClicks     Int      @default(0)
+  totalScroll     Float    @default(0) // in pixels or miles depending on frontend logic
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
