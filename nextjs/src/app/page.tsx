@@ -6,11 +6,13 @@ import SkillsCarousel from "@/components/SkillsCarousel";
 import Metrics from "@/components/Metrics";
 import ProjectsSection from "@/components/Projects";
 import ExperienceSection from "@/components/Experience";
+import Cloud1 from "@/components/Cloud1"
 
 export default function Home() {
   return (
     <>
       <Header />
+      <Cloud1></Cloud1>
       <main
         className="
           bg-gradient-to-b
@@ -18,6 +20,7 @@ export default function Home() {
             via-sky-600    /* mid‑sky */
             to-sky-900     /* deep sky at bottom */
           text-white
+          z-1
         "
       >
         <Hero />

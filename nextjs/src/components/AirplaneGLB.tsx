@@ -13,7 +13,7 @@ const CONFIG = {
   /* model & sizing */
   modelPath:     "/models/airplane.glb",
   visibleSize:   0.3,      // world-units plane width
-  modelScale:    0.8,
+  modelScale:    1,
   zLayer:        0,
 
   /* follow behaviour */
@@ -27,10 +27,10 @@ const CONFIG = {
   idleRPM:       0.25,     // revolutions per second
 
   /* fly-off + comeback */
-  exitThreshold:   -.9,  // pointer.y (−1…1) below which exit starts
+  exitThreshold:   -.95,  // pointer.y (−1…1) below which exit starts
   exitSpeed:       8,      // units / second to the right
   exitBank:        -Math.PI / 10,
-  returnThreshold: -0.8,  // pointer.y above which plane resets
+  returnThreshold: -.9,  // pointer.y above which plane resets
   returnX:         -6      // x-coord where it re-enters from left
 } as const;
 /* ============================================= */

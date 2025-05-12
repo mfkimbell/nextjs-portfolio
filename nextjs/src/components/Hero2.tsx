@@ -23,7 +23,7 @@ export default function Hero2() {
           alt="Left jungle branch"
           width={300}
           height={300}
-          className="translate-y-12"
+          className="translate-y-12 -translate-x-4"
         />
       </div>
 

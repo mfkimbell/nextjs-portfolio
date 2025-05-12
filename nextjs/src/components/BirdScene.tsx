@@ -13,11 +13,11 @@ export default function BirdScene() {
   return (
     <div
       ref={containerRef}
-      className="absolute left-0 top-1/2 -translate-y-1/2 w-[220px] h-[220px] pointer-events-none z-10"
+      className="absolute -left-6 top-1/2 -translate-y-1/2 w-[220px] h-[220px] pointer-events-none z-10"
     >
       <Canvas camera={{ position: [0, 1, 3], fov: 40 }}>
         <ambientLight intensity={1.8} />
-        <directionalLight position={[5, 10, 5]} intensity={0.8} color="#7fcfff" />
+        <directionalLight position={[5, 10, 5]} intensity={2.8} color="#7fcfff" />
         <BirdGLB containerRef={containerRef} />
         <OrbitControls enableZoom={false} enablePan={false} />
       </Canvas>

@@ -3,10 +3,12 @@
 import { Canvas } from "@react-three/fiber";
 import { Suspense } from "react";
 import AirplaneGLB from "./AirplaneGLB";
+import Image from "next/image";
 
 export default function Hero() {
   return (
-    <section className="relative w-full h-screen overflow-visit">
+    <section className="relative w-full h-screen overflow-hidden z-1">
+      {/* 1) 3D scene */}
       <Canvas shadows camera={{ position: [0, 0, 5], fov: 50 }}>
         {/* Ambient fill */}
         <ambientLight intensity={1.6} />
@@ -36,15 +38,9 @@ export default function Hero() {
         </Suspense>
       </Canvas>
 
-      {/* Hero text overlay */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
-        <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold text-white drop-shadow-md">
-          Mitchell Kimbell
-        </h1>
-        <p className="mt-3 text-lg text-blue-100 max-w-md">
-          Full-stack engineer navigating the cloud with creative precision
-        </p>
-      </div>
+
+      {/* 3) Hero text overlay stays on top */}
+     
     </section>
   );
 }

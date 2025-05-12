@@ -21,7 +21,7 @@ export default function Header() {
 
   return (
     <header
-      className={`fixed inset-x-0 top-0 z-50 transition-all duration-300
+      className={`pointer-events-none fixed inset-x-0 top-0 z-45 transition-all duration-300
         ${scrolled ? "backdrop-blur-md bg-[rgba(13,17,23,0.35)] shadow-[0_1px_4px_rgba(0,0,0,0.6)]" : "bg-transparent"}
       `}
     >
@@ -37,7 +37,7 @@ export default function Header() {
             <Link
               key={n.href}
               href={n.href}
-              className="text-muted hover:text-accent transition-colors"
+              className="pointer-events-auto text-muted hover:text-accent transition-colors"
             >
               {n.label}
             </Link>
