@@ -1,5 +1,6 @@
 /* ------------------------------------------------------------------
    AirplaneGLB.tsx  – self-contained airplane tracker
+   Simplified scaling: use `rawScale` only (no bounding‐box math)
 -------------------------------------------------------------------*/
 "use client";
 
@@ -8,68 +9,81 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 
-/* ========= CONFIG – tweak any value =========== */
+/* ========= CONFIG – tweak only rawScale for size =========== */
 const CONFIG = {
-  /* model & sizing */
-  modelPath:     "/models/airplane.glb",
-  visibleSize:   0.3,      // world-units plane width
-  modelScale:    1,
-  zLayer:        0,
+  modelPath: "/models/airplane.glb",
+
+  // Raw uniform scale factor. 1 = model’s native size,
+  // <1 shrinks, >1 enlarges. Tweak this until it looks right.
+  rawScale: 2.5,
+
+  zLayer: 0,
 
   /* follow behaviour */
-  followSpeed:   0.06,
-  rotateSmooth:  0.08,
+  followSpeed: 0.06,
+  rotateSmooth: 0.08,
   bankIntensity: 0.4,
-  followRadius:  0.3,
+  followRadius: 0.3,
 
   /* idle orbit */
-  idleDelay:     0.8,     // seconds mouse must stay still
-  idleRPM:       0.25,     // revolutions per second
+  idleDelay: 0.8,
+  idleRPM: 0.25,
 
   /* fly-off + comeback */
-  exitThreshold:   -0.95,  // pointer.y (−1…1) below which exit starts
-  exitSpeed:       8,      // units / second to the right
-  exitBank:        -Math.PI / 10,
-  returnThreshold: -0.9,   // pointer.y above which plane resets
-  returnX:         -6      // x-coord where it re-enters from left
+  exitThreshold: -0.95,
+  exitSpeed: 8,
+  exitBank: -Math.PI / 10,
+  returnThreshold: -0.9,
+  returnX: -6,
 } as const;
 /* ============================================= */
 
 useGLTF.preload(CONFIG.modelPath);
 
 export default function AirplaneGLB() {
-  const plane = useRef<THREE.Group>(null);
+  const planeRef = useRef<THREE.Group>(null);
   const exitMode = useRef(false);
   const { camera } = useThree();
   const { scene: airplane } = useGLTF(CONFIG.modelPath);
 
-  /* ---- normalize once & initial spawn ---- */
+  // CLEANUP: dispose geometries & materials on unmount
   useEffect(() => {
-    // center & scale model
-    const box = new THREE.Box3().setFromObject(airplane);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    airplane.scale.setScalar(
-      (CONFIG.visibleSize / maxDim) * CONFIG.modelScale
-    );
-    airplane.position.sub(box.getCenter(new THREE.Vector3()));
+    return () => {
+      airplane.traverse((obj) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          const mesh = obj as THREE.Mesh;
+          mesh.geometry.dispose();
+          if (Array.isArray(mesh.material)) {
+            mesh.material.forEach((m) => m.dispose());
+          } else {
+            mesh.material.dispose();
+          }
+        }
+      });
+    };
+  }, [airplane]);
 
-    // initial spawn offscreen to the left
-    if (plane.current) {
-      plane.current.position.set(
+  // SIMPLE SCALE & CENTER: runs once on mount
+  useEffect(() => {
+    // 1) apply raw uniform scale
+    airplane.scale.setScalar(CONFIG.rawScale);
+
+    // 2) center model origin
+    const box = new THREE.Box3().setFromObject(airplane);
+    const center = box.getCenter(new THREE.Vector3());
+    airplane.position.sub(center);
+
+    // 3) initial off-screen spawn
+    if (planeRef.current) {
+      planeRef.current.position.set(
         CONFIG.returnX,
         0,
         CONFIG.zLayer
       );
-      // set prevPos so follow logic starts from this offscreen point
-      (prevPos as React.MutableRefObject<THREE.Vector3>).current.copy(
-        new THREE.Vector3(CONFIG.returnX, 0, CONFIG.zLayer)
-      );
     }
   }, [airplane]);
 
-  /* helpers */
+  /* ───── HELPERS ───── */
   const target    = useMemo(() => new THREE.Vector3(), []);
   const tmpMat    = useMemo(() => new THREE.Matrix4(), []);
   const qLook     = useMemo(() => new THREE.Quaternion(), []);
@@ -80,50 +94,48 @@ export default function AirplaneGLB() {
   const up        = new THREE.Vector3(0, 1, 0);
 
   useFrame((state, delta) => {
-    if (!plane.current) return;
-
+    if (!planeRef.current) return;
     const { x: mx, y: my } = state.pointer;
 
-    /* -------- exit / comeback handling -------- */
+    /* ---- exit / comeback ---- */
     if (!exitMode.current && my < CONFIG.exitThreshold) {
       exitMode.current = true;
     }
-
     if (exitMode.current) {
       // fly right offscreen
-      plane.current.position.x += CONFIG.exitSpeed * delta;
-      plane.current.quaternion.slerp(
+      planeRef.current.position.x += CONFIG.exitSpeed * delta;
+      planeRef.current.quaternion.slerp(
         new THREE.Quaternion().setFromEuler(
           new THREE.Euler(0, 0, CONFIG.exitBank)
         ),
         CONFIG.rotateSmooth
       );
-
-      // reset to left spawn when pointer back in range
+      // reset when pointer back up
       if (my > CONFIG.returnThreshold) {
         exitMode.current = false;
-        plane.current.position.set(
+        planeRef.current.position.set(
           CONFIG.returnX,
           0,
           CONFIG.zLayer
         );
-        prevPos.current.copy(plane.current.position);
+        prevPos.current.copy(planeRef.current.position);
       }
-      return; // skip normal follow/idle until we've reset
+      return;
     }
 
-    /* -------- normal follow / idle -------- */
+    /* ---- normal follow / idle ---- */
     const dx = mx - prevMouse.current.x;
     const dy = my - prevMouse.current.y;
     const moved = dx * dx + dy * dy > 1e-6;
     prevMouse.current.set(mx, my);
-    moved ? (idleTimer.current = 0) : (idleTimer.current += delta);
+    idleTimer.current = moved ? 0 : idleTimer.current + delta;
 
+    // project pointer into world at zLayer
     const ndc = new THREE.Vector3(mx, my, 0.5).unproject(camera);
     const dir = ndc.sub(camera.position).normalize();
     const dist = (CONFIG.zLayer - camera.position.z) / dir.z;
     const baseTarget = camera.position.clone().add(dir.multiplyScalar(dist));
-    const pos = plane.current.position;
+    const pos = planeRef.current.position;
 
     if (idleTimer.current < CONFIG.idleDelay) {
       // follow mouse
@@ -138,7 +150,7 @@ export default function AirplaneGLB() {
       }
       pos.lerp(target, CONFIG.followSpeed);
 
-      // orientation & bank
+      // orient & bank
       const vel = pos.clone().sub(prevPos.current);
       prevPos.current.copy(pos);
       if (vel.lengthSq() > 1e-7) {
@@ -154,13 +166,13 @@ export default function AirplaneGLB() {
         const fwd = new THREE.Vector3(1, 0, 0).applyQuaternion(qLook);
         qBank.setFromAxisAngle(fwd, bank);
 
-        plane.current.quaternion.slerp(
+        planeRef.current.quaternion.slerp(
           qLook.multiply(qBank),
           CONFIG.rotateSmooth
         );
       }
     } else {
-      // idle orbit around last mouse position
+      // idle orbit
       const t = state.clock.getElapsedTime();
       const angle = t * CONFIG.idleRPM * Math.PI * 2;
       target
@@ -187,7 +199,7 @@ export default function AirplaneGLB() {
       const fwd = new THREE.Vector3(1, 0, 0).applyQuaternion(qLook);
       qBank.setFromAxisAngle(fwd, bank);
 
-      plane.current.quaternion.slerp(
+      planeRef.current.quaternion.slerp(
         qLook.multiply(qBank),
         CONFIG.rotateSmooth
       );
@@ -196,9 +208,9 @@ export default function AirplaneGLB() {
 
   return (
     <primitive
-      className="z-60"
-      ref={plane}
+      ref={planeRef}
       object={airplane}
+      className="z-60"
     />
   );
 }

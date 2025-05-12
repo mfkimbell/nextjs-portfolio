@@ -7,7 +7,7 @@ import Image from "next/image";
 
 export default function Hero() {
   return (
-    <section className="relative w-full h-screen overflow-hidden z-555">
+    <section className="relative w-full h-screen overflow-hidden z-1">
       {/* 1) 3D scene */}
       <Canvas shadows camera={{ position: [0, 0, 5], fov: 50 }}>
         {/* Ambient fill */}
@@ -17,7 +17,7 @@ export default function Hero() {
         <directionalLight
           castShadow
           position={[2, 4, 5]}
-          intensity={1}
+          intensity={2.4}
           shadow-mapSize-width={1024}
           shadow-mapSize-height={1024}
         />

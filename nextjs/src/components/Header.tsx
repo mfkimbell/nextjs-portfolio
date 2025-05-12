@@ -1,21 +1,109 @@
+// src/components/Header.tsx
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import Image from "next/image";
 import {
-  Github,
-  Download,
-  Mail,
-  Linkedin,
+  Send,
   Award,
   Folder,
   Briefcase,
   BarChart,
-  Send,     // paper-airplane
-  Search,   // Google icon
+  Github,
+  Download,
+  Mail,
+  Linkedin,
+  Search,
 } from "lucide-react";
-import Image from "next/image";
 
+// ——— NavIcons sub‑component ———
+function NavIcons({ scrolled }: { scrolled: boolean }) {
+  const navItems = [
+    { href: "#home", Icon: Send,      label: "Home" },
+    { href: "#skills", Icon: Award,    label: "Skills" },
+    { href: "#projects", Icon: Folder,   label: "Projects" },
+    { href: "#experience", Icon: Briefcase, label: "Experience" },
+    { href: "#metrics", Icon: BarChart,  label: "Metrics" },
+  ];
+
+  return (
+    <nav className="flex items-center space-x-4 pointer-events-auto">
+      {navItems.map(({ href, Icon, label }) => (
+        <Link key={href} href={href} aria-label={label} className="group">
+          <Icon
+            className={`
+              w-5 h-5
+              transition-colors transition-transform duration-200 ease-out
+              ${scrolled
+                ? "text-blue-300 group-hover:text-blue-400 group-hover:scale-110"
+                : "text-black group-hover:text-black"}
+            `}
+          />
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+// ——— SocialIcons sub‑component ———
+function SocialIcons({ scrolled }: { scrolled: boolean }) {
+  const socialItems = [
+    { href: "https://github.com/mfkimbell", Icon: Github,    label: "GitHub",      external: true },
+    { href: "/resume.pdf",                  Icon: Download,  label: "Resume",      download: true },
+    { href: "mailto:mfkimbell@gmail.com?subject=Job%20Offer",   Icon: Mail,      label: "Email" },
+    { href: "https://www.linkedin.com/in/mfkimbell", Icon: Linkedin,  label: "LinkedIn",   external: true },
+
+  ];
+
+  return (
+    <div className="flex items-center space-x-4 pointer-events-auto">
+      {socialItems.map(({ href, Icon, label, external, download }) => {
+        const baseColor = scrolled ? "text-muted group-hover:text-accent" : "text-black group-hover:text-black";
+        return (
+          <Link
+            key={href}
+            href={href}
+            {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+            {...(download ? { download: true } : {})}
+            aria-label={label}
+            className="group"
+          >
+            {Icon === Search ? (
+              <Image
+                src="/google.svg"
+                alt="Google logo"
+                width={18}
+                height={18}
+                className={`
+                  transition-opacity transition-transform duration-200 ease-out
+                  ${scrolled
+                    ? "opacity-100 group-hover:opacity-80 group-hover:scale-110"
+                    : "opacity-100 group-hover:opacity-100"}
+                `}
+              />
+            ) : (
+              <Icon
+                className={`
+                  w-5 h-5
+                  transition-colors transition-transform duration-200 ease-out
+                  ${baseColor}
+                `}
+              />
+            )}
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+// ——— Divider sub‑component ———
+function Divider() {
+  return <div className="h-6 w-px bg-muted/50 pointer-events-none" />;
+}
+
+// ——— Main Header ———
 export default function Header() {
   const [scrolled, setScrolled] = useState(false);
 
@@ -27,106 +115,20 @@ export default function Header() {
 
   return (
     <header
-      className={`pointer-events-none fixed inset-x-0 top-0 z-50 transition-all duration-300
-        ${
-          scrolled
-            ? "backdrop-blur-md bg-[rgba(13,17,23,0.35)] shadow-[0_1px_4px_rgba(0,0,0,0.6)]"
-            : "bg-transparent"
-        }`}
+      className={`
+        pointer-events-none
+        fixed top-4 right-4 z-50
+        w-fit px-3 py-2 rounded-full
+        flex items-center
+        transition-all duration-300
+        ${scrolled
+          ? "backdrop-blur-md bg-[rgba(13,17,23,0.35)] shadow-md"
+          : "bg-transparent"}
+      `}
     >
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-        {/* Brand Left */}
-        <Link href="/" className="pointer-events-auto text-lg font-semibold text-accent">
-          Mitchell&nbsp;Kimbell
-        </Link>
-
-        {/* Icons Right */}
-        <div className="hidden md:flex items-center pointer-events-auto">
-          {/* Page-nav icons */}
-          <div className="flex items-center space-x-4">
-            {/* 🔹 NEW — home / top of page */}
-            <Link href="#home" aria-label="Home">
-  <Send
-    className="
-      w-5 h-5
-      -rotate-45 scale-[1] translate-y-[4px] translate-x-[2px]    /* 👈 align + size */
-      text-muted hover:text-accent transition-colors
-    "
-  />
-</Link>
-            <Link href="#skills" aria-label="Skills">
-              <Award className="w-5 h-5 text-muted hover:text-accent transition-colors" />
-            </Link>
-            <Link href="#projects" aria-label="Projects">
-              <Folder className="w-5 h-5 text-muted hover:text-accent transition-colors" />
-            </Link>
-            <Link href="#experience" aria-label="Experience">
-              <Briefcase className="w-5 h-5 text-muted hover:text-accent transition-colors" />
-            </Link>
-            <Link href="#metrics" aria-label="Metrics">
-              <BarChart className="w-5 h-5 text-muted hover:text-accent transition-colors" />
-            </Link>
-          </div>
-
-          {/* Separator */}
-          <div className="mx-6 h-6 w-px bg-muted/50" />
-
-          {/* Social / utility icons */}
-          <div className="flex items-center space-x-4">
-            <Link
-              href="https://github.com/mfkimbell"
-              target="_blank"
-              aria-label="GitHub"
-              className="text-muted hover:text-accent transition-colors"
-            >
-              <Github className="w-5 h-5" />
-            </Link>
-
-            <Link
-              href="/resume.pdf"
-              download
-              aria-label="Download Resume"
-              className="text-muted hover:text-accent transition-colors"
-            >
-              <Download className="w-5 h-5" />
-            </Link>
-
-            <a
-              href="mailto:mfkimbell@gmail.com"
-              aria-label="Email"
-              className="text-muted hover:text-accent transition-colors"
-            >
-              <Mail className="w-5 h-5" />
-            </a>
-
-            <Link
-              href="https://www.linkedin.com/in/mfkimbell"
-              target="_blank"
-              aria-label="LinkedIn"
-              className="text-muted hover:text-accent transition-colors"
-            >
-              <Linkedin className="w-5 h-5" />
-            </Link>
-
-            {/* 🔹 NEW — Google search */}
-            <Link
-  href="https://www.google.com/search?q=Mitchell+Kimbell"
-  target="_blank"
-  rel="noopener noreferrer"
-  aria-label="Google Search"
-  className="flex items-center translate-y-[1px] -translate-x-[3px] "           /* keeps it vertically centred */
->
-  <Image
-    src="/google.svg"
-    alt="Google logo"
-    width={18}
-    height={18}
-    className="opacity-100 hover:opacity-100 transition-opacity"
-  />
-</Link>
-          </div>
-        </div>
-      </div>
+      <NavIcons scrolled={scrolled} />
+      <div className="mx-4" />
+      <SocialIcons scrolled={scrolled} />
     </header>
   );
 }

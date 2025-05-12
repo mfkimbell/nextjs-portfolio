@@ -15,7 +15,7 @@ import Image             from "next/image";
 export default function Home() {
   const [isLoaded, setIsLoaded] = useState(false);
   useEffect(() => {
-    const timer = setTimeout(() => setIsLoaded(true), 0);
+    const timer = setTimeout(() => setIsLoaded(true), );
     return () => clearTimeout(timer);
   }, []);
 
@@ -36,7 +36,7 @@ export default function Home() {
 />
 
 
-      <Header />
+     
 
       {/* clickable floating rat */}
       <a
@@ -55,13 +55,15 @@ export default function Home() {
           className="transition-shadow duration-200 group-hover:drop-shadow-[0_0_0_6px_black]"
         />
       </a>
-
+     
       {/* clouds */}
       <SkyBackground />
+         <Header />
 
       {/* main content — no need to reapply gradient here */}
       <main className="relative z-10 text-white">
         <Hero />
+     
         <SkillsCarousel />
         <LeftBird />
         <ProjectsSection />
