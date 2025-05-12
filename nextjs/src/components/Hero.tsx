@@ -7,7 +7,7 @@ import Image from "next/image";
 
 export default function Hero() {
   return (
-    <section className="relative w-full h-screen overflow-hidden z-1">
+    <section className="relative w-full h-screen overflow-hidden z-555">
       {/* 1) 3D scene */}
       <Canvas shadows camera={{ position: [0, 0, 5], fov: 50 }}>
         {/* Ambient fill */}

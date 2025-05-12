@@ -1,55 +1,59 @@
-// src/components/Metrics.tsx
+/* ------------------------------------------------------------------
+   src/components/Metrics.tsx  – client component, single fetch
+-------------------------------------------------------------------*/
+"use client";
+
+import useSWRImmutable from "swr/immutable";
 import CommitsChart, { CommitPoint } from "@/components/CommitsChart";
 
-async function getGitHub() {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_BASE_URL}/api/github-stats`,
-    { cache: "no-store" }
-  );
-  return res.json() as Promise<{
+/* simple fetcher helper */
+const fetcher = (url: string) => fetch(url).then(r => r.json());
+
+/* SWR global options for this component */
+const swrOpts = {
+  revalidateOnFocus: false,
+  revalidateOnReconnect: false,
+  dedupingInterval: 300_000, /* 5 min */
+};
+
+export default function Metrics() {
+  /* GitHub stats */
+  const { data: gh } = useSWRImmutable<{
     totalCommits: number;
     timeline: CommitPoint[];
-  }>;
-}
+  }>("/api/github-stats", fetcher, swrOpts);
 
-async function getSiteMetrics() {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_BASE_URL}/api/site-metrics`,
-    { cache: "no-store" }
-  );
-  return res.json() as Promise<{
+  /* Site metrics */
+  const { data: site } = useSWRImmutable<{
     totalVisits: number;
     totalClicks: number;
     totalMouseMiles: number;
     totalScroll: number;
-  }>;
-}
+  }>("/api/site-metrics", fetcher, swrOpts);
 
-export default async function Metrics() {
-  const [gh, site] = await Promise.all([getGitHub(), getSiteMetrics()]);
-  const totalCommits = gh.totalCommits!;
-  const chartData = gh.timeline!;
+  /* render nothing until both are loaded */
+  if (!gh || !site) return null;
 
   return (
     <section id="metrics" className="py-24">
-      <h2 className="text-3xl font-bold text-accent mb-12 text-center">
+      <h2 className="mb-12 text-center text-3xl font-bold text-accent">
         Metrics
       </h2>
 
-      <div className="mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 max-w-5xl">
-        {/* GitHub */}
-        <div className="bg-card border border-default rounded-default p-6">
+      <div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 md:grid-cols-2">
+        {/* GitHub card */}
+        <div className="border border-default bg-card p-6 rounded-default">
           <h3 className="mb-2 text-xl font-semibold text-accent">
             GitHub Activity
           </h3>
-          <div className="text-4xl font-bold text-accent mb-4">
-            {totalCommits}
+          <div className="mb-4 text-4xl font-bold text-accent">
+            {gh.totalCommits}
           </div>
-          <CommitsChart data={chartData} />
+          <CommitsChart data={gh.timeline} />
         </div>
 
-        {/* Site */}
-        <div className="bg-card border border-default rounded-default p-6">
+        {/* Site metrics card */}
+        <div className="border border-default bg-card p-6 rounded-default">
           <h3 className="mb-4 text-xl font-semibold text-accent">
             Website Metrics
           </h3>

@@ -5,7 +5,7 @@ import BirdScene from "./BirdScene";
 
 export default function Hero2() {
   return (
-    <section className="relative w-full h-screen overflow-visible">
+    <section className="relative w-full h-screen overflow-visible pt-10">
       {/* Right-side branch */}
       <Image
         src="/right_branch.svg"
