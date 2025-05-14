@@ -3,9 +3,8 @@
 import { Canvas } from "@react-three/fiber";
 import { Suspense } from "react";
 import AirplaneGLB from "./AirplaneGLB";
-import Image from "next/image";
 
-export default function Hero() {
+export default function AirplaneTracking() {
   return (
     <section className="relative w-full h-screen overflow-hidden z-1">
       {/* 1) 3D scene */}
@@ -36,11 +35,7 @@ export default function Hero() {
         <Suspense fallback={null}>
           <AirplaneGLB />
         </Suspense>
-      </Canvas>
-
-
-      {/* 3) Hero text overlay stays on top */}
-     
+      </Canvas>     
     </section>
   );
 }

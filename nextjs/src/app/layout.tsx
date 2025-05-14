@@ -21,7 +21,7 @@ export default function RootLayout({
       <body
         className={`
           ${geistSans.variable} ${geistMono.variable} antialiased
-          bg-gradient-to-b from-sky-300 via-sky-600 to-sky-900
+          bg-gradient-to-b from-sky-300 via-sky-400 to-sky-500
         `}
       >
         {children}

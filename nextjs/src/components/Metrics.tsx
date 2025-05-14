@@ -5,6 +5,7 @@
 
 import useSWRImmutable from "swr/immutable";
 import CommitsChart, { CommitPoint } from "@/components/CommitsChart";
+import Image from "next/image";
 
 /* simple fetcher helper */
 const fetcher = (url: string) => fetch(url).then(r => r.json());
@@ -65,6 +66,14 @@ export default function Metrics() {
           </ul>
         </div>
       </div>
+      <Image
+          alt="forest"
+          src="/park.svg"
+          className="transform translate-y-40"
+          width="1950"
+          height="50"
+          priority
+        />
     </section>
   );
 }

@@ -95,7 +95,7 @@ export default function SkillsCarousel() {
               className={`
                 absolute top-1/2 left-1/2 w-20 h-20 object-contain
                 transition-transform duration-200
-                ${hovered === label ? "scale-104 ring-2 ring-accent" : ""}
+                ${hovered === label ? "scale-104" : ""}
               `}
               style={{ transformOrigin: "center center", willChange: "transform" }}
             />

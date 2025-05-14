@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from "react";
 import Header            from "@/components/Header";
-import Hero              from "@/components/Hero";
+import AirplaneTracking              from "@/components/AirplaneTracking";
 import LeftBird          from "@/components/LeftBird";
 import SkillsCarousel    from "@/components/SkillsCarousel";
 import Metrics           from "@/components/Metrics";
@@ -62,7 +62,7 @@ export default function Home() {
 
       {/* main content — no need to reapply gradient here */}
       <main className="relative z-10 text-white">
-        <Hero />
+        <AirplaneTracking />
      
         <SkillsCarousel />
         <LeftBird />
