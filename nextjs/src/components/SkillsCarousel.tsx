@@ -5,18 +5,28 @@ import { useEffect, useRef, useState } from "react";
 
 const icons = [
   { src: "/icons/react.png",    label: "React"    },
+  { src: "/icons/nextjs.png",    label: "NextJS"    },
+  { src: "/icons/typescript.png", label: "Typescript"},
   { src: "/icons/python.png",   label: "Python"   },
+  { src: "/icons/csharp.png", label: "C#" },
+  { src: "/icons/dotnet.png", label: ".NET8" },
   { src: "/icons/aws.png",      label: "AWS"      },
+  { src: "/icons/bedrock.png",      label: "Bedrock" },
+  { src: "/icons/tensorflow.png",      label: "Bedrock" },
+  { src: "/icons/pytorch.png",      label: "PyTorch" },
+    { src: "/icons/googlecloud.png",      label: "Google Cloud"      },
+    { src: "/icons/kubernetes.png",      label: "Kubernetes"      },
+    { src: "/icons/kafka.png",      label: "Kafka"      },
+    { src: "/icons/harness.png",      label: "Harness"      },
+    { src: "/icons/githubactions.png",      label: "Github Actions"      },
+    { src: "/icons/ansible.png",      label: "Ansible"      },
   { src: "/icons/docker.png",   label: "Docker"   },
   { src: "/icons/postgres.png", label: "Postgres" },
-  { src: "/icons/react.png",    label: "React"    },
-  { src: "/icons/python.png",   label: "Python"   },
-  { src: "/icons/aws.png",      label: "AWS"      },
-  { src: "/icons/docker.png",   label: "Docker"   },
-  { src: "/icons/postgres.png", label: "Postgres" },
+  { src: "/icons/terraform.png", label: "Terraform" },
+
 ];
 
-const RADIUS_SCALE = 0.55;
+const RADIUS_SCALE = 0.75;
 
 export default function SkillsCarousel() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -93,10 +103,12 @@ export default function SkillsCarousel() {
               onMouseEnter={() => setHovered(label)}
               onMouseLeave={() => setHovered(null)}
               className={`
-                absolute top-1/2 left-1/2 w-20 h-20 object-contain
-                transition-transform duration-200
-                ${hovered === label ? "scale-104" : ""}
+                absolute top-1/2 left-1/2
+                w-10 h-10 md:w-20 md:h-20 lg:w-24 lg:h-24
+                object-contain transition-transform duration-200
+                ${hovered === label ? "scale-102" : ""}
               `}
+              
               style={{ transformOrigin: "center center", willChange: "transform" }}
             />
           ))}

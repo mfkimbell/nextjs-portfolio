@@ -1,5 +1,7 @@
 /* ------------------------------------------------------------------
    src/components/Metrics.tsx  – client component, single fetch
+   • bottom: full‑width grass image
+   • on sm+ screens, only the middle 50% is visible
 -------------------------------------------------------------------*/
 "use client";
 
@@ -8,7 +10,7 @@ import CommitsChart, { CommitPoint } from "@/components/CommitsChart";
 import Image from "next/image";
 
 /* simple fetcher helper */
-const fetcher = (url: string) => fetch(url).then(r => r.json());
+const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 /* SWR global options for this component */
 const swrOpts = {
@@ -36,8 +38,8 @@ export default function Metrics() {
   if (!gh || !site) return null;
 
   return (
-    <section id="metrics" className="py-24">
-      <h2 className="mb-12 text-center text-3xl font-bold text-accent">
+    <section id="metrics" className="mt-20">
+      <h2 className=" text-center text-3xl font-bold text-accent">
         Metrics
       </h2>
 
@@ -66,14 +68,21 @@ export default function Metrics() {
           </ul>
         </div>
       </div>
-      <Image
-          alt="forest"
-          src="/park.svg"
-          className="transform translate-y-40"
-          width="1950"
-          height="50"
-          priority
-        />
+
+      {/* full‑width grass strip */}
+      <div className="relative w-screen overflow-hidden mt-22">
+  <div className="transform scale-270 py-11 sm:py-0 sm:scale-100 origin-center">
+    <Image
+      src="/fauna.png"
+      alt="Low-poly grass strip"
+      width={2400}
+      height={400}
+      priority
+      className="block w-full h-auto"
+    />
+  </div>
+</div>
+
     </section>
   );
 }

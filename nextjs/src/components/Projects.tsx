@@ -1,118 +1,114 @@
-// src/components/Projects.tsx
+// src/components/ProjectsSection.tsx
 "use client";
 
 import { useState } from "react";
 import Image from "next/image";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { projects, Project } from "@/lib/projects";
 
-type Project = {
-  name: string;
-  description: string;
-  logo: string;
-  arch: string;
-  tech: string[];
-  github: string;
-};
-
-const projects: Project[] = [
-  {
-    name: "AWS SaaS DevOps Template",
-    description:
-      "Fully automated template deploying a Next.js + FastAPI SaaS stack on AWS ECS, Terraform, GitHub Actions.",
-    logo: "/projects/saas.png",
-    arch: "/projects/saas-arch.png",
-    tech: ["Next.js", "FastAPI", "Terraform", "ECS"],
-    github: "https://github.com/mfkimbell/aws-saas-webapp-template",
-  },
-  // add more …
-];
-
-const tags = ["All", ...new Set(projects.flatMap((p) => p.tech))];
-
-export default function Projects() {
-  const [active, setActive] = useState<string>("All");
-  const visible = projects.filter(
-    (p) => active === "All" || p.tech.includes(active)
-  );
+export default function ProjectsSection() {
+  const [active, setActive] = useState<Project>(projects[0]);
 
   return (
     <section id="projects" className="py-24">
-      <h2 className="text-3xl font-bold neon-text mb-12 text-center">Projects</h2>
+      <h2 className="text-3xl font-bold neon-text text-center mb-12">
+        Projects
+      </h2>
 
-      {/* Filter chips */}
-      <div className="flex flex-wrap gap-3 justify-center mb-10">
-        {tags.map((t) => (
-          <button
-            key={t}
-            className={`px-3 py-1 rounded-full text-sm ${
-              active === t
-                ? "bg-[var(--primary)] text-black"
-                : "bg-[var(--border)] text-[var(--foreground)]"
-            }`}
-            onClick={() => setActive(t)}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
-
-      {/* Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-5xl mx-auto">
-        {visible.map((p) => (
-          <ProjectCard key={p.name} project={p} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function ProjectCard({ project }: { project: Project }) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <Card className="border-[var(--border)]">
-      <CardHeader className="flex items-center gap-3">
-        <Image
-          src={project.logo}
-          alt={`${project.name} logo`}
-          width={40}
-          height={40}
-          className="rounded"
-        />
-        <h3 className="font-semibold">{project.name}</h3>
-      </CardHeader>
-
-      <CardContent className="space-y-4">
-        <p className="text-sm">{project.description}</p>
-
-        <div className="flex flex-wrap gap-2">
-          {project.tech.map((t) => (
-            <span
-              key={t}
-              className="bg-[var(--border)] text-xs px-2 py-1 rounded"
+      <div className="max-w-7xl mx-auto px-4 lg:flex lg:space-x-10">
+        {/* ICON GRID PANEL */}
+        <div
+          className="
+            grid flex-1
+            grid-cols-8 gap-1
+            sm:grid-cols-10 sm:gap-1
+            md:grid-cols-10 md:gap-6
+            lg:grid-cols-6 lg:gap-6
+            lg:h-25
+          "
+        >
+          {projects.map((p) => (
+            <button
+              key={p.name}
+              onClick={() => setActive(p)}
+              className={`flex flex-col items-center focus:outline-none
+                 transform transition-transform duration-150
+                 ${
+                   active.name === p.name
+                     ? "scale-110"
+                     : "hover:scale-105"
+                 }`}
             >
-              {t}
-            </span>
+              {/* icon container */}
+              <div
+                className={`rounded-md bg-gradient-to-br ${p.gradient}
+                   w-10 h-10
+                   sm:w-12 sm:h-12 
+                   md:w-16 md:h-16 md:rounded-2xl
+                   flex items-center justify-center`}
+              >
+                <Image
+                  src={p.logo}
+                  alt={p.name}
+                  width={42}
+                  height={42}
+                  className={`
+                     w-9 h-9
+                     sm:w-10 sm:h-10
+                     md:w-12 md:h-12
+                     filter brightness-0 invert
+                   `}
+                />
+              </div>
+
+              {/* label hidden on mobile (<md) */}
+              <span className="hidden md:block mt-2 text-xs text-center truncate w-16">
+                {p.name}
+              </span>
+            </button>
           ))}
         </div>
 
-        <button
-          className="text-sm neon-text"
-          onClick={() => setOpen(!open)}
-        >
-          {open ? "Hide Architecture ⇧" : "View Architecture ⇩"}
-        </button>
+        {/* CONTENT PANEL */}
+        <div className="flex-1 space-y-4 mt-10 lg:mt-0">
+          <h3 className="text-xl font-semibold">{active.name}</h3>
 
-        {open && (
-          <Image
-            src={project.arch}
-            alt="Architecture diagram"
-            width={600}
-            height={350}
-            className="rounded border border-[var(--border)]"
-          />
-        )}
-      </CardContent>
-    </Card>
+          {/* Architecture diagram with darker background */}
+          <div className="w-full my-4 p-4 rounded-lg border border-white">
+            <Image
+              src={`${active.logo.replace(/(\.[^.]+)$/, "_arch$1")}`}
+              alt={`${active.name} architecture diagram`}
+              width={1000}
+              height={600}
+              className="w-full h-auto rounded-lg "
+              priority
+            />
+          </div>
+
+          <p className="text-sm text-muted-foreground">
+            {active.description}
+          </p>
+
+          <div className="flex flex-wrap gap-2">
+            {active.tech.map((tech) => (
+              <span
+                key={tech}
+                className="text-xs px-2 py-1 rounded bg-[var(--border)]"
+              >
+                {tech}
+              </span>
+            ))}
+          </div>
+
+          <a
+            href={active.github}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block mt-4 text-sm neon-text underline"
+          >
+            View on GitHub →
+          </a>
+        </div>
+      </div>
+    </section>
   );
 }

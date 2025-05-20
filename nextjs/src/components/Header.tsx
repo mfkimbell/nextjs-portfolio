@@ -117,7 +117,7 @@ export default function Header() {
     <header
       className={`
         pointer-events-none
-        fixed top-4 right-4 z-50
+        fixed top-4 lg:right-4 z-50
         w-fit px-3 py-2 rounded-full
         flex items-center
         transition-all duration-300
@@ -125,6 +125,7 @@ export default function Header() {
           ? "backdrop-blur-md bg-[rgba(13,17,23,0.35)] shadow-md"
           : "bg-transparent"}
       `}
+      
     >
       <NavIcons scrolled={scrolled} />
       <div className="mx-4" />
