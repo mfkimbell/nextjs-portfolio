@@ -58,7 +58,7 @@ export default function Home() {
      
       {/* clouds */}
       <SkyBackground />
-         <Header />
+      <Header />
 
       {/* main content — no need to reapply gradient here */}
       <main className="relative z-10 text-white">

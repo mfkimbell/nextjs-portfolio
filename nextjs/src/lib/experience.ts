@@ -13,13 +13,13 @@ export const roles: Role[] = [
       title: "Demo Engineer",
       dates: "May 2025 – Present",
       bullets: [
-        "TBD"
+        "Creating demos to show off twilio software services"
       ],
     },
     {
       company: "Regions Bank",
       logo: "/gifs/regions.gif",
-      title: "Full-Stack Software Engineer",
+      title: "Software Engineer",
       dates: "May 2023 – May 2025",
       bullets: [
         "Overhauled legacy check processing systems leveraging serverless AWS cloud technology.",

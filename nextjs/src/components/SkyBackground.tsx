@@ -6,8 +6,8 @@ import { Send, Award, Folder, Briefcase, BarChart } from "lucide-react";
 
 export default function SkyBackground() {
   return (
-    <div className="absolute inset-0 z-0 pointer-events-none select-none overflow-hidden">
-      {/* ————— Invisible header clone (md+) ————— */}
+<div className="absolute inset-0 z-0 pointer-events-none select-none overflow-hidden max-w-screen overflow-x-hidden">
+{/* ————— Invisible header clone (md+) ————— */}
       <div className="fixed top-4 right-4 w-fit px-3 py-2 rounded-full hidden md:flex items-center space-x-4 pointer-events-none">
         <Send className="invisible w-5 h-5" />
         <Award className="invisible w-5 h-5" />

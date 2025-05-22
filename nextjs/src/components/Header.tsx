@@ -20,11 +20,11 @@ import {
 // ——— NavIcons sub‑component ———
 function NavIcons({ scrolled }: { scrolled: boolean }) {
   const navItems = [
-    { href: "#home", Icon: Send,      label: "Home" },
-    { href: "#skills", Icon: Award,    label: "Skills" },
-    { href: "#projects", Icon: Folder,   label: "Projects" },
+    { href: "#home", Icon: Send, label: "Home" },
+    { href: "#skills", Icon: Award, label: "Skills" },
+    { href: "#projects", Icon: Folder, label: "Projects" },
     { href: "#experience", Icon: Briefcase, label: "Experience" },
-    { href: "#metrics", Icon: BarChart,  label: "Metrics" },
+    { href: "#metrics", Icon: BarChart, label: "Metrics" },
   ];
 
   return (
@@ -35,9 +35,11 @@ function NavIcons({ scrolled }: { scrolled: boolean }) {
             className={`
               w-5 h-5
               transition-colors transition-transform duration-200 ease-out
-              ${scrolled
-                ? "text-blue-300 group-hover:text-blue-400 group-hover:scale-110"
-                : "text-black group-hover:text-black"}
+              ${
+                scrolled
+                  ? "text-blue-300 group-hover:text-blue-400 group-hover:scale-110"
+                  : "text-black group-hover:text-black"
+              }
             `}
           />
         </Link>
@@ -49,17 +51,22 @@ function NavIcons({ scrolled }: { scrolled: boolean }) {
 // ——— SocialIcons sub‑component ———
 function SocialIcons({ scrolled }: { scrolled: boolean }) {
   const socialItems = [
-    { href: "https://github.com/mfkimbell", Icon: Github,    label: "GitHub",      external: true },
-    { href: "/resume.pdf",                  Icon: Download,  label: "Resume",      download: true },
-    { href: "mailto:mfkimbell@gmail.com?subject=Job%20Offer",   Icon: Mail,      label: "Email" },
-    { href: "https://www.linkedin.com/in/mfkimbell", Icon: Linkedin,  label: "LinkedIn",   external: true },
-
+    { href: "https://github.com/mfkimbell", Icon: Github, label: "GitHub", external: true },
+    { href: "/resume.pdf", Icon: Download, label: "Resume", download: true },
+    {
+      href: "mailto:mfkimbell@gmail.com?subject=Job%20Offer",
+      Icon: Mail,
+      label: "Email",
+    },
+    { href: "https://www.linkedin.com/in/mfkimbell", Icon: Linkedin, label: "LinkedIn", external: true },
   ];
 
   return (
-    <div className="flex items-center space-x-4 pointer-events-auto">
+    <div className="flex items-center space-x-4 pointer-events-auto ml-4">
       {socialItems.map(({ href, Icon, label, external, download }) => {
-        const baseColor = scrolled ? "text-muted group-hover:text-accent" : "text-black group-hover:text-black";
+        const baseColor = scrolled
+          ? "text-muted group-hover:text-accent"
+          : "text-black group-hover:text-black";
         return (
           <Link
             key={href}
@@ -77,9 +84,11 @@ function SocialIcons({ scrolled }: { scrolled: boolean }) {
                 height={18}
                 className={`
                   transition-opacity transition-transform duration-200 ease-out
-                  ${scrolled
-                    ? "opacity-100 group-hover:opacity-80 group-hover:scale-110"
-                    : "opacity-100 group-hover:opacity-100"}
+                  ${
+                    scrolled
+                      ? "opacity-100 group-hover:opacity-80 group-hover:scale-110"
+                      : "opacity-100 group-hover:opacity-100"
+                  }
                 `}
               />
             ) : (
@@ -117,18 +126,22 @@ export default function Header() {
     <header
       className={`
         pointer-events-none
-        fixed top-4 lg:right-4 z-50
+        fixed top-4 inset-x-0 mx-auto  
+        inset-auto top-4
+        md:inset-auto md:right-4  md:top-4         /* right-align on md+ */
+        z-500
         w-fit px-3 py-2 rounded-full
         flex items-center
         transition-all duration-300
-        ${scrolled
-          ? "backdrop-blur-md bg-[rgba(13,17,23,0.35)] shadow-md"
-          : "bg-transparent"}
+        ${
+          scrolled
+            ? "backdrop-blur-md bg-[rgba(13,17,23,0.35)] shadow-md"
+            : "bg-transparent"
+        }
       `}
-      
     >
       <NavIcons scrolled={scrolled} />
-      <div className="mx-4" />
+      <Divider />
       <SocialIcons scrolled={scrolled} />
     </header>
   );
