@@ -1,139 +1,122 @@
 /* ------------------------------------------------------------------
-   src/components/Metrics.tsx  – client component, single fetch
-   • bottom: full‑width grass image
-   • raccoon GIF is pinned to a fixed percent of the grass image itself
-   • three bees that float around fixed anchor points, size & pos responsive
+   src/components/Metrics.tsx – live‑updating website metrics
+   • DB totals from /api/metrics (Neon + Prisma)
+   • Session increments from Redux (clicks + mouse miles)
+   • Tiny badge animates (“+1”, “+0.05”) to prove it's live
+   • Raw text summary overlayed between raccoon and bees
 -------------------------------------------------------------------*/
 "use client";
 
+import { useEffect, useState } from "react";
 import useSWRImmutable from "swr/immutable";
-import CommitsChart, { CommitPoint } from "@/components/CommitsChart";
 import Image from "next/image";
+import { useAppSelector } from "@/lib/hooks";
+import CanvasBoard from "./CanvasBoard";
 
-/* simple fetcher helper */
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
-
-/* SWR global options for this component */
-const swrOpts = {
-  revalidateOnFocus: false,
-  revalidateOnReconnect: false,
-  dedupingInterval: 300_000,
-};
+const fetcher = (u: string) => fetch(u).then((r) => r.json());
+const swrOpts = { revalidateOnFocus: false, dedupingInterval: 300_000 };
 
 export default function Metrics() {
-  const { data: gh } = useSWRImmutable<{
-    totalCommits: number;
-    timeline: CommitPoint[];
-  }>("/api/github-stats", fetcher, swrOpts);
-
-  const { data: site } = useSWRImmutable<{
+  /* 1 ▸ DB totals */
+  const { data: base } = useSWRImmutable<{
     totalVisits: number;
     totalClicks: number;
     totalMouseMiles: number;
     totalScroll: number;
-  }>("/api/site-metrics", fetcher, swrOpts);
+  }>("/api/metrics", fetcher, swrOpts);
 
-  if (!gh || !site) return null;
+  /* 2 ▸ live session counts */
+  const session = useAppSelector((s) => s.metrics);
+  const [clickFlash, setClickFlash] = useState(false);
+  const [mileFlash,  setMileFlash]  = useState(false);
+
+  useEffect(() => {
+    if (session.clicks) {
+      setClickFlash(true);
+      const id = setTimeout(() => setClickFlash(false), 700);
+      return () => clearTimeout(id);
+    }
+  }, [session.clicks]);
+
+  useEffect(() => {
+    if (session.mouseMiles) {
+      setMileFlash(true);
+      const id = setTimeout(() => setMileFlash(false), 700);
+      return () => clearTimeout(id);
+    }
+  }, [session.mouseMiles]);
+
+  if (!base) return null;
+
+  /* 3 ▸ merge totals + increments */
+  const visits     = base.totalVisits;
+  const clicks     = base.totalClicks     + session.clicks;
+  const mouseMiles = base.totalMouseMiles + session.mouseMiles;
+  const scroll     = base.totalScroll;
 
   return (
-    <section id="metrics" className="mt-20">
-      <h2 className="text-center text-3xl font-bold text-accent mb-12">
-        Metrics
+    <section id="metrics" className="mt-0">
+      <h2 className="text-center text-white text-3xl font-bold mb-12 ">
+        Canvas & Stats
       </h2>
 
-      <div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 md:grid-cols-2 mb-10">
-        {/* GitHub card */}
-        <div className="border border-default bg-card p-6 rounded-default">
-          <h3 className="mb-2 text-xl font-semibold text-accent">
-            GitHub Activity
-          </h3>
-          <div className="mb-4 text-4xl font-bold text-accent">
-            {gh.totalCommits}
-          </div>
-          <CommitsChart data={gh.timeline} />
-        </div>
+      <CanvasBoard
+        visits={visits}
+        mouseMiles={mouseMiles}
+       
+      />
 
-        {/* Site metrics card */}
-        <div className="border border-default bg-card p-6 rounded-default z-1">
-          <h3 className="mb-4 text-xl font-semibold text-accent">
-            Website Metrics
-          </h3>
-          <ul className="space-y-2 text-muted">
-            <li>👁️ {site.totalVisits} visits</li>
-            <li>🖱️ {site.totalClicks} clicks</li>
-            <li>🐭 {site.totalMouseMiles} mouse miles</li>
-            <li>📜 {site.totalScroll} px scrolled</li>
-          </ul>
-        </div>
-      </div>
-
-      {/* full‑width grass strip with raccoon + bees overlay */}
-      <div className="relative w-full overflow-hidden mt-10 py-13 sm:py-0 max-w-[100vw]">
-        {/* Image wrapper with relative position for overlay */}
+      {/* grass / raccoon / bees strip ▸ overlay metrics */}
+      <div className="relative w-full overflow-visible mt-10 py-13 sm:py-0 max-w-[100vw]">
         <div className="relative w-full scale-[2] sm:scale-100 origin-center max-w-[120vw]">
           <Image
             src="/fauna2.png"
-            alt="Low‑poly grass strip"
+            alt="Low-poly grass strip"
             width={2400}
             height={400}
             priority
             className="block w-full h-auto"
           />
-
-          {/* raccoon pinned to spot inside image container */}
           <img
             src="/gifs/racoon.gif"
-            alt="Raccoon on stump"
-            className="absolute left-[57%] top-[18%] w-[10%] sm:left-[57%] sm:top-[18%] sm:w-[10%] pointer-events-none z-10"
+            alt="Raccoon"
+            className="absolute left-[57%] top-[18%] w-[10%] pointer-events-none z-10"
           />
-
-          {/* ——— Bee overlays ——— */}
           <img
             src="/animals/bee1.png"
             alt="Bee 1"
-            className="absolute left-[27%] top-[67%] w-2 sm:w-5 pointer-events-none bee-anim-1-mobile sm:bee-anim-1 z-20"
+            className="absolute left-[28%] top-[57%] w-2 sm:w-5 pointer-events-none bee-anim-1-mobile sm:bee-anim-1 z-20"
           />
           <img
             src="/animals/bee2.png"
             alt="Bee 2"
-            className="absolute left-[35%] top-[55%] w-2 sm:w-5 pointer-events-none bee-anim-2-mobile sm:bee-anim-2 z-20"
+            className="absolute left-[35%] top-[45%] w-2 sm:w-5 pointer-events-none bee-anim-2-mobile sm:bee-anim-2 z-20"
           />
           <img
             src="/animals/bee3.png"
             alt="Bee 3"
-            className="absolute left-[40%] top-[68%] w-2 sm:w-5 pointer-events-none bee-anim-3-mobile sm:bee-anim-3 z-20"
+            className="absolute left-[40%] top-[63%] w-2 sm:w-5 pointer-events-none bee-anim-3-mobile sm:bee-anim-3 z-20"
           />
         </div>
+
+        {/* overlayed metrics (absolute inside parent relative) */}
+       
       </div>
 
-      {/* floating animation for bees */}
+      {/* keyframes & tiny ping animation */}
       <style jsx global>{`
-       @keyframes fly-around {
-        0%   { transform: translate(0,     0); }
-        25%  { transform: translate(1px, -6px); }
-        50%  { transform: translate(0,   -8px); }
-        75%  { transform: translate(-1px, -6px); }
-        100% { transform: translate(0,     0); }
-      }
+        @keyframes fly-around-mobile { 0%{transform:translate(0,0)}25%{transform:translate(1px,-3px)}50%{transform:translate(0,-4px)}75%{transform:translate(-1px,-3px)}100%{transform:translate(0,0)} }
+        @keyframes fly-around { 0%{transform:translate(0,0)}25%{transform:translate(2px,-16px)}50%{transform:translate(0,-20px)}75%{transform:translate(-2px,-16px)}100%{transform:translate(0,0)} }
+        .bee-anim-1-mobile{animation:fly-around-mobile 3s ease-in-out infinite alternate 0s}
+        .bee-anim-2-mobile{animation:fly-around-mobile 5s ease-in-out infinite alternate 1.2s}
+        .bee-anim-3-mobile{animation:fly-around-mobile 3s ease-in-out infinite alternate 0.7s}
+        .bee-anim-1{animation:fly-around 1s ease-in-out infinite alternate 0s}
+        .bee-anim-2{animation:fly-around 1s ease-in-out infinite alternate 1.2s}
+        .bee-anim-3{animation:fly-around 1s ease-in-out infinite alternate 0.7s}
 
-        .bee-anim-1-mobile {
-          animation: fly-around 3s ease-in-out infinite alternate 0s;
-        }
-        .bee-anim-2-mobile {
-          animation: fly-around 5s ease-in-out infinite alternate 1.2s;
-        }
-        .bee-anim-3-mobile {
-          animation: fly-around 3s ease-in-out infinite alternate 0.7s;
-        }
-        .bee-anim-1 {
-          animation: fly-around 10s ease-in-out infinite alternate 0s;
-        }
-        .bee-anim-2 {
-          animation: fly-around 12s ease-in-out infinite alternate 1.2s;
-        }
-        .bee-anim-3 {
-          animation: fly-around 8s ease-in-out infinite alternate 0.7s;
-        }
+        /* subtle scale pulse */
+        @keyframes badgePulse { 0%{transform:scale(1)}50%{transform:scale(1.35)}100%{transform:scale(1)} }
+        .animate-ping-slow { animation: badgePulse 0.7s ease-in-out; }
       `}</style>
     </section>
   );

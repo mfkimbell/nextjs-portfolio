@@ -34,7 +34,7 @@ function NavIcons({ scrolled }: { scrolled: boolean }) {
           <Icon
             className={`
               w-5 h-5
-              transition-colors transition-transform duration-200 ease-out
+              transition-colors  duration-200 ease-out
               ${
                 scrolled
                   ? "text-blue-300 group-hover:text-blue-400 group-hover:scale-110"
@@ -83,7 +83,7 @@ function SocialIcons({ scrolled }: { scrolled: boolean }) {
                 width={18}
                 height={18}
                 className={`
-                  transition-opacity transition-transform duration-200 ease-out
+                  transition-opacity duration-200 ease-out
                   ${
                     scrolled
                       ? "opacity-100 group-hover:opacity-80 group-hover:scale-110"
@@ -95,7 +95,7 @@ function SocialIcons({ scrolled }: { scrolled: boolean }) {
               <Icon
                 className={`
                   w-5 h-5
-                  transition-colors transition-transform duration-200 ease-out
+                  transition-colors duration-200 ease-out
                   ${baseColor}
                 `}
               />
@@ -126,7 +126,7 @@ export default function Header() {
     <header
       className={`
         pointer-events-none
-        fixed top-4 inset-x-0 mx-auto  
+        fixed inset-x-0 mx-auto  
         inset-auto top-4
         md:inset-auto md:right-4  md:top-4         /* right-align on md+ */
         z-500

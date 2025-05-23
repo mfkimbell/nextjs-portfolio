@@ -11,6 +11,8 @@ import ProjectsSection   from "@/components/Projects";
 import ExperienceSection from "@/components/Experience";
 import SkyBackground     from "@/components/SkyBackground";
 import Image             from "next/image";
+import WebsiteMetricsTracker from "@/components/WebsiteMetricsTracker";
+
 
 export default function Home() {
   const [isLoaded, setIsLoaded] = useState(false);
@@ -21,9 +23,8 @@ export default function Home() {
 
   return (
     <>
-      {/* Splash overlay that simply inherits the page’s fixed gradient */}
- {/* Splash overlay – uses the *same* gradient, not fixed */
-}
+    <WebsiteMetricsTracker /> 
+
 <div
   className={`
     fixed inset-0 z-[100]
