@@ -9,22 +9,21 @@ import {
   Award,
   Folder,
   Briefcase,
-  BarChart,
+  Palette,      // ← added palette icon
   Github,
   Download,
   Mail,
   Linkedin,
-  Search,
 } from "lucide-react";
 
 // ——— NavIcons sub‑component ———
 function NavIcons({ scrolled }: { scrolled: boolean }) {
   const navItems = [
-    { href: "#home", Icon: Send, label: "Home" },
-    { href: "#skills", Icon: Award, label: "Skills" },
-    { href: "#projects", Icon: Folder, label: "Projects" },
+    { href: "#home",     Icon: Send,       label: "Home" },
+    { href: "#skills",   Icon: Award,      label: "Skills" },
+    { href: "#projects", Icon: Folder,     label: "Projects" },
     { href: "#experience", Icon: Briefcase, label: "Experience" },
-    { href: "#metrics", Icon: BarChart, label: "Metrics" },
+    { href: "#metrics",  Icon: Palette,    label: "Canvas" },  // ← swapped BarChart for Palette
   ];
 
   return (
@@ -34,7 +33,7 @@ function NavIcons({ scrolled }: { scrolled: boolean }) {
           <Icon
             className={`
               w-5 h-5
-              transition-colors  duration-200 ease-out
+              transition-colors duration-200 ease-out
               ${
                 scrolled
                   ? "text-blue-300 group-hover:text-blue-400 group-hover:scale-110"
@@ -51,14 +50,10 @@ function NavIcons({ scrolled }: { scrolled: boolean }) {
 // ——— SocialIcons sub‑component ———
 function SocialIcons({ scrolled }: { scrolled: boolean }) {
   const socialItems = [
-    { href: "https://github.com/mfkimbell", Icon: Github, label: "GitHub", external: true },
-    { href: "/resume.pdf", Icon: Download, label: "Resume", download: true },
-    {
-      href: "mailto:mfkimbell@gmail.com?subject=Job%20Offer",
-      Icon: Mail,
-      label: "Email",
-    },
-    { href: "https://www.linkedin.com/in/mfkimbell", Icon: Linkedin, label: "LinkedIn", external: true },
+    { href: "https://github.com/mfkimbell", Icon: Github,   label: "GitHub",   external: true },
+    { href: "/resume.pdf",                 Icon: Download, label: "Resume",   download: true },
+    { href: "mailto:mfkimbell@gmail.com?subject=Job%20Offer", Icon: Mail, label: "Email" },
+    { href: "https://www.linkedin.com/in/mfkimbell",         Icon: Linkedin, label: "LinkedIn", external: true },
   ];
 
   return (
@@ -76,30 +71,13 @@ function SocialIcons({ scrolled }: { scrolled: boolean }) {
             aria-label={label}
             className="group"
           >
-            {Icon === Search ? (
-              <Image
-                src="/google.svg"
-                alt="Google logo"
-                width={18}
-                height={18}
-                className={`
-                  transition-opacity duration-200 ease-out
-                  ${
-                    scrolled
-                      ? "opacity-100 group-hover:opacity-80 group-hover:scale-110"
-                      : "opacity-100 group-hover:opacity-100"
-                  }
-                `}
-              />
-            ) : (
-              <Icon
-                className={`
-                  w-5 h-5
-                  transition-colors duration-200 ease-out
-                  ${baseColor}
-                `}
-              />
-            )}
+            <Icon
+              className={`
+                w-5 h-5
+                transition-colors duration-200 ease-out
+                ${baseColor}
+              `}
+            />
           </Link>
         );
       })}
@@ -128,7 +106,7 @@ export default function Header() {
         pointer-events-none
         fixed inset-x-0 mx-auto  
         inset-auto top-4
-        md:inset-auto md:right-4  md:top-4         /* right-align on md+ */
+        md:inset-auto md:right-4  md:top-4
         z-500
         w-fit px-3 py-2 rounded-full
         flex items-center
