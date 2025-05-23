@@ -156,10 +156,14 @@ export default function CanvasBoard({
           onChange={(e) => setSize(+e.target.value)}
           className="flex-1 accent-blue-500 h-1"
         />
-        <div className="absolute -top-11 -right-12 flex items-center justify-center">
+        {/* fixed container 2.5rem×2.5rem, centered dot */}
+        <div className="absolute -top-11 -right-10 w-10 h-10 flex items-center justify-center">
           <div
-            className="rounded-full bg-white"
-            style={{ width: size, height: size }}
+            className="rounded-full bg-white transition-all"
+            style={{
+              width: `${size}px`,
+              height: `${size}px`,
+            }}
           />
         </div>
       </div>

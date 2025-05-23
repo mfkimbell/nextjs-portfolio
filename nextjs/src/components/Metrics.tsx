@@ -3,7 +3,7 @@
    • DB totals from /api/metrics (Neon + Prisma)
    • Session increments from Redux (clicks + mouse miles)
    • Tiny badge animates (“+1”, “+0.05”) to prove it's live
-   • Raw text summary overlayed between raccoon and bees
+   • Raw text metrics overlaid between raccoon and bees
 -------------------------------------------------------------------*/
 "use client";
 
@@ -28,7 +28,7 @@ export default function Metrics() {
   /* 2 ▸ live session counts */
   const session = useAppSelector((s) => s.metrics);
   const [clickFlash, setClickFlash] = useState(false);
-  const [mileFlash,  setMileFlash]  = useState(false);
+  const [mileFlash, setMileFlash] = useState(false);
 
   useEffect(() => {
     if (session.clicks) {
@@ -49,25 +49,23 @@ export default function Metrics() {
   if (!base) return null;
 
   /* 3 ▸ merge totals + increments */
-  const visits     = base.totalVisits;
-  const clicks     = base.totalClicks     + session.clicks;
+  const visits = base.totalVisits;
+  const clicks = base.totalClicks + session.clicks;
   const mouseMiles = base.totalMouseMiles + session.mouseMiles;
-  const scroll     = base.totalScroll;
+  const scroll = base.totalScroll;
 
   return (
-    <section id="metrics" className="mt-0">
-      <h2 className="text-center text-white text-3xl font-bold mb-12 ">
-        Canvas & Stats
+    <section id="metrics" className="mt-20">
+      <h2 className="text-center text-white text-3xl font-bold mb-12">
+        Canvas
       </h2>
 
-      <CanvasBoard
-        visits={visits}
-        mouseMiles={mouseMiles}
-       
-      />
+      <CanvasBoard 
+      visits={visits}
+      mouseMiles={mouseMiles}/>
 
-      {/* grass / raccoon / bees strip ▸ overlay metrics */}
-      <div className="relative w-full overflow-visible mt-10 py-13 sm:py-0 max-w-[100vw]">
+      {/* grass / raccoon / bees strip ▸ unchanged but with metrics overlay */}
+      <div className="relative w-full overflow-hidden mt-10 py-13 sm:py-0 max-w-[100vw]">
         <div className="relative w-full scale-[2] sm:scale-100 origin-center max-w-[120vw]">
           <Image
             src="/fauna2.png"
@@ -77,11 +75,17 @@ export default function Metrics() {
             priority
             className="block w-full h-auto"
           />
+
+          {/* raccoon */}
           <img
             src="/gifs/racoon.gif"
             alt="Raccoon"
             className="absolute left-[57%] top-[18%] w-[10%] pointer-events-none z-10"
           />
+
+        
+
+          {/* bees */}
           <img
             src="/animals/bee1.png"
             alt="Bee 1"
@@ -98,25 +102,52 @@ export default function Metrics() {
             className="absolute left-[40%] top-[63%] w-2 sm:w-5 pointer-events-none bee-anim-3-mobile sm:bee-anim-3 z-20"
           />
         </div>
-
-        {/* overlayed metrics (absolute inside parent relative) */}
-       
       </div>
 
       {/* keyframes & tiny ping animation */}
       <style jsx global>{`
-        @keyframes fly-around-mobile { 0%{transform:translate(0,0)}25%{transform:translate(1px,-3px)}50%{transform:translate(0,-4px)}75%{transform:translate(-1px,-3px)}100%{transform:translate(0,0)} }
-        @keyframes fly-around { 0%{transform:translate(0,0)}25%{transform:translate(2px,-16px)}50%{transform:translate(0,-20px)}75%{transform:translate(-2px,-16px)}100%{transform:translate(0,0)} }
-        .bee-anim-1-mobile{animation:fly-around-mobile 3s ease-in-out infinite alternate 0s}
-        .bee-anim-2-mobile{animation:fly-around-mobile 5s ease-in-out infinite alternate 1.2s}
-        .bee-anim-3-mobile{animation:fly-around-mobile 3s ease-in-out infinite alternate 0.7s}
-        .bee-anim-1{animation:fly-around 1s ease-in-out infinite alternate 0s}
-        .bee-anim-2{animation:fly-around 1s ease-in-out infinite alternate 1.2s}
-        .bee-anim-3{animation:fly-around 1s ease-in-out infinite alternate 0.7s}
+        @keyframes fly-around-mobile {
+          0% { transform: translate(0, 0); }
+          25% { transform: translate(1px, -3px); }
+          50% { transform: translate(0, -4px); }
+          75% { transform: translate(-1px, -3px); }
+          100% { transform: translate(0, 0); }
+        }
+        @keyframes fly-around {
+          0% { transform: translate(0, 0); }
+          25% { transform: translate(2px, -16px); }
+          50% { transform: translate(0, -20px); }
+          75% { transform: translate(-2px, -16px); }
+          100% { transform: translate(0, 0); }
+        }
+        .bee-anim-1-mobile {
+          animation: fly-around-mobile 3s ease-in-out infinite alternate 0s;
+        }
+        .bee-anim-2-mobile {
+          animation: fly-around-mobile 5s ease-in-out infinite alternate 1.2s;
+        }
+        .bee-anim-3-mobile {
+          animation: fly-around-mobile 3s ease-in-out infinite alternate 0.7s;
+        }
+        .bee-anim-1 {
+          animation: fly-around 1s ease-in-out infinite alternate 0s;
+        }
+        .bee-anim-2 {
+          animation: fly-around 1s ease-in-out infinite alternate 1.2s;
+        }
+        .bee-anim-3 {
+          animation: fly-around 1s ease-in-out infinite alternate 0.7s;
+        }
 
         /* subtle scale pulse */
-        @keyframes badgePulse { 0%{transform:scale(1)}50%{transform:scale(1.35)}100%{transform:scale(1)} }
-        .animate-ping-slow { animation: badgePulse 0.7s ease-in-out; }
+        @keyframes badgePulse {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.35); }
+          100% { transform: scale(1); }
+        }
+        .animate-ping-slow {
+          animation: badgePulse 0.7s ease-in-out;
+        }
       `}</style>
     </section>
   );
