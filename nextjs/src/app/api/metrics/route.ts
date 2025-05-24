@@ -3,39 +3,46 @@ import { NextResponse } from 'next/server';
 
 const prisma = new PrismaClient();
 
+/**
+ * GET /api/metrics
+ * Returns current metrics without side-effects
+ */
 export async function GET() {
   const metrics = await prisma.websiteMetric.findFirst();
   return NextResponse.json(metrics);
 }
 
+/**
+ * POST /api/metrics
+ * Increments clicks, mouseMiles, and scroll. Does not change totalVisits.
+ */
 export async function POST(req: Request) {
-  const body = await req.json();
+  const { clicks = 0, mouseMiles = 0, scroll = 0 } = await req.json();
 
-  const { mouseMiles = 0, clicks = 0, scroll = 0 } = body;
-
+  // Fetch existing record
   const metrics = await prisma.websiteMetric.findFirst();
-
   if (!metrics) {
-    const newMetrics = await prisma.websiteMetric.create({
+    // Create new if none
+    const created = await prisma.websiteMetric.create({
       data: {
-        totalMouseMiles: mouseMiles,
-        totalVisits: 1,
+        totalVisits: 0,
         totalClicks: clicks,
+        totalMouseMiles: mouseMiles,
         totalScroll: scroll,
       },
     });
-    return NextResponse.json(newMetrics);
+    return NextResponse.json(created);
   }
 
-  const updatedMetrics = await prisma.websiteMetric.update({
+  // Update existing by primary key
+  const updated = await prisma.websiteMetric.update({
     where: { id: metrics.id },
     data: {
-      totalMouseMiles: { increment: mouseMiles },
-      totalVisits: { increment: 1 },
-      totalClicks: { increment: clicks },
-      totalScroll: { increment: scroll },
+      totalClicks:      { increment: clicks },
+      totalMouseMiles:  { increment: mouseMiles },
+      totalScroll:      { increment: scroll },
     },
   });
 
-  return NextResponse.json(updatedMetrics);
+  return NextResponse.json(updated);
 }

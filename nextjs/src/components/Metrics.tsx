@@ -12,6 +12,12 @@ import useSWRImmutable from "swr/immutable";
 import Image from "next/image";
 import { useAppSelector } from "@/lib/hooks";
 import CanvasBoard from "./CanvasBoard";
+import {
+
+  Eye,
+  MousePointer,
+  MousePointerClick,
+} from "lucide-react";
 
 const fetcher = (u: string) => fetch(u).then((r) => r.json());
 const swrOpts = { revalidateOnFocus: false, dedupingInterval: 300_000 };
@@ -29,6 +35,12 @@ export default function Metrics() {
   const session = useAppSelector((s) => s.metrics);
   const [clickFlash, setClickFlash] = useState(false);
   const [mileFlash, setMileFlash] = useState(false);
+
+  useEffect(() => {
+    // Count a real page‑view exactly once on client‑side mount
+    fetch('/api/metrics/visit', { method: 'POST' })
+      .catch(console.error);
+  }, []);
 
   useEffect(() => {
     if (session.clicks) {
@@ -56,16 +68,25 @@ export default function Metrics() {
 
   return (
     <section id="metrics" className="mt-20">
-      <h2 className="text-center text-white text-3xl font-bold mb-12">
+      <h2 className="text-center text-white text-3xl font-bold mb-2">
         Canvas
       </h2>
 
       <CanvasBoard 
       visits={visits}
-      mouseMiles={mouseMiles}/>
+      mouseMiles={mouseMiles}
+      clicks={clicks}/>
+
+<div className="flex justify-center">
+     <div className="flex items-center gap-4">
+     <div className="flex items-center gap-1"><Eye size={16} /> <span>{visits.toLocaleString()}</span></div>
+     <div className="flex items-center gap-1"><MousePointerClick size={16} /> <span>{clicks.toLocaleString()}</span></div>
+     <div className="flex items-center gap-1"><MousePointer size={16} /> <span>{mouseMiles.toFixed(4).toLocaleString()}</span></div>
+     </div>
+   </div>
 
       {/* grass / raccoon / bees strip ▸ unchanged but with metrics overlay */}
-      <div className="relative w-full overflow-hidden mt-10 py-13 sm:py-0 max-w-[100vw]">
+      <div className="relative w-full overflow-hidden mt-0 py-13 sm:py-0 sm:-mt-25  max-w-[100vw] z-1">
         <div className="relative w-full scale-[2] sm:scale-100 origin-center max-w-[120vw]">
           <Image
             src="/fauna2.png"
