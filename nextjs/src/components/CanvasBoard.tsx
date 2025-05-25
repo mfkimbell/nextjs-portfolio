@@ -122,19 +122,19 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
     <div className="flex flex-col gap-2 h-8">
       <div className="flex items-center gap-2 ">
         <button title="Eraser" onClick={() => setEraser(e => !e)}
-          className={`p-2 rounded-full ${eraser ? "bg-gray-600" : "bg-gray-800"} hover:bg-gray-700`}>
+          className={`p-2 ml-1.5 rounded-full ${eraser ? "bg-gray-600" : "bg-gray-800"} hover:bg-gray-700`}>
           <Eraser size={16} className="text-white" />
         </button>
-        <button title="Undo"  onClick={undo}      className="p-2 bg-yellow-500 hover:bg-yellow-600 rounded-full text-white"><RotateCcw size={16}/></button>
-        <button title="Save"  onClick={save}     className="p-2 bg-blue-500   hover:bg-blue-600   rounded-full text-white"><Save   size={16}/></button>
-        <button title="Clear" onClick={clearAll} className="p-2 bg-red-500    hover:bg-red-600    rounded-full text-white"><Trash2 size={16}/></button>
+        <button title="Undo"  onClick={undo}      className="p-2 ml-0.5 bg-yellow-500 hover:bg-yellow-600 rounded-full text-white"><RotateCcw size={16}/></button>
+        <button title="Save"  onClick={save}     className="p-2 ml-0.5 bg-blue-500   hover:bg-blue-600   rounded-full text-white"><Save   size={16}/></button>
+        <button title="Clear" onClick={clearAll} className="p-2 ml-0.5 bg-red-500    hover:bg-red-600    rounded-full text-white"><Trash2 size={16}/></button>
       </div>
     
     </div>
   );
 
   const Palette = (
-    <div className="flex justify-center gap-2 mb-2">
+    <div className="flex justify-center gap-2 mb-4">
       {COLORS.map(c => (
         <button
           key={c}
@@ -147,7 +147,7 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   );
 
   const Slider = (
-    <div className="relative w-full max-w-[16rem] mx-auto flex items-center">
+    <div className="relative w-full max-w-[16rem] mx-auto flex items-center mb-2">
       {/* range track */}
       <input
         type="range"
@@ -159,7 +159,7 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
       />
   
       {/* fixed 48×48 wrapper keeps the center locked */}
-      <div className="absolute -top-25 right-2 w-10 h-10 flex items-center justify-center border-2 rounded-full">
+      <div className="absolute -top-26 right-2 w-8 h-8 flex items-center justify-center border-2 rounded-full">
         <div
           className="rounded-full transition-all"
           style={{
