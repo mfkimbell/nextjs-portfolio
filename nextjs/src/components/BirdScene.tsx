@@ -13,7 +13,7 @@ export default function BirdScene() {
   return (
     <div
       ref={containerRef}
-      className="absolute -left-6 top-1/2 -translate-y-1/2 w-[220px] h-[220px] pointer-events-none z-10"
+      className="absolute  -left-15 sm:-left-5.5 sm:top-1/2  top-6 sm:-translate-y-1/2 w-[220px] h-[220px] pointer-events-none z-10"
     >
       <Canvas camera={{ position: [0, 1, 3], fov: 40 }}>
         <ambientLight intensity={2.8} />
