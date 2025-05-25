@@ -68,16 +68,17 @@ export default function Metrics() {
 
   return (
     <section id="metrics" className="mt-20">
-      <h2 className="text-center text-white text-3xl font-bold mb-2">
+      <h2 className="text-center text-white text-3xl font-bold mb-8">
         Canvas
       </h2>
 
       <CanvasBoard 
       visits={visits}
       mouseMiles={mouseMiles}
-      clicks={clicks}/>
+      clicks={clicks}
+      />
 
-<div className="flex justify-center">
+<div className="flex justify-center mt-2 mb-2  pb-2 ">
      <div className="flex items-center gap-4">
      <div className="flex items-center gap-1"><Eye size={16} /> <span>{visits.toLocaleString()}</span></div>
      <div className="flex items-center gap-1"><MousePointerClick size={16} /> <span>{clicks.toLocaleString()}</span></div>
@@ -86,7 +87,7 @@ export default function Metrics() {
    </div>
 
       {/* grass / raccoon / bees strip ▸ unchanged but with metrics overlay */}
-      <div className="relative w-full overflow-hidden mt-0 py-13 sm:py-0 sm:-mt-25  max-w-[100vw] z-1">
+      <div className="relative w-full overflow-x-hidden overflow-y-visible   py-11.5 mt-9 sm:py-0   max-w-[100vw] z-50">
         <div className="relative w-full scale-[2] sm:scale-100 origin-center max-w-[120vw]">
           <Image
             src="/fauna2.png"
@@ -101,7 +102,7 @@ export default function Metrics() {
           <img
             src="/gifs/racoon.gif"
             alt="Raccoon"
-            className="absolute left-[57%] top-[18%] w-[10%] pointer-events-none z-10"
+            className="absolute left-[57%] top-[3%] w-[10%] pointer-events-none  z-350 overflow-visible"
           />
 
         
@@ -110,17 +111,17 @@ export default function Metrics() {
           <img
             src="/animals/bee1.png"
             alt="Bee 1"
-            className="absolute left-[28%] top-[57%] w-2 sm:w-5 pointer-events-none bee-anim-1-mobile sm:bee-anim-1 z-20"
+            className="absolute left-[28%] top-[60%] w-2 sm:w-5 pointer-events-none bee-anim-1-mobile sm:bee-anim-1 z-20"
           />
           <img
             src="/animals/bee2.png"
             alt="Bee 2"
-            className="absolute left-[35%] top-[45%] w-2 sm:w-5 pointer-events-none bee-anim-2-mobile sm:bee-anim-2 z-20"
+            className="absolute left-[35%] top-[38%] w-2 sm:w-5 pointer-events-none bee-anim-2-mobile sm:bee-anim-2 z-20"
           />
           <img
             src="/animals/bee3.png"
             alt="Bee 3"
-            className="absolute left-[40%] top-[63%] w-2 sm:w-5 pointer-events-none bee-anim-3-mobile sm:bee-anim-3 z-20"
+            className="absolute left-[40%] top-[53%] w-2 sm:w-5 pointer-events-none bee-anim-3-mobile sm:bee-anim-3 z-20"
           />
         </div>
       </div>

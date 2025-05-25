@@ -119,8 +119,8 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
 
   /* ---------- UI bits ---------- */
   const Tools = (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-2 h-8">
+      <div className="flex items-center gap-2 ">
         <button title="Eraser" onClick={() => setEraser(e => !e)}
           className={`p-2 rounded-full ${eraser ? "bg-gray-600" : "bg-gray-800"} hover:bg-gray-700`}>
           <Eraser size={16} className="text-white" />
@@ -147,24 +147,40 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   );
 
   const Slider = (
-    <div className="relative w-full max-w-[14rem] mx-auto flex items-center">
+    <div className="relative w-full max-w-[16rem] mx-auto flex items-center">
+      {/* range track */}
       <input
-        type="range" min={2} max={40}
-        value={size} onChange={e => setSize(+e.target.value)}
+        type="range"
+        min={2}
+        max={40}
+        value={size}
+        onChange={e => setSize(+e.target.value)}
         className="flex-1 accent-blue-500 h-1"
       />
-      <div className="absolute -top-5 -right-14 w-10 h-10 flex items-center justify-center">
-        <div className="rounded-full transition-all"
-             style={{ width: `${size}px`, height: `${size}px`, backgroundColor: color }} />
+  
+      {/* fixed 48×48 wrapper keeps the center locked */}
+      <div className="absolute -top-25 right-2 w-10 h-10 flex items-center justify-center border-2 rounded-full">
+        <div
+          className="rounded-full transition-all"
+          style={{
+            width:       `${size}px`,
+            height:      `${size}px`,
+            backgroundColor: color,
+            maxWidth:    '90%',   // never larger than 90% of 48px → ~43px
+            maxHeight:   '90%',
+          }}
+        />
       </div>
     </div>
   );
+  
+  
 
   /* ================================================================= */
   /*                              render                               */
   /* ================================================================= */
   return (
-    <div className="flex justify-center w-full">
+    <div className="flex justify-center w-full mb-3">
       {/* ------------- card + sidebar wrapper ------------- */}
       <div className="relative"> {/* relative only hugs the card */}  {/* ⬅ key */}
         {/* === Drawing card === */}
@@ -191,7 +207,7 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
         {/* === Sidebar === */}
         <div
           id="sidebar"
-          className="hidden sm:flex flex-col gap-4 w-40
+          className="hidden sm:flex flex-col gap-4 w-58
                      absolute left-full ml-6 top-0"   /* anchored to card edge */
         >
           <div className="p-2 bg-white/20 rounded">{Tools}</div>
