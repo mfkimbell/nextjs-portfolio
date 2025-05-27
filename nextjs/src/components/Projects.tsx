@@ -9,7 +9,7 @@ export default function ProjectsSection() {
   const [active, setActive] = useState<Project>(projects[0]);
 
   return (
-    <section id="projects" className="py-24">
+    <section id="projects" className="py-10">
       <h2 className="text-3xl font-bold neon-text text-center mb-12">
         Projects
       </h2>

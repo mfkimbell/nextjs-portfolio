@@ -43,7 +43,7 @@ export default function Experience() {
   }, []);
 
   return (
-    <section id="experience" className="overflow-x-hidden py-16 text-white">
+    <section id="experience" className="overflow-x-hidden py-0 text-white ">
       <h2 className="text-center text-3xl font-bold neon-text mb-12">
         Experience
       </h2>
@@ -51,13 +51,13 @@ export default function Experience() {
       <div
         ref={containerRef}
         className={`
-          relative mx-auto w-full max-w-[${BOX_MAX_WIDTH}px]
+          relative sm:ml-2  mx-auto w-full max-w-[${BOX_MAX_WIDTH}px]
           px-4 md:px-[${MD_SIDE_PADDING}px]
         `}
       >
         
 
-        <ul className="space-y-14">
+        <ul className="space-y-14 sm:mr-13">
           {roles.map((role: Role, idx: number) => (
             <li
               key={`${role.company}-${role.dates}-${idx}`}

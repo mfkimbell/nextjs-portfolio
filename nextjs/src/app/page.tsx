@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import Header            from "@/components/Header";
 import AirplaneTracking              from "@/components/AirplaneTracking";
 import LeftBird          from "@/components/LeftBird";
+import RightBird from "@/components/RightBird";
 import SkillsCarousel    from "@/components/SkillsCarousel";
 import Metrics           from "@/components/Metrics";
 import ProjectsSection   from "@/components/Projects";
@@ -67,7 +68,9 @@ export default function Home() {
      
         <SkillsCarousel />
         <LeftBird />
+
         <ProjectsSection />
+        <RightBird/>
         <ExperienceSection />
         <Metrics />
       </main>

@@ -78,7 +78,7 @@ export default function Metrics() {
       clicks={clicks}
       />
 
-<div className="flex justify-center mt-2 mb-2  pb-2 ">
+<div className="flex justify-center mt-2 sm:mb-10 md:mb-5 lg:-mb-19  pb-2 ">
      <div className="flex items-center gap-4">
      <div className="flex items-center gap-1"><Eye size={16} /> <span>{visits.toLocaleString()}</span></div>
      <div className="flex items-center gap-1"><MousePointerClick size={16} /> <span>{clicks.toLocaleString()}</span></div>

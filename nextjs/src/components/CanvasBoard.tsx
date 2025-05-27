@@ -30,7 +30,7 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   const { data, mutate } = useSWR<{ strokes: Stroke[] }>("/api/drawings", fetcher, { refreshInterval: 3000 });
 
   const [pending, setPending] = useState<Stroke[]>([]);
-  const [current, setCurrent] = useState<Stroke | null>(null);
+  const currentRef = useRef<Stroke | null>(null);
   const [color,   setColor]   = useState(COLORS[1]);
   const [size,    setSize]    = useState(6);
   const [eraser,  setEraser]  = useState(false);
@@ -65,19 +65,21 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   const loc   = (e: React.PointerEvent<HTMLCanvasElement>): Point =>
     ({ x: (e.nativeEvent as PointerEvent).offsetX, y: (e.nativeEvent as PointerEvent).offsetY });
 
-  const start = (e: React.PointerEvent<HTMLCanvasElement>) =>
-    setCurrent({ pts: [loc(e)], color, width: size, erase: eraser });
+  const start = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const stroke: Stroke = { pts: [loc(e)], color, width: size, erase: eraser };
+    currentRef.current = stroke;
+    setPending(lst => [...lst, stroke]);
+  };
 
   const move  = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!current) return;
-    const next = { ...current, pts: [...current.pts, loc(e)] };
-    setPending(lst => lst.filter(s => s !== current).concat(next));
-    setCurrent(next);
+    const stroke = currentRef.current;
+    if (!stroke) return;
+    stroke.pts.push(loc(e));
+    redraw();
   };
 
   const end   = () => {
-    if (current) setPending(lst => [...lst, current]);
-    setCurrent(null);
+    currentRef.current = null;
   };
 
   /* ---------- actions ---------- */
@@ -129,25 +131,24 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
         <button title="Save"  onClick={save}     className="p-2 ml-0.5 bg-blue-500   hover:bg-blue-600   rounded-full text-white"><Save   size={16}/></button>
         <button title="Clear" onClick={clearAll} className="p-2 ml-0.5 bg-red-500    hover:bg-red-600    rounded-full text-white"><Trash2 size={16}/></button>
       </div>
-    
     </div>
   );
 
   const Palette = (
-    <div className="flex justify-center gap-2 mb-4">
+    <div className="flex justify-center gap-2 sm:mb-4">
       {COLORS.map(c => (
         <button
           key={c}
           onClick={() => { setColor(c); setEraser(false); }}
           style={{ backgroundColor: c, borderColor: "white" }}
-          className={`h-6 w-6 rounded-full border-2 ${!eraser && c === color ? "ring-2 ring-white" : ""}`}
+          className={`h-6 w-6 rounded-full border-2 ${!eraser && c === color ? "ring-2 ring:white" : ""}`}
         />
       ))}
     </div>
   );
 
   const Slider = (
-    <div className="relative w-full max-w-[16rem] mx-auto flex items-center mb-2">
+    <div className="relative w-full max-w-[16rem] mx-auto flex items-center sm:mb-2">
       {/* range track */}
       <input
         type="range"
@@ -157,24 +158,22 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
         onChange={e => setSize(+e.target.value)}
         className="flex-1 accent-blue-500 h-1"
       />
-  
+
       {/* fixed 48×48 wrapper keeps the center locked */}
-      <div className="absolute -top-26 right-2 w-8 h-8 flex items-center justify-center border-2 rounded-full">
+      <div className="absolute sm:-top-26  sm:right-2 -right-12 w-8 h-8 flex items-center justify-center border-2 rounded-full">
         <div
           className="rounded-full transition-all"
           style={{
             width:       `${size}px`,
             height:      `${size}px`,
             backgroundColor: color,
-            maxWidth:    '90%',   // never larger than 90% of 48px → ~43px
+            maxWidth:    '90%',
             maxHeight:   '90%',
           }}
         />
       </div>
     </div>
   );
-  
-  
 
   /* ================================================================= */
   /*                              render                               */
@@ -182,7 +181,7 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   return (
     <div className="flex justify-center w-full mb-3">
       {/* ------------- card + sidebar wrapper ------------- */}
-      <div className="relative"> {/* relative only hugs the card */}  {/* ⬅ key */}
+      <div className="relative"> {/* relative only hugs the card */}
         {/* === Drawing card === */}
         <div
           className="w-full max-w-[24rem] p-4 mx-auto
@@ -190,17 +189,18 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
                      rounded-xl flex flex-col gap-4 mb-0">
           <canvas
             ref={canvasRef}
-            className="w-full aspect-square bg-transparent rounded-md border-2 border-white touch-none"
+            style={{ touchAction: 'none' }}
+            className="w-full aspect-square bg-transparent rounded-md border-2 border-white"
             onPointerDown={start}
             onPointerMove={move}
             onPointerUp={end}
             onPointerLeave={end}
           />
           <div id="ios-controls" className="sm:hidden flex flex-col items-center gap-4">
-          {Palette}
-          {Slider}
+            {Palette}
+            {Slider}
 
-          <div className="flex justify-center">{Tools}</div>
+            <div className="flex justify-center">{Tools}</div>
           </div>
         </div>
 
@@ -208,11 +208,9 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
         <div
           id="sidebar"
           className="hidden sm:flex flex-col gap-4 w-58
-                     absolute left-full ml-6 top-0"   /* anchored to card edge */
-        >
+                     absolute left-full ml-6 top-0">
           <div className="p-2 bg-white/20 rounded">{Tools}</div>
           <div className="p-2 bg-white/20 rounded">
-            
             {Palette}
             {Slider}
           </div>

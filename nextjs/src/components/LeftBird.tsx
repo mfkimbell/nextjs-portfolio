@@ -13,7 +13,7 @@ export default function LeftBird() {
           src="/left_branch.svg"
           alt="Left jungle branch"
           className="
-            sm:translate-y-12 sm:-translate-x-2 -translate-x-20
+            sm:translate-y-12 sm:-translate-x-4 -translate-x-20
             w-70 h-70       /* 6rem on xs */
             sm:w-[300px]     /* full 300px at sm+ */
             sm:h-[300px]
