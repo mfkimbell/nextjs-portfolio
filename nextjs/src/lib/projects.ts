@@ -210,7 +210,7 @@ export const projects: Project[] = [
 {
   name: "Kafka Stock Market Data Stream",
   description: "This project uses Jupyter Notebooks to produce messages to an Apache Kafka stream hosted on AWS MSK. Stock market API data is consumed by a Jupyter consumer and stored in S3. An AWS Glue crawler ingests the JSON files from S3 and transforms them into a data catalog for real‑time querying in AWS Athena.",
-  logo: "/photos/kafka.png",
+  logo: "/projects/kafka.png",
   tech: [
     "Kafka",
     "Jupyter Notebooks",
@@ -226,7 +226,7 @@ export const projects: Project[] = [
 {
   name: "AI Histopathology Segmenter",
   description: "Performs semantic segmentation of skin patches in histopathology images using PyTorch and a U‑Net CNN. Tiled image patches are preprocessed and stored with PathML, then loaded into PyTorch DataLoader for training. Training is accelerated with NVIDIA CUDA Toolkit, and the pipeline runs in Docker for reproducibility. Once trained, the model segments new images and extracts target areas to enable AI‑assisted digital pathology.",
-  logo: "/photos/skin.png",
+  logo: "/projects/skin.png",
   tech: [
     "PathML",
     "PyTorch",
@@ -242,7 +242,7 @@ export const projects: Project[] = [
 {
   name: "AI Marketing Agent",
   description: "A commissioned project accessible via an embeddable iframe. The React frontend is hosted on Firebase, and the FastAPI backend runs on Google Cloud Run. It communicates with OpenAI’s API to generate marketing content. On code changes, GitHub Actions builds a Docker image, pushes it to Google Artifact Registry, and Cloud Run pulls it. Secrets are managed in GitHub Secrets and Google Secrets Manager.",
-  logo: "/photos/marketing.png",
+  logo: "/projects/marketing.png",
   tech: [
     "GitHub Actions",
     "React",
@@ -261,7 +261,7 @@ export const projects: Project[] = [
 {
   name: "AI Company Agent",
   description: "Demonstrates building a company AI agent using Amazon Bedrock and Claude 3 Sonnet to interpret user inputs and execute API operations via AWS Lambda. The agent uses semantic matching to map prompts to OpenAPI‑defined operations. Banking records are stored in DynamoDB, queried by the Bedrock agent with RAG‑powered similarity search against embeddings in an OpenSearch vector store, all backed by S3‑hosted PDF documents.",
-  logo: "/photos/agent.png",
+  logo: "/projects/agent.png",
   tech: [
     "RAG",
     "Bedrock Agent",
@@ -276,7 +276,7 @@ export const projects: Project[] = [
 {
   name: "AI Chatbot",
   description: "Dockerized Python application providing a Streamlit UI for an AI chatbot. It uses Langchain and Anthropic’s Claude‑3‑Haiku LLM to maintain conversation memory and deliver contextually accurate responses.",
-  logo: "/photos/chatbot.png",
+  logo: "/projects/chatbot.png",
   tech: [
     "Langchain",
     "Bedrock",
@@ -287,40 +287,6 @@ export const projects: Project[] = [
   github: "https://github.com/mfkimbell/ai-chatbot",
   gradient: "from-blue-300 to-blue-500",
 },
-{
-  name: "AI RAG Document QA",
-  description: "Dockerized Python app running a Streamlit UI for a retrieval‑augmented generation (RAG) document Q&A bot. PDFs are chunked and embedded using AWS Bedrock’s Titan Text model, with embeddings stored in FAISS. User questions are embedded, a Langchain similarity search retrieves context, and Claude v2 LLM generates responses.",
-  logo: "/photos/rag.png",
-  tech: [
-    "Langchain",
-    "Claude v2",
-    "Titan‑embed‑text‑v1",
-    "FAISS",
-    "Streamlit",
-    "Docker",
-  ],
-  github: "https://github.com/mfkimbell/ai-rag-pdf",
-  gradient: "from-pink-400 to-pink-600",
-},
-
-  {
-    name: "Cloud File Upload Service",
-    description:
-      "Flask webserver on AWS Lambda + SNS for file uploads, email share links, with MySQL RDS backend.",
-    logo: "/projects/aws.png",
-    tech: ["AWS Lambda", "SNS", "Flask", "MySQL RDS"],
-    github: "https://github.com/mfkimbell/cloud-file-upload-service",
-    gradient: "from-green-300 to-green-500",
-  },
-  {
-    name: "S3 Website Hosting Custom Action",
-    description:
-      "GitHub composite, JavaScript, and Docker Actions for CI/CD deploying static site to Amazon S3.",
-    logo: "/projects/aws2.png",
-    tech: ["GitHub Actions", "Composite Actions", "JavaScript Actions", "Docker Actions", "AWS S3"],
-    github: "https://github.com/mfkimbell/github-actions-custom-actions",
-    gradient: "from-orange-400 to-orange-600",
-  },
   {
     name: "Golang gRPC Microservice",
     description:

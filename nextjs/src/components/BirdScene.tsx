@@ -17,7 +17,7 @@ export default function BirdScene() {
     >
       <Canvas camera={{ position: [0, 1, 3], fov: 40 }}>
         <ambientLight intensity={2.8} />
-        <directionalLight position={[5, 10, 5]} intensity={3.5} color="#7fcfff" />
+        <directionalLight position={[5, 10, 5]} intensity={3.8} color="#7fcfff" />
         <BirdGLB containerRef={containerRef} />
         <OrbitControls enableZoom={false} enablePan={false} />
       </Canvas>
