@@ -78,7 +78,7 @@ export default function ProjectsSection() {
 
       <div className="mx-auto max-w-7xl px-4 lg:flex lg:space-x-10">
         {/* ICON GRID PANEL */}
-        <div className="grid flex-1 grid-cols-8 gap-4 sm:gap-1 sm:grid-cols-10 md:grid-cols-10 md:gap-6 lg:grid-cols-6 lg:gap-6">
+        <div className="grid flex-1 grid-cols-8 gap-4 sm:gap-1 sm:grid-cols-10 md:grid-cols-10 md:gap-6 lg:grid-cols-6 lg:gap-6 lg:h-100 lg:mt-13">
           {projects.map((p, idx) => {
             const selected = active.name === p.name;
             return (

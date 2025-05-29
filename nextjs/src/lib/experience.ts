@@ -13,7 +13,7 @@ export const roles: Role[] = [
       title: "Demo Engineer",
       dates: "May 2025 – Present",
       bullets: [
-        "Creating demos to show off twilio software services"
+        "Creating technical demos to show off Twilio software services"
       ],
     },
     {
