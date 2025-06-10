@@ -41,9 +41,7 @@ export const projects: Project[] = [
   {
     name: "WorkSync",
     description:
-      `{Built in 24 hours for UA Hackathon 2025. This project automatically 
-      provisions inventory and suggestion‑tracking workflows on Google Cloud. It leverages Terraform and GitHub Actions to provision Cloud Run, 
-      store container images in Artifact Registry, and manage secrets via Secrets Manager. The application features a Next.js frontend (with React, Redux, and NextAuth‑style sessions) and a FastAPI backend connected to CockroachDB via SQLAlchemy. The NextJS app is zipped and run in Google Cloud Functions, which Firebase points to. Administrators can manage requests, calculate costs, maintain inventory, and track spending/request data on a dashboard, while end users submit and monitor requests in real time.}`,
+      `Built in 24 hours at UA Hackathon 2025, this project auto-provisions inventory and suggestion workflows on Google Cloud. Terraform and GitHub Actions deploy Cloud Run services, push container images to Artifact Registry, and manage secrets with Secret Manager. A FastAPI backend (CockroachDB + SQLAlchemy) pairs with a zipped Next.js frontend (React, Redux, NextAuth-style sessions) served via Cloud Functions behind Firebase. Admins oversee requests, inventory, and costs on a dashboard, while users submit and track requests in real-time.`,
     logo: "/projects/worksync.png",
     tech: [
       "Hashicorp Cloud",
@@ -120,7 +118,7 @@ export const projects: Project[] = [
   
   {
     name: "AWS DevOps Pipeline",
-    description: "Jenkins + Ansible-driven CI/CD pipeline with SonarQube for code analysis, Docker builds, JFrog Artifactory storage, and Kubernetes deployment on AWS.",
+    description: "An AWS CI/CD flow provisioned with Terraform: Ansible launches a Jenkins master-agent pair, runs code scans in SonarQube, and blocks the pipeline if quality gates fail. Once the code passes, the workflow builds a Docker image, pushes it to JFrog Artifactory, and rolls it out to Kubernetes for fault-tolerant, self-healing production.",
     logo: "/projects/devops2.png",
     tech: [
       "Terraform",
@@ -287,67 +285,221 @@ export const projects: Project[] = [
   github: "https://github.com/mfkimbell/ai-chatbot",
   gradient: "from-blue-300 to-blue-500",
 },
-  {
-    name: "Golang gRPC Microservice",
-    description:
-      "gRPC service in Go with HTTP/2 fallback storing orders in PostgreSQL, language-agnostic clients via code-generated .proto.",
-    logo: "/projects/grpc.png",
-    tech: ["Go", "gRPC", "PostgreSQL", "HTTP/2"],
-    github: "https://github.com/mfkimbell/go-grpc-microservice",
-    gradient: "from-blue-700 to-blue-900",
-  },
-  {
-    name: "React Movie Database GUI",
-    description:
-      "C#/.NET React GUI CRUD client for Microsoft SQL Server via Entity Framework Core.",
-    logo: "/projects/movie.png",
-    tech: ["React", "C#", "Entity Framework Core", "SQL Server"],
-    github: "https://github.com/mfkimbell/react-movie-database",
-    gradient: "from-red-600 to-red-800",
-  },
-  {
-    name: "NLP Sentiment Analysis for SQL Database",
-    description:
-      "Python NLTK and SpaCy pipeline adding sentiment polarity to PostgreSQL posts table.",
-    logo: "/projects/sentiment.png",
-    tech: ["Python", "HuggingFace Transformers", "NLTK", "SpaCy", "PostgreSQL"],
-    github: "https://github.com/mfkimbell/reviews-nlp-sentiment-analysis",
-    gradient: "from-yellow-300 to-yellow-500",
-  },
-  {
-    name: "Golang GraphQL Server",
-    description:
-      "Basic GraphQL server in Go using gqlgen and MongoDB, supporting queries and mutations.",
-    logo: "/projects/graphql.png",
-    tech: ["Golang", "GraphQL", "gqlgen", "MongoDB"],
-    github: "https://github.com/mfkimbell/go-graphql-server",
-    gradient: "from-cyan-400 to-cyan-600",
-  },
-  {
-    name: "Agriculture Monitoring Drone",
-    description:
-      "JavaFX GUI controlling Tello SDK drone for agricultural monitoring dashboard.",
-    logo: "/projects/drone.png",
-    tech: ["Java", "JavaFX", "Tello SDK"],
-    github: "https://github.com/mfkimbell/agricultural-monitoring-drone",
-    gradient: "from-green-600 to-green-800",
-  },
-  {
-    name: "Buildwise",
-    description:
-      "ReactFlow-based AI devops architecture visualizer using OpenAI API and React frontend with Docker.",
-    logo: "/projects/buildwise.png",
-    tech: ["ReactFlow", "OpenAI API", "Docker", "TailwindCSS", "TypeScript"],
-    github: "https://github.com/mfkimbell/buildwise",
-    gradient: "from-indigo-400 to-purple-500",
-  },
-  {
-    name: "GitHub Actions CI/CD Tutorial",
-    description:
-      "Tutorial repo demonstrating GitHub Actions workflows for CI/CD with automated issue comments.",
-    logo: "/projects/actions.png",
-    tech: ["GitHub Actions", "CI/CD", "JavaScript"],
-    github: "https://github.com/mfkimbell/github-actions-pipeline",
-    gradient: "from-gray-400 to-gray-600",
-  },
+{
+  name: "AI RAG Document QA",
+  description:
+    "Dockerized Python app with a Streamlit UI for retrieval-augmented question answering over PDFs. Documents are chunked, embedded via AWS Bedrock’s Titan-Text, stored in FAISS, and queried through LangChain with Claude v2 providing answers.",
+  logo: "/projects/rag.png",
+  tech: [
+    "LangChain",
+    "Bedrock",
+    "Titan Text",
+    "Claude v2",
+    "FAISS",
+    "Streamlit",
+    "Docker",
+  ],
+  github: "https://github.com/mfkimbell/ai-rag-pdf",
+  gradient: "from-green-400 to-green-600",
+},
+{
+  name: "Cloud File Upload Service",
+  description:
+    "AWS-backed file-sharing platform: a Flask webserver lets users upload files, Lambda & SNS handle processing and email delivery of download links, and user data is stored in a MySQL RDS instance.",
+  logo: "/projects/cloud.png",
+  tech: ["AWS", "Lambda", "SNS", "Flask", "MySQL"],
+  github: "https://github.com/mfkimbell/cloud-file-upload-service",
+  gradient: "from-yellow-400 to-yellow-600",
+},
+{
+  name: "S3 Website Hosting Custom Action",
+  description:
+    "Suite of GitHub composite, JavaScript, and Docker actions that form a CI/CD pipeline to build and deploy a static website to Amazon S3 automatically on every commit.",
+  logo: "/projects/actions2.png",
+  tech: [
+    "GitHub Actions",
+    "Composite Actions",
+    "JavaScript Actions",
+    "Docker Actions",
+    "AWS",
+    "S3",
+  ],
+  github: "https://github.com/mfkimbell/github-actions-custom-actions",
+  gradient: "from-purple-400 to-purple-600",
+},
+{
+  name: "React Movie Database GUI",
+  description:
+    "C#/.NET 6 + React front-end connected to Microsoft SQL Server via Entity Framework Core, enabling full CRUD operations on movie data with real-time GUI updates.",
+  logo: "/projects/movie.png",
+  tech: [
+    "C#",
+    "React JS",
+    "SQL Server",
+    ".NET 6",
+    "Entity Framework Core",
+  ],
+  github: "https://github.com/mfkimbell/react-movie-database",
+  gradient: "from-red-400 to-red-600",
+},
+{
+  name: "NLP Sentiment Analysis for SQL Database",
+  description:
+    "Python batch-processing pipeline that benchmarks HuggingFace Transformers and NLTK, then uses spaCy to calculate sentiment polarity for thousands of posts and write the results back to a PostgreSQL table.",
+  logo: "/projects/sentiment.png",
+  tech: ["Python", "spaCy", "HuggingFace", "NLTK", "PostgreSQL"],
+  github: "https://github.com/mfkimbell/reviews-nlp-sentiment-analysis",
+  gradient: "from-rose-400 to-rose-600",
+},
+{
+  name: "Golang GraphQL Server",
+  description:
+    "Lightweight GraphQL API built with Go and gqlgen, backed by MongoDB. Provides queries & mutations to create and list dogs, illustrating schema-first development and strongly-typed resolvers.",
+  logo: "/projects/graphql.png",
+  tech: ["Go", "GraphQL", "gqlgen", "MongoDB"],
+  github: "https://github.com/mfkimbell/go-graphql-server",
+  gradient: "from-emerald-500 to-emerald-700",
+},
+{
+  name: "Agriculture Monitoring Drone",
+  description:
+    "JavaFX dashboard controlling a Tello drone for precision-agriculture demos. Implements flight commands via the Tello SDK, live telemetry, and map overlays to survey crop health as a team software-engineering capstone.",
+  logo: "/projects/drone.png",
+  tech: ["Java", "JavaFX", "Tello SDK"],
+  github: "https://github.com/mfkimbell/agricultural-monitoring-drone",
+  gradient: "from-lime-400 to-lime-600",
+},
+{
+  name: "GitHub Actions CI/CD Tutorial",
+  description:
+    "Hands-on tutorial repo showcasing composite, JavaScript, and Docker actions. Demonstrates automated issue replies and a full S3-deploy workflow while teaching students core GitHub Actions concepts.",
+  logo: "/projects/actions.png",
+  tech: ["GitHub Actions", "CI/CD", "Docker", "JavaScript"],
+  github: "https://github.com/mfkimbell/github-actions-pipeline",
+  gradient: "from-violet-500 to-violet-700",
+},
+{
+  name: "Azure Blob / Container Manager",
+  description:
+    ".NET 8 WebApp for creating, listing, uploading, and deleting Azure Storage blobs & containers via the Azure SDK. Provides a clean C# MVC interface for cloud storage operations.",
+  logo: "/projects/azure.png",
+  tech: ["Azure", ".NET 8", "C#", "Blob Storage"],
+  github: "https://github.com/mfkimbell/azure-container-and-blob-management",
+  gradient: "from-sky-500 to-sky-700",
+},
+{
+  name: "AWS Amplify File-Sharing Dashboard",
+  description:
+    "React dashboard scaffolded with Amplify. Users sign in with Cognito, upload files to S3, and leave comments stored via GraphQL APIs in DynamoDB—all managed by Amplify’s cloud resources.",
+  logo: "/projects/amplify.png",
+  tech: ["Amplify", "S3", "Cognito", "DynamoDB", "React", "GraphQL"],
+  github: "https://github.com/mfkimbell/aws-amplify-file-dashboard",
+  gradient: "from-orange-400 to-orange-600",
+},
+{
+  name: "Thrift Store E-Commerce Site",
+  description:
+    "Full-stack MERN storefront using JWT authentication and CryptoJS encryption. Express REST APIs drive product listings, cart management, and secure checkout against a MongoDB database.",
+  logo: "/projects/thrift.png",
+  tech: [
+    "React",
+    "Express",
+    "MongoDB",
+    "Mongoose",
+    "JWT",
+    "CryptoJS",
+    "JavaScript",
+  ],
+  github:
+    "https://github.com/mfkimbell/ecommerce-thrift-website/tree/main",
+  gradient: "from-amber-500 to-amber-700",
+},
+
+{
+  name: "SongStitch",
+  description:
+    "React + FastAPI tool that calls the Spotify API, stitches selected album covers into a single wallpaper with Pillow, and lets users download custom mosaics sized for their phone.",
+  logo: "/projects/stitch.png",
+  tech: ["React", "FastAPI", "Pillow", "Spotify API", "Python"],
+  github: "https://github.com/mfkimbell/album-stitcher",
+  gradient: "from-teal-400 to-teal-600",
+},
+{
+  name: "Legends of Pygame",
+  description:
+    "2-D action-adventure game engine built from scratch with Pygame—sprites, collision detection, tile maps, animations, and camera tracking—all in Python.",
+  logo: "/projects/zelda.png",
+  tech: ["Python", "Pygame"],
+  github: "https://github.com/mfkimbell/legends-of-pygame",
+  gradient: "from-green-700 to-green-900",
+},
+{
+  name: "Rust S-Notation Parser",
+  description:
+    "Recursive-descent parser in Rust that converts Polish-notation S-expressions into an abstract syntax tree supporting +, −, *, and ^ operators with arbitrary arity.",
+  logo: "/projects/parse.png",
+  tech: ["Rust", "Parsing"],
+  github: "https://github.com/mfkimbell/rust-s-notation-parser",
+  gradient: "from-gray-500 to-gray-700",
+},
+{
+  name: "Multiple File Search & Execute",
+  description:
+    "POSIX C utility that filters files by size, type, and name using command-line flags, then executes arbitrary shell commands on the matching set.",
+  logo: "/projects/search.png",
+  tech: ["C", "Linux"],
+  github:
+    "https://github.com/mfkimbell/multiple-file-search-and-execute",
+  gradient: "from-slate-500 to-slate-700",
+},
+{
+  name: "AI Image Generator",
+  description:
+    "Serverless Lambda (invoked via API Gateway) that calls AWS Bedrock to run Stable Diffusion. Generates an image, stores it in S3, and returns a presigned URL; also supports text-summarization tasks.",
+  logo: "/projects/image-gen.png",
+  tech: ["API Gateway", "Bedrock", "Stable Diffusion", "Lambda", "S3"],
+  github:
+    "https://github.com/mfkimbell/aws-basic-ai-image-generation-and-text-summarization",
+  gradient: "from-fuchsia-500 to-fuchsia-700",
+},
+{
+  name: "Rust Quadtree Area Calculator",
+  description:
+    "Rust implementation of a QuadTree that recursively partitions space to compute the exact covered area of overlapping rectangles without double-counting.",
+  logo: "/projects/quad.png",
+  tech: ["Rust", "Recursion"],
+  github: "https://github.com/mfkimbell/quad-tree-area-calculator",
+  gradient: "from-cyan-700 to-cyan-900",
+},
+{
+  name: "Golang Translate Tool",
+  description:
+    "CLI translator demonstrating Go’s concurrency primitives—goroutines, channels, and waitgroups—to perform parallel language translation requests.",
+  logo: "/projects/translate.png",
+  tech: ["Go", "Concurrency"],
+  github: "https://github.com/mfkimbell/google-translate-tool",
+  gradient: "from-yellow-500 to-yellow-700",
+},
+
+
+{
+  name: "SQLAlchemy Postgres ORM",
+  description:
+    "Example project showing modern repository-pattern data access with SQLAlchemy, providing a full CRUD layer over a PostgreSQL movies table.",
+  logo: "/projects/alchemy.png",
+  tech: ["Python", "SQLAlchemy", "PostgreSQL", "PDM"],
+  github: "https://github.com/mfkimbell/python-orm-setup",
+  gradient: "from-purple-600 to-purple-800",
+},
+{
+  name: "Personal Website",
+  description:
+    "Responsive portfolio site with a JavaScript contact form that hits Web3Forms. Styled with Bootstrap and hosted on Google Domains.",
+  logo: "/projects/logo2.png",
+  tech: ["JavaScript", "Bootstrap", "Google Domains"],
+  github: "https://github.com/mfkimbell/personal-website",
+  gradient: "from-gray-700 to-gray-900",
+},
+
+
 ];
