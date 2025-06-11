@@ -25,25 +25,25 @@ export default function BirdGLB({ containerRef }: Props) {
      Adjust these to control behavior
   -------------------------------------------------- */
   // Base (starting) head orientation
-  const BASE_PITCH      = 0.3;   // + looks up,  − looks down
-  const BASE_YAW        = -1;  // + looks right, − looks left
-  const BASE_ROLL       = 0.0;   // + tilt right ear down, − left ear down
+  const BASE_PITCH = 0.3;   // + looks up,  − looks down
+  const BASE_YAW = -1;  // + looks right, − looks left
+  const BASE_ROLL = 0.0;   // + tilt right ear down, − left ear down
 
   // Maximum rotation delta driven by pointer
   const MAX_PITCH_DELTA = 0.8;
-  const MAX_YAW_DELTA   = 0.5;
-  const MAX_ROLL_DELTA  = 0.2;
+  const MAX_YAW_DELTA = 0.5;
+  const MAX_ROLL_DELTA = 0.2;
 
   // Responsiveness
-  const DEAD_ZONE       = 0.2;   // fraction of half-width before head starts turning
-  const SENSITIVITY     = 2.0;   // scales pointer→rotation
-  const INVERT_X        = 1;     // 1 = normal, −1 flips horizontal mapping
-  const INVERT_Y        = -1;    // 1 = normal, −1 flips vertical mapping
+  const DEAD_ZONE = 0.2;   // fraction of half-width before head starts turning
+  const SENSITIVITY = 2.0;   // scales pointer→rotation
+  const INVERT_X = 1;     // 1 = normal, −1 flips horizontal mapping
+  const INVERT_Y = -1;    // 1 = normal, −1 flips vertical mapping
   const CENTER_OFFSET_X = 1;   // fraction of half-width to shift pointer origin rightwards
-  const SMOOTHING       = 0.1;   // interpolation factor for smooth motion
+  const SMOOTHING = 0.1;   // interpolation factor for smooth motion
 
-// How many pixels from the bird before nodding is fully flattened
-const PITCH_FALLOFF_RADIUS = 2000;  // try 250-350px
+  // How many pixels from the bird before nodding is fully flattened
+  const PITCH_FALLOFF_RADIUS = 2000;  // try 250-350px
 
   /* -------------------------------------------------- */
 
@@ -63,11 +63,11 @@ const PITCH_FALLOFF_RADIUS = 2000;  // try 250-350px
 
       // calculate shifted center X
       const centerX = rect.left + halfW + halfW * CENTER_OFFSET_X;
-      const centerY = rect.top  + halfH;
+      const centerY = rect.top + halfH;
 
       // raw offsets from shifted center
-      let dx = clientX - centerX;
-      let dy = clientY - centerY;
+      const dx = clientX - centerX;
+      const dy = clientY - centerY;
 
       // apply dead zone in pixels
       const deadPxX = halfW * DEAD_ZONE;
@@ -112,34 +112,34 @@ const PITCH_FALLOFF_RADIUS = 2000;  // try 250-350px
     };
   }, [containerRef]);
 
- /* per-frame smoothing toward target rotations */
-useFrame(() => {
-  if (!head.current || !containerRef.current) return;
+  /* per-frame smoothing toward target rotations */
+  useFrame(() => {
+    if (!head.current || !containerRef.current) return;
 
-  // Calculate distance from mouse to bird center on screen
-  const container = containerRef.current;
-  const birdScreenX = container.offsetLeft + container.offsetWidth / 2;
-  const birdScreenY = container.offsetTop + container.offsetHeight / 2;
-  const dx = lastPos.current.x - birdScreenX;
-  const dy = lastPos.current.y - birdScreenY;
+    // Calculate distance from mouse to bird center on screen
+    const container = containerRef.current;
+    const birdScreenX = container.offsetLeft + container.offsetWidth / 2;
+    const birdScreenY = container.offsetTop + container.offsetHeight / 2;
+    const dx = lastPos.current.x - birdScreenX;
+    const dy = lastPos.current.y - birdScreenY;
 
-// 0 when mouse is on the bird, 1 when cursor is ≥ radius away
-const distRatio = Math.min(1, Math.hypot(dx, dy) / PITCH_FALLOFF_RADIUS);
-const pitchScale = 1 - distRatio; // fades linearly to 0
+    // 0 when mouse is on the bird, 1 when cursor is ≥ radius away
+    const distRatio = Math.min(1, Math.hypot(dx, dy) / PITCH_FALLOFF_RADIUS);
+    const pitchScale = 1 - distRatio; // fades linearly to 0
 
-  // Target rotations
-  const targetPitch = BASE_PITCH +
-    THREE.MathUtils.clamp(pointer.current.y * MAX_PITCH_DELTA * pitchScale, -MAX_PITCH_DELTA, MAX_PITCH_DELTA);
-  const targetYaw = BASE_YAW +
-    THREE.MathUtils.clamp(pointer.current.x * MAX_YAW_DELTA, -MAX_YAW_DELTA, MAX_YAW_DELTA);
-  const targetRoll = BASE_ROLL +
-    THREE.MathUtils.clamp(-pointer.current.x * MAX_ROLL_DELTA, -MAX_ROLL_DELTA, MAX_ROLL_DELTA);
+    // Target rotations
+    const targetPitch = BASE_PITCH +
+      THREE.MathUtils.clamp(pointer.current.y * MAX_PITCH_DELTA * pitchScale, -MAX_PITCH_DELTA, MAX_PITCH_DELTA);
+    const targetYaw = BASE_YAW +
+      THREE.MathUtils.clamp(pointer.current.x * MAX_YAW_DELTA, -MAX_YAW_DELTA, MAX_YAW_DELTA);
+    const targetRoll = BASE_ROLL +
+      THREE.MathUtils.clamp(-pointer.current.x * MAX_ROLL_DELTA, -MAX_ROLL_DELTA, MAX_ROLL_DELTA);
 
-  // Smooth interpolation
-  head.current.rotation.x += (targetPitch - head.current.rotation.x) * SMOOTHING;
-  head.current.rotation.y += (targetYaw   - head.current.rotation.y) * SMOOTHING;
-  head.current.rotation.z += (targetRoll  - head.current.rotation.z) * SMOOTHING;
-});
+    // Smooth interpolation
+    head.current.rotation.x += (targetPitch - head.current.rotation.x) * SMOOTHING;
+    head.current.rotation.y += (targetYaw - head.current.rotation.y) * SMOOTHING;
+    head.current.rotation.z += (targetRoll - head.current.rotation.z) * SMOOTHING;
+  });
 
 
   return (

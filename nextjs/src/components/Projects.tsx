@@ -27,6 +27,7 @@ import {
   useReducedMotion,
 } from "framer-motion";
 import { projects, Project } from "@/lib/projects";
+import HouseScene from "./HouseScene";
 
 /* ─────────────────── CSS keyframes (injected once) ─────────────────── */
 const styleId = "projects‑idle‑anim";
@@ -45,6 +46,12 @@ if (typeof window !== "undefined" && !document.getElementById(styleId)) {
     @keyframes glowPulse {
       0%, 100% { box-shadow: 0 0 0 0 rgba(59,131,246,0.0), 0 0 18px 2px rgba(59,131,246,0.7); }
       50%      { box-shadow: 0 0 0 6px rgba(59,131,246,0.25), 0 0 24px 4px rgba(59,131,246,0.9); }
+    }
+
+    /* gentle bobbing for tie point */
+    @keyframes tieBob {
+      0%, 100% { transform: translateY(0px); }
+      50%      { transform: translateY(-3px); }
     }
 
 
@@ -94,7 +101,7 @@ const IconButton = memo<IconBtnProps>(
     const prefersReduced = useReducedMotion();
 
     /* ── Idle animation vars (unique per icon) ── */
-    const tempo = 4 + (idx % 8) * 0.6;      // 4 – 8.2 s
+    const tempo = 4 + (idx % 8) * 0.6;      // 4 – 8.2 s
     const phaseOffset = -(idx % 10) * 0.6;   // negative delay → start mid‑loop
 
     const idleStyle = prefersReduced
@@ -162,15 +169,15 @@ const IconButton = memo<IconBtnProps>(
             style={{
               borderRadius: '50% 50% 50% 50% / 45% 45% 55% 55%', // Slightly more oval, taller at bottom
               boxShadow: selected
-                ? '0 15px 35px rgba(0,0,0,0.3), inset -2px -8px 0 rgba(0,0,0,0.15), inset 2px 2px 0 rgba(255,255,255,0.4), inset 0 0 0 1px rgba(255,255,255,0.2)'
-                : '0 8px 25px rgba(0,0,0,0.2), inset -1px -4px 0 rgba(0,0,0,0.1), inset 1px 1px 0 rgba(255,255,255,0.25), inset 0 0 0 1px rgba(255,255,255,0.15)',
+                ? '0 8px 20px rgba(0,0,0,0.15), inset 1px -4px 0 rgba(0,0,0,0.08)'
+                : '0 4px 12px rgba(0,0,0,0.1), inset 0.5px -2px 0 rgba(0,0,0,0.05)',
             }}
           >
             {/* Subtle light reflection overlay */}
             <div
-              className="absolute inset-0 rounded-full opacity-40"
+              className="absolute inset-0 rounded-full opacity-60"
               style={{
-                background: 'radial-gradient(ellipse 60% 50% at 75% 25%, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.1) 50%, transparent 80%)'
+                background: 'radial-gradient(ellipse 60% 50% at 75% 25%, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.2) 50%, transparent 80%)'
               }}
             />
 
@@ -244,37 +251,34 @@ function BalloonBouquet({ projects, isSmall, isUltraSmall, active, onPick, onPic
 
   // Base desktop dimensions
   const baseWidth = 600;
-  const baseHeight = 500;
+  const baseHeight = 1000; // Much larger height to accommodate very low house position
   const baseSpacing = 70;
-  const baseRowHeight = 45;
+  const baseRowHeight = 55;
   const baseCenterX = 300;
-  const baseTieY = 460;
+  const baseTieY = 500;
 
   // Scaled dimensions
   const containerWidth = Math.round(baseWidth * scaleFactor);
   const containerHeight = Math.round(baseHeight * scaleFactor);
   const spacing = baseSpacing * scaleFactor;
-  const rowHeight = baseRowHeight * scaleFactor;
+  const rowHeight = baseRowHeight * scaleFactor * (isUltraSmall ? 1.6 : 1); // Extra vertical spacing for mobile
   const centerX = baseCenterX * scaleFactor;
-  const tieY = baseTieY * scaleFactor;
+  const tieY = baseTieY * scaleFactor + (isUltraSmall ? 40 : 0); // Move anchor down more for mobile
 
   // Create bouquet layout: IDENTICAL for all screen sizes
   const createBouquetLayout = () => {
     const layout: { project: Project; row: number; col: number; maxCols: number }[] = [];
     let projectIndex = 0;
 
-    // Desktop row configuration - NEVER changes
+    // Desktop row configuration - test with very different layout
     const rowConfigs = [
-      { maxCols: 5 },  // Top row (fewest)
-      { maxCols: 6 },  // Second row 
-      { maxCols: 7 },  // Third row
-      { maxCols: 8 },  // Fourth row (widest)
-      { maxCols: 8 },  // Fifth row (widest)
+      { maxCols: 6 },  // Top row
+      { maxCols: 7 },  // Second row 
+      { maxCols: 8 },  // Third row
+      { maxCols: 9 },  // Fourth row (widest)
+      { maxCols: 8 },  // Fifth row 
       { maxCols: 7 },  // Sixth row
-      { maxCols: 6 },  // Seventh row
-      { maxCols: 5 },  // Eighth row
-      { maxCols: 4 },  // Ninth row
-      { maxCols: 3 },  // Bottom row (very few)
+      { maxCols: 6 },  // Seventh row (last row)
     ];
 
     rowConfigs.forEach((config, rowIndex) => {
@@ -301,6 +305,19 @@ function BalloonBouquet({ projects, isSmall, isUltraSmall, active, onPick, onPic
 
     let balloonX = rowStartX + (item.col * spacing);
     let balloonY = (item.row * rowHeight) + (50 * scaleFactor);
+
+    // Special centering for the last row - always center on all screen sizes
+    const lastRowItems = balloonLayout.filter(b => b.row === item.row);
+    const isLastRow = item.row === Math.max(...balloonLayout.map(b => b.row));
+
+    if (isLastRow && lastRowItems.length < item.maxCols) {
+      // Center the actual balloons in the last row
+      const actualBalloons = lastRowItems.length;
+      const lastRowSpacing = spacing;
+      const lastRowWidth = (actualBalloons - 1) * lastRowSpacing;
+      const lastRowStartX = centerX - lastRowWidth / 2;
+      balloonX = lastRowStartX + (item.col * lastRowSpacing);
+    }
 
     // Apply push-away logic with scaled distances
     if (active.name !== item.project.name) {
@@ -396,16 +413,13 @@ function BalloonBouquet({ projects, isSmall, isUltraSmall, active, onPick, onPic
           })}
         </svg>
 
-        {/* Tie Point */}
-        <div
-          className={`absolute bg-gradient-to-br from-amber-200 to-amber-400 rounded-full shadow-lg z-10 border-2 border-white/50`}
-          style={{
-            width: `${4 * scaleFactor}px`,
-            height: `${4 * scaleFactor}px`,
-            left: `${centerX - (2 * scaleFactor)}px`, // Center minus half width
-            top: `${tieY}px`,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.8)'
-          }}
+        {/* House at Tie Point - Pixar Up Style */}
+        <HouseScene
+          scaleFactor={scaleFactor}
+          containerWidth={containerWidth}
+          containerHeight={containerHeight}
+          centerX={centerX}
+          tieY={tieY}
         />
 
         {/* Balloons in Bouquet Formation */}
@@ -458,7 +472,89 @@ export default function ProjectsSection() {
   );
 
   return (
-    <section id="projects" className="py-10 sm:h-150 md:h-200 lg:h-225">
+    <section id="projects" className="py-0 px-8 relative mb-[-100px]">
+      {/* Mobile Clouds (< 768px) */}
+      <Image
+        src="/clouds/cloud4.png"
+        alt=""
+        width={70}
+        height={70}
+        priority
+        className="absolute left-[12%] top-[20%] opacity-45 pointer-events-none cloud md:hidden"
+        style={{
+          "--float-distance": "8px",
+          animationDuration: "8.8s",
+          animationDelay: "-2.1s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud2.png"
+        alt=""
+        width={55}
+        height={55}
+        priority
+        className="absolute right-[10%] top-[30%] opacity-50 pointer-events-none cloud md:hidden"
+        style={{
+          "--float-distance": "6px",
+          animationDuration: "7.5s",
+          animationDelay: "-4.3s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud1.png"
+        alt=""
+        width={65}
+        height={65}
+        priority
+        className="absolute left-[80%] top-[75%] opacity-40 pointer-events-none cloud md:hidden"
+        style={{
+          "--float-distance": "7px",
+          animationDuration: "9.1s",
+          animationDelay: "-1.8s",
+        } as React.CSSProperties}
+      />
+
+      {/* Desktop Clouds (≥ 768px) */}
+      <Image
+        src="/clouds/cloud5.png"
+        alt=""
+        width={180}
+        height={180}
+        priority
+        className="absolute left-[10%] top-[15%] opacity-60 pointer-events-none cloud hidden md:block"
+        style={{
+          "--float-distance": "18px",
+          animationDuration: "12.5s",
+          animationDelay: "-3.2s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud1.png"
+        alt=""
+        width={160}
+        height={160}
+        priority
+        className="absolute right-[8%] top-[25%] opacity-65 pointer-events-none cloud hidden md:block"
+        style={{
+          "--float-distance": "15px",
+          animationDuration: "10.8s",
+          animationDelay: "-1.5s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud4.png"
+        alt=""
+        width={140}
+        height={140}
+        priority
+        className="absolute left-[75%] top-[70%] opacity-55 pointer-events-none cloud hidden md:block"
+        style={{
+          "--float-distance": "12px",
+          animationDuration: "9.7s",
+          animationDelay: "-5.8s",
+        } as React.CSSProperties}
+      />
+
       <h2 className="neon-text mb-12 text-center text-3xl font-bold">Projects</h2>
 
       <div className="mx-auto max-w-7xl px-4 lg:flex lg:space-x-10">
@@ -475,7 +571,7 @@ export default function ProjectsSection() {
         </div>
 
         {/* CONTENT PANEL */}
-        <div className="mt-10 flex-1 lg:mt-0">
+        <div className="-mt-20 flex-1 lg:mt-0">
           <AnimatePresence mode="wait">
             <motion.div
               key={active.name}

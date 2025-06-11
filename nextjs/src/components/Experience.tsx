@@ -8,17 +8,18 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import Image from "next/image";
 import { roles, Role } from "@/lib/experience";
 
 // === Configuration ===
-const BOB_DURATION_MS  = 8000;   // full up/down cycle in ms
+const BOB_DURATION_MS = 8000;   // full up/down cycle in ms
 const BOB_AMPLITUDE_PX = 18;     // px of vertical travel
-const BOB_STAGGER_MS   = 800;    // ms offset between each badge’s bob start
-const BADGE_FULL_PX    = 128;    // badge width & height at full size
-const BADGE_SM_PX      = BADGE_FULL_PX / 2; // 64px on sm
-const GAP_PX           = 32;     // spacing from badge center to card
-const BOX_MAX_WIDTH    = 1150;   // max container width in px
-const MD_SIDE_PADDING  = BADGE_FULL_PX / 2 + GAP_PX; // 96
+const BOB_STAGGER_MS = 800;    // ms offset between each badge's bob start
+const BADGE_FULL_PX = 128;    // badge width & height at full size
+const BADGE_SM_PX = BADGE_FULL_PX / 2; // 64px on sm
+const GAP_PX = 32;     // spacing from badge center to card
+const BOX_MAX_WIDTH = 1150;   // max container width in px
+const MD_SIDE_PADDING = BADGE_FULL_PX / 2 + GAP_PX; // 96
 
 export default function Experience() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -43,7 +44,89 @@ export default function Experience() {
   }, []);
 
   return (
-    <section id="experience" className="overflow-x-hidden py-0 text-white ">
+    <section id="experience" className="overflow-x-hidden py-0 text-white relative">
+      {/* Mobile Clouds (< 768px) */}
+      <Image
+        src="/clouds/cloud2.png"
+        alt=""
+        width={65}
+        height={65}
+        priority
+        className="absolute left-[8%] top-[25%] opacity-45 pointer-events-none cloud md:hidden"
+        style={{
+          "--float-distance": "7px",
+          animationDuration: "8.3s",
+          animationDelay: "-1.5s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud4.png"
+        alt=""
+        width={50}
+        height={50}
+        priority
+        className="absolute right-[12%] top-[40%] opacity-50 pointer-events-none cloud md:hidden"
+        style={{
+          "--float-distance": "5px",
+          animationDuration: "7.1s",
+          animationDelay: "-3.8s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud3.png"
+        alt=""
+        width={60}
+        height={60}
+        priority
+        className="absolute left-[85%] top-[80%] opacity-40 pointer-events-none cloud md:hidden"
+        style={{
+          "--float-distance": "6px",
+          animationDuration: "8.7s",
+          animationDelay: "-2.2s",
+        } as React.CSSProperties}
+      />
+
+      {/* Desktop Clouds (≥ 768px) */}
+      <Image
+        src="/clouds/cloud5.png"
+        alt=""
+        width={150}
+        height={150}
+        priority
+        className="absolute left-[8%] top-[20%] opacity-65 pointer-events-none cloud hidden md:block"
+        style={{
+          "--float-distance": "15px",
+          animationDuration: "11.5s",
+          animationDelay: "-2.8s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud1.png"
+        alt=""
+        width={130}
+        height={130}
+        priority
+        className="absolute right-[10%] top-[35%] opacity-60 pointer-events-none cloud hidden md:block"
+        style={{
+          "--float-distance": "12px",
+          animationDuration: "9.7s",
+          animationDelay: "-4.2s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud4.png"
+        alt=""
+        width={120}
+        height={120}
+        priority
+        className="absolute left-[85%] top-[75%] opacity-55 pointer-events-none cloud hidden md:block"
+        style={{
+          "--float-distance": "10px",
+          animationDuration: "10.3s",
+          animationDelay: "-1.5s",
+        } as React.CSSProperties}
+      />
+
       <h2 className="text-center text-3xl font-bold neon-text mb-12">
         Experience
       </h2>
@@ -55,7 +138,7 @@ export default function Experience() {
           px-4 md:px-[${MD_SIDE_PADDING}px]
         `}
       >
-        
+
 
         <ul className="space-y-14 sm:mr-13">
           {roles.map((role: Role, idx: number) => (
@@ -127,6 +210,15 @@ export default function Experience() {
           ))}
         </ul>
       </div>
+
+      {/* Cloud Animation Styles */}
+      <style jsx global>{`
+        .cloud {
+          animation-name: float;
+          animation-timing-function: ease-in-out;
+          animation-iteration-count: infinite;
+        }
+      `}</style>
     </section>
   );
 }

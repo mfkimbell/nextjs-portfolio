@@ -67,24 +67,106 @@ export default function Metrics() {
   const scroll = base.totalScroll;
 
   return (
-    <section id="metrics" className="mt-20">
+    <section id="metrics" className="mt-20 relative overflow-hidden">
+      {/* Mobile Clouds (< 768px) */}
+      <Image
+        src="/clouds/cloud1.png"
+        alt=""
+        width={60}
+        height={60}
+        priority
+        className="absolute left-[15%] top-[25%] opacity-45 pointer-events-none cloud md:hidden"
+        style={{
+          "--float-distance": "6px",
+          animationDuration: "8.1s",
+          animationDelay: "-1.8s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud5.png"
+        alt=""
+        width={50}
+        height={50}
+        priority
+        className="absolute right-[18%] top-[35%] opacity-50 pointer-events-none cloud md:hidden"
+        style={{
+          "--float-distance": "5px",
+          animationDuration: "7.4s",
+          animationDelay: "-3.2s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud2.png"
+        alt=""
+        width={55}
+        height={55}
+        priority
+        className="absolute left-[75%] top-[80%] opacity-40 pointer-events-none cloud md:hidden"
+        style={{
+          "--float-distance": "6px",
+          animationDuration: "8.9s",
+          animationDelay: "-2.5s",
+        } as React.CSSProperties}
+      />
+
+      {/* Desktop Clouds (≥ 768px) */}
+      <Image
+        src="/clouds/cloud3.png"
+        alt=""
+        width={170}
+        height={170}
+        priority
+        className="absolute left-[12%] top-[20%] opacity-65 pointer-events-none cloud hidden md:block"
+        style={{
+          "--float-distance": "16px",
+          animationDuration: "11.8s",
+          animationDelay: "-2.5s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud2.png"
+        alt=""
+        width={150}
+        height={150}
+        priority
+        className="absolute right-[15%] top-[30%] opacity-60 pointer-events-none cloud hidden md:block"
+        style={{
+          "--float-distance": "14px",
+          animationDuration: "10.2s",
+          animationDelay: "-4.7s",
+        } as React.CSSProperties}
+      />
+      <Image
+        src="/clouds/cloud5.png"
+        alt=""
+        width={130}
+        height={130}
+        priority
+        className="absolute left-[80%] top-[75%] opacity-55 pointer-events-none cloud hidden md:block"
+        style={{
+          "--float-distance": "12px",
+          animationDuration: "9.5s",
+          animationDelay: "-1.8s",
+        } as React.CSSProperties}
+      />
+
       <h2 className="text-center text-white text-3xl font-bold mb-8">
         Canvas
       </h2>
 
-      <CanvasBoard 
-      visits={visits}
-      mouseMiles={mouseMiles}
-      clicks={clicks}
+      <CanvasBoard
+        visits={visits}
+        mouseMiles={mouseMiles}
+        clicks={clicks}
       />
 
-<div className="flex justify-center mt-2 sm:mb-10 md:mb-5 lg:-mb-19  pb-2 ">
-     <div className="flex items-center gap-4">
-     <div className="flex items-center gap-1"><Eye size={16} /> <span>{visits.toLocaleString()}</span></div>
-     <div className="flex items-center gap-1"><MousePointerClick size={16} /> <span>{clicks.toLocaleString()}</span></div>
-     <div className="flex items-center gap-1"><MousePointer size={16} /> <span>{mouseMiles.toFixed(4).toLocaleString()}</span></div>
-     </div>
-   </div>
+      <div className="flex justify-center mt-2 sm:mb-10 md:mb-5 lg:-mb-19  pb-2 ">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1"><Eye size={16} /> <span>{visits.toLocaleString()}</span></div>
+          <div className="flex items-center gap-1"><MousePointerClick size={16} /> <span>{clicks.toLocaleString()}</span></div>
+          <div className="flex items-center gap-1"><MousePointer size={16} /> <span>{mouseMiles.toFixed(4).toLocaleString()}</span></div>
+        </div>
+      </div>
 
       {/* grass / raccoon / bees strip ▸ unchanged but with metrics overlay */}
       <div className="relative w-full overflow-x-hidden overflow-y-visible   py-11.5 mt-9 sm:py-0   max-w-[100vw] z-50">
@@ -105,7 +187,7 @@ export default function Metrics() {
             className="absolute left-[57%] top-[3%] w-[10%] pointer-events-none  z-350 overflow-visible"
           />
 
-        
+
 
           {/* bees */}
           <img
@@ -169,6 +251,12 @@ export default function Metrics() {
         }
         .animate-ping-slow {
           animation: badgePulse 0.7s ease-in-out;
+        }
+
+        .cloud {
+          animation-name: float;
+          animation-timing-function: ease-in-out;
+          animation-iteration-count: infinite;
         }
       `}</style>
     </section>
