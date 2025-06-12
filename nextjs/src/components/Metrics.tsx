@@ -2,17 +2,18 @@
    src/components/Metrics.tsx – live‑updating website metrics
    • DB totals from /api/metrics (Neon + Prisma)
    • Session increments from Redux (clicks + mouse miles)
-   • Tiny badge animates ("+1", "+0.05") to prove it's live
+   • Tiny badge animates (“+1”, “+0.05”) to prove it's live
    • Raw text metrics overlaid between raccoon and bees
 -------------------------------------------------------------------*/
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import useSWRImmutable from "swr/immutable";
 import Image from "next/image";
 import { useAppSelector } from "@/lib/hooks";
 import CanvasBoard from "./CanvasBoard";
 import {
+
   Eye,
   MousePointer,
   MousePointerClick,
@@ -32,6 +33,8 @@ export default function Metrics() {
 
   /* 2 ▸ live session counts */
   const session = useAppSelector((s) => s.metrics);
+  const [clickFlash, setClickFlash] = useState(false);
+  const [mileFlash, setMileFlash] = useState(false);
 
   useEffect(() => {
     // Count a real page‑view exactly once on client‑side mount
@@ -39,102 +42,41 @@ export default function Metrics() {
       .catch(console.error);
   }, []);
 
+  useEffect(() => {
+    if (session.clicks) {
+      setClickFlash(true);
+      const id = setTimeout(() => setClickFlash(false), 700);
+      return () => clearTimeout(id);
+    }
+  }, [session.clicks]);
+
+  useEffect(() => {
+    if (session.mouseMiles) {
+      setMileFlash(true);
+      const id = setTimeout(() => setMileFlash(false), 700);
+      return () => clearTimeout(id);
+    }
+  }, [session.mouseMiles]);
+
   if (!base) return null;
 
   /* 3 ▸ merge totals + increments */
   const visits = base.totalVisits;
   const clicks = base.totalClicks + session.clicks;
   const mouseMiles = base.totalMouseMiles + session.mouseMiles;
+  const scroll = base.totalScroll;
 
   return (
-    <section id="metrics" className="mt-20 relative overflow-hidden">
-      {/* Mobile Clouds (< 768px) */}
-      <Image
-        src="/clouds/cloud1.png"
-        alt=""
-        width={60}
-        height={60}
-        priority
-        className="absolute left-[15%] top-[25%] opacity-45 pointer-events-none cloud md:hidden"
-        style={{
-          "--float-distance": "6px",
-          animationDuration: "8.1s",
-          animationDelay: "-1.8s",
-        } as React.CSSProperties}
-      />
-      <Image
-        src="/clouds/cloud5.png"
-        alt=""
-        width={50}
-        height={50}
-        priority
-        className="absolute right-[18%] top-[35%] opacity-50 pointer-events-none cloud md:hidden"
-        style={{
-          "--float-distance": "5px",
-          animationDuration: "7.4s",
-          animationDelay: "-3.2s",
-        } as React.CSSProperties}
-      />
-      <Image
-        src="/clouds/cloud2.png"
-        alt=""
-        width={55}
-        height={55}
-        priority
-        className="absolute left-[75%] top-[80%] opacity-40 pointer-events-none cloud md:hidden"
-        style={{
-          "--float-distance": "6px",
-          animationDuration: "8.9s",
-          animationDelay: "-2.5s",
-        } as React.CSSProperties}
-      />
-
-      {/* Desktop Clouds (≥ 768px) */}
-      <Image
-        src="/clouds/cloud3.png"
-        alt=""
-        width={170}
-        height={170}
-        priority
-        className="absolute left-[12%] top-[20%] opacity-65 pointer-events-none cloud hidden md:block"
-        style={{
-          "--float-distance": "16px",
-          animationDuration: "11.8s",
-          animationDelay: "-2.5s",
-        } as React.CSSProperties}
-      />
-      <Image
-        src="/clouds/cloud2.png"
-        alt=""
-        width={150}
-        height={150}
-        priority
-        className="absolute right-[15%] top-[30%] opacity-60 pointer-events-none cloud hidden md:block"
-        style={{
-          "--float-distance": "14px",
-          animationDuration: "10.2s",
-          animationDelay: "-4.7s",
-        } as React.CSSProperties}
-      />
-      <Image
-        src="/clouds/cloud5.png"
-        alt=""
-        width={130}
-        height={130}
-        priority
-        className="absolute left-[80%] top-[75%] opacity-55 pointer-events-none cloud hidden md:block"
-        style={{
-          "--float-distance": "12px",
-          animationDuration: "9.5s",
-          animationDelay: "-1.8s",
-        } as React.CSSProperties}
-      />
-
+    <section id="metrics" className="mt-20">
       <h2 className="text-center text-white text-3xl font-bold mb-8">
         Canvas
       </h2>
 
-      <CanvasBoard />
+      <CanvasBoard
+        visits={visits}
+        mouseMiles={mouseMiles}
+        clicks={clicks}
+      />
 
       <div className="flex justify-center mt-2 sm:mb-10 md:mb-5 lg:-mb-19  pb-2 ">
         <div className="flex items-center gap-4">
@@ -157,28 +99,29 @@ export default function Metrics() {
           />
 
           {/* raccoon */}
-          <Image
+          <img
             src="/gifs/racoon.gif"
             alt="Raccoon"
-            width={200}
-            height={200}
-            className="absolute left-[57%] top-[3%] w-[10%] pointer-events-none z-350 overflow-visible"
+            className="absolute left-[57%] top-[3%] w-[10%] pointer-events-none  z-350 overflow-visible"
           />
 
+
+
           {/* bees */}
-          <Image
+          <img
             src="/animals/bee1.png"
             alt="Bee 1"
-            width={40}
-            height={40}
             className="absolute left-[28%] top-[60%] w-2 sm:w-5 pointer-events-none bee-anim-1-mobile sm:bee-anim-1 z-20"
           />
-          <Image
+          <img
             src="/animals/bee2.png"
             alt="Bee 2"
-            width={40}
-            height={40}
-            className="absolute left-[32%] top-[55%] w-2 sm:w-5 pointer-events-none bee-anim-2-mobile sm:bee-anim-2 z-20"
+            className="absolute left-[35%] top-[38%] w-2 sm:w-5 pointer-events-none bee-anim-2-mobile sm:bee-anim-2 z-20"
+          />
+          <img
+            src="/animals/bee3.png"
+            alt="Bee 3"
+            className="absolute left-[40%] top-[53%] w-2 sm:w-5 pointer-events-none bee-anim-3-mobile sm:bee-anim-3 z-20"
           />
         </div>
       </div>
@@ -226,12 +169,6 @@ export default function Metrics() {
         }
         .animate-ping-slow {
           animation: badgePulse 0.7s ease-in-out;
-        }
-
-        .cloud {
-          animation-name: float;
-          animation-timing-function: ease-in-out;
-          animation-iteration-count: infinite;
         }
       `}</style>
     </section>
