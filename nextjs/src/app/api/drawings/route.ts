@@ -1,9 +1,15 @@
 // app/api/drawings/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { NextRequest, NextResponse } from 'next/server';
+import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
-const BOARD_ID = "shared-board";
+const BOARD_ID = 'shared-board';
+
+interface Stroke {
+  points: number[];
+  color: string;
+  width: number;
+}
 
 export async function GET() {
   const board = await prisma.drawing.findUnique({ where: { id: BOARD_ID } });
@@ -13,12 +19,17 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const { newStrokes } = await req.json();
   if (!Array.isArray(newStrokes)) {
-    return NextResponse.json({ error: "newStrokes[] required" }, { status: 400 });
+    return NextResponse.json(
+      { error: 'newStrokes[] required' },
+      { status: 400 }
+    );
   }
 
   // 1. Load existing
   const board = await prisma.drawing.findUnique({ where: { id: BOARD_ID } });
-  const existing: any[] = Array.isArray(board?.strokes) ? board!.strokes as any[] : [];
+  const existing = Array.isArray(board?.strokes)
+    ? (board!.strokes as unknown as Stroke[])
+    : [];
 
   // 2. Merge into a single flat array
   const merged = [...existing, ...newStrokes];
@@ -27,7 +38,7 @@ export async function POST(req: NextRequest) {
   const updated = await prisma.drawing.upsert({
     where: { id: BOARD_ID },
     create: { id: BOARD_ID, strokes: merged },
-    update: { strokes: merged },      // full overwrite with merged array
+    update: { strokes: merged }, // full overwrite with merged array
   });
 
   return NextResponse.json(updated);

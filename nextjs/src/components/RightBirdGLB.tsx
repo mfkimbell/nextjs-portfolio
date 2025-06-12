@@ -6,13 +6,13 @@ import { useFrame } from "@react-three/fiber";
 import { useGLTF, useHelper } from "@react-three/drei";
 import * as THREE from "three";
 
-interface Props {
-  containerRef: React.RefObject<HTMLDivElement>;
+interface GLTFResult {
+  scene: THREE.Group;
 }
 
-export default function RightBirdGLB({ containerRef }: Props) {
+export default function RightBirdGLB() {
   /* ─── load model ─── */
-  const { scene } = useGLTF("/models/RightBird.glb") as any;
+  const { scene } = useGLTF("/models/RightBird.glb") as GLTFResult;
 
   /* ─── refs ─── */
   const sceneRef = useRef<THREE.Object3D>(null!);
@@ -26,7 +26,7 @@ export default function RightBirdGLB({ containerRef }: Props) {
   const DECAY = 0.12;                          // smoothing factor
 
   /* ─── constants ─── */
-  const BASE_PITCH = 0.25;                   // slight “curious” tilt
+  const BASE_PITCH = 0.25;                   // slight "curious" tilt
   const BASE_YAW = -0.8;                    // faces left on load
   const MAX_PITCH = 0.9;                    // rad
   const MAX_YAW = 1.0;                    // rad
@@ -41,7 +41,7 @@ export default function RightBirdGLB({ containerRef }: Props) {
     } else {
       console.error("[RightBirdGLB] Head bone not found");
     }
-  }, [scene]);
+  }, [scene, BASE_PITCH, BASE_YAW]);
 
   /* ─── cursor listener (viewport-wide) ─── */
   useEffect(() => {

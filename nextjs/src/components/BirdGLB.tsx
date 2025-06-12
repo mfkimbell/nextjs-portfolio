@@ -10,8 +10,12 @@ interface Props {
   containerRef: React.RefObject<HTMLDivElement>;
 }
 
+interface GLTFResult {
+  scene: THREE.Group;
+}
+
 export default function BirdGLB({ containerRef }: Props) {
-  const { scene } = useGLTF("/models/bird.glb") as any;
+  const { scene } = useGLTF("/models/bird.glb") as GLTFResult;
   const head = useRef<THREE.Object3D>(null!);
 
   /* --------------------------------------------------
@@ -51,7 +55,7 @@ export default function BirdGLB({ containerRef }: Props) {
   useEffect(() => {
     head.current = scene.getObjectByName("Head")!;
     head.current.rotation.set(BASE_PITCH, BASE_YAW, BASE_ROLL);
-  }, [scene]);
+  }, [scene, BASE_PITCH, BASE_YAW, BASE_ROLL]);
 
   /* pointer tracking with pixel-based dead zone and center offset */
   useEffect(() => {
@@ -110,7 +114,7 @@ export default function BirdGLB({ containerRef }: Props) {
       window.removeEventListener("scroll", onScrollResize);
       window.removeEventListener("resize", onScrollResize);
     };
-  }, [containerRef]);
+  }, [containerRef, DEAD_ZONE, SENSITIVITY, INVERT_X, INVERT_Y, CENTER_OFFSET_X]);
 
   /* per-frame smoothing toward target rotations */
   useFrame(() => {
@@ -140,7 +144,6 @@ export default function BirdGLB({ containerRef }: Props) {
     head.current.rotation.y += (targetYaw - head.current.rotation.y) * SMOOTHING;
     head.current.rotation.z += (targetRoll - head.current.rotation.z) * SMOOTHING;
   });
-
 
   return (
     <primitive

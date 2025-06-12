@@ -2,18 +2,17 @@
    src/components/Metrics.tsx – live‑updating website metrics
    • DB totals from /api/metrics (Neon + Prisma)
    • Session increments from Redux (clicks + mouse miles)
-   • Tiny badge animates (“+1”, “+0.05”) to prove it's live
+   • Tiny badge animates ("+1", "+0.05") to prove it's live
    • Raw text metrics overlaid between raccoon and bees
 -------------------------------------------------------------------*/
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import useSWRImmutable from "swr/immutable";
 import Image from "next/image";
 import { useAppSelector } from "@/lib/hooks";
 import CanvasBoard from "./CanvasBoard";
 import {
-
   Eye,
   MousePointer,
   MousePointerClick,
@@ -33,8 +32,6 @@ export default function Metrics() {
 
   /* 2 ▸ live session counts */
   const session = useAppSelector((s) => s.metrics);
-  const [clickFlash, setClickFlash] = useState(false);
-  const [mileFlash, setMileFlash] = useState(false);
 
   useEffect(() => {
     // Count a real page‑view exactly once on client‑side mount
@@ -42,29 +39,12 @@ export default function Metrics() {
       .catch(console.error);
   }, []);
 
-  useEffect(() => {
-    if (session.clicks) {
-      setClickFlash(true);
-      const id = setTimeout(() => setClickFlash(false), 700);
-      return () => clearTimeout(id);
-    }
-  }, [session.clicks]);
-
-  useEffect(() => {
-    if (session.mouseMiles) {
-      setMileFlash(true);
-      const id = setTimeout(() => setMileFlash(false), 700);
-      return () => clearTimeout(id);
-    }
-  }, [session.mouseMiles]);
-
   if (!base) return null;
 
   /* 3 ▸ merge totals + increments */
   const visits = base.totalVisits;
   const clicks = base.totalClicks + session.clicks;
   const mouseMiles = base.totalMouseMiles + session.mouseMiles;
-  const scroll = base.totalScroll;
 
   return (
     <section id="metrics" className="mt-20 relative overflow-hidden">
@@ -154,11 +134,7 @@ export default function Metrics() {
         Canvas
       </h2>
 
-      <CanvasBoard
-        visits={visits}
-        mouseMiles={mouseMiles}
-        clicks={clicks}
-      />
+      <CanvasBoard />
 
       <div className="flex justify-center mt-2 sm:mb-10 md:mb-5 lg:-mb-19  pb-2 ">
         <div className="flex items-center gap-4">
@@ -181,29 +157,28 @@ export default function Metrics() {
           />
 
           {/* raccoon */}
-          <img
+          <Image
             src="/gifs/racoon.gif"
             alt="Raccoon"
-            className="absolute left-[57%] top-[3%] w-[10%] pointer-events-none  z-350 overflow-visible"
+            width={200}
+            height={200}
+            className="absolute left-[57%] top-[3%] w-[10%] pointer-events-none z-350 overflow-visible"
           />
-
-
 
           {/* bees */}
-          <img
+          <Image
             src="/animals/bee1.png"
             alt="Bee 1"
+            width={40}
+            height={40}
             className="absolute left-[28%] top-[60%] w-2 sm:w-5 pointer-events-none bee-anim-1-mobile sm:bee-anim-1 z-20"
           />
-          <img
+          <Image
             src="/animals/bee2.png"
             alt="Bee 2"
-            className="absolute left-[35%] top-[38%] w-2 sm:w-5 pointer-events-none bee-anim-2-mobile sm:bee-anim-2 z-20"
-          />
-          <img
-            src="/animals/bee3.png"
-            alt="Bee 3"
-            className="absolute left-[40%] top-[53%] w-2 sm:w-5 pointer-events-none bee-anim-3-mobile sm:bee-anim-3 z-20"
+            width={40}
+            height={40}
+            className="absolute left-[32%] top-[55%] w-2 sm:w-5 pointer-events-none bee-anim-2-mobile sm:bee-anim-2 z-20"
           />
         </div>
       </div>

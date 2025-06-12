@@ -3,7 +3,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import {
   Send,
   Award,
@@ -19,11 +18,11 @@ import {
 // ——— NavIcons sub‑component ———
 function NavIcons({ scrolled }: { scrolled: boolean }) {
   const navItems = [
-    { href: "#home",     Icon: Send,       label: "Home" },
-    { href: "#skills",   Icon: Award,      label: "Skills" },
-    { href: "#projects", Icon: Folder,     label: "Projects" },
+    { href: "#home", Icon: Send, label: "Home" },
+    { href: "#skills", Icon: Award, label: "Skills" },
+    { href: "#projects", Icon: Folder, label: "Projects" },
     { href: "#experience", Icon: Briefcase, label: "Experience" },
-    { href: "#metrics",  Icon: Palette,    label: "Canvas" },  // ← swapped BarChart for Palette
+    { href: "#metrics", Icon: Palette, label: "Canvas" },  // ← swapped BarChart for Palette
   ];
 
   return (
@@ -34,10 +33,9 @@ function NavIcons({ scrolled }: { scrolled: boolean }) {
             className={`
               w-5 h-5
               transition-colors duration-200 ease-out
-              ${
-                scrolled
-                  ? "text-blue-300 group-hover:text-blue-400 group-hover:scale-110"
-                  : "text-black group-hover:text-black"
+              ${scrolled
+                ? "text-blue-300 group-hover:text-blue-400 group-hover:scale-110"
+                : "text-black group-hover:text-black"
               }
             `}
           />
@@ -50,10 +48,10 @@ function NavIcons({ scrolled }: { scrolled: boolean }) {
 // ——— SocialIcons sub‑component ———
 function SocialIcons({ scrolled }: { scrolled: boolean }) {
   const socialItems = [
-    { href: "https://github.com/mfkimbell", Icon: Github,   label: "GitHub",   external: true },
-    { href: "/resume.pdf",                 Icon: Download, label: "Resume",   download: true },
+    { href: "https://github.com/mfkimbell", Icon: Github, label: "GitHub", external: true },
+    { href: "/resume.pdf", Icon: Download, label: "Resume", download: true },
     { href: "mailto:mfkimbell@gmail.com?subject=Job%20Offer", Icon: Mail, label: "Email" },
-    { href: "https://www.linkedin.com/in/mfkimbell",         Icon: Linkedin, label: "LinkedIn", external: true },
+    { href: "https://www.linkedin.com/in/mfkimbell", Icon: Linkedin, label: "LinkedIn", external: true },
   ];
 
   return (
@@ -111,10 +109,9 @@ export default function Header() {
         w-fit px-3 py-2 rounded-full
         flex items-center
         transition-all duration-300
-        ${
-          scrolled
-            ? "backdrop-blur-md bg-[rgba(13,17,23,0.35)] shadow-md"
-            : "bg-transparent"
+        ${scrolled
+          ? "backdrop-blur-md bg-[rgba(13,17,23,0.35)] shadow-md"
+          : "bg-transparent"
         }
       `}
     >
