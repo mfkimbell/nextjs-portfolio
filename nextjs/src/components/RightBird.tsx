@@ -6,7 +6,7 @@ import Image from "next/image";
 
 export default function RightBird() {
   return (
-    <section className="relative overflow-hidden p-35 w-full pb-40 sm:pb-60">
+    <section className="relative overflow-hidden p-35 w-full pt-0 sm:pb-60 min-h-[100px]">
       {/* Mobile Clouds (< 768px) */}
       <Image
         src="/clouds/cloud4.png"
@@ -89,24 +89,28 @@ export default function RightBird() {
         } as React.CSSProperties}
       />
 
-      {/* wrapper: scales down on xs, back up at sm */}
-      <div className="relative z-0 transform scale-75 sm:scale-100 min-h-[300px] sm:min-h-[100px]">
+      {/* Branch and Bird - 3D effect */}
+      <div className="relative w-full h-[50px] min-h-[10px]">
         {/* Background branch - behind the bird */}
         <img
           src="/right_branch.png"
           alt="Right jungle branch background"
-          className="absolute -right-18 sm:-right-35 top-6 sm:top-12 w-[295px] h-[97px] sm:w-[580px] sm:h-[230px] z-0"
+          className="absolute -right-55 sm:-right-45 top-6 sm:top-12 w-[295px] sm:w-[380px] object-contain z-0"
+          style={{ height: 'auto', maxWidth: 'none' }}
         />
 
-        <RightBirdScene />
+        {/* Bird Canvas - position so bird sits on branch */}
+        <div className="absolute -right-47 sm:-right-[135px] -top-[37px] sm:-top-[10px] z-10">
+          <RightBirdScene />
+        </div>
 
         {/* Foreground branch - in front of the bird */}
         <img
-          src="/right_branch.png"
+          src="/right_branch_front.png"
           alt="Right jungle branch foreground"
-          className="absolute -right-18 sm:-right-35 top-6 sm:top-12 w-[295px] h-[97px] sm:w-[580px] sm:h-[230px] z-20"
+          className="absolute -right-55 sm:-right-45 top-6 sm:top-12 w-[295px] sm:w-[380px] object-contain z-20"
+          style={{ height: 'auto', maxWidth: 'none' }}
         />
-
       </div>
 
       <style jsx>{`
