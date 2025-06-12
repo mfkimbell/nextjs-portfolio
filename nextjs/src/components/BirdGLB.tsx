@@ -15,7 +15,7 @@ interface GLTFResult {
 }
 
 export default function BirdGLB({ containerRef }: Props) {
-  const { scene } = useGLTF("/models/bird.glb") as GLTFResult;
+  const { scene } = useGLTF("/models/Bird.glb") as GLTFResult;
   const head = useRef<THREE.Object3D>(null!);
 
   /* --------------------------------------------------
@@ -156,4 +156,4 @@ export default function BirdGLB({ containerRef }: Props) {
 }
 
 // preload for performance
-useGLTF.preload("/models/bird.glb");
+useGLTF.preload("/models/Bird.glb");
