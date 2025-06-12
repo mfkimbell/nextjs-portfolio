@@ -17,7 +17,7 @@ export default function ProjectsSection() {
 
   return (
     <section id="projects" className="py-24">
-      <h2 className="text-3xl font-bold neon-text text-center mb-12">
+      <h2 className="text-4xl font-bold neon-text text-center mb-12">
         Projects
       </h2>
 

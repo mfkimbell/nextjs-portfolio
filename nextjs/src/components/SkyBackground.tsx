@@ -7,6 +7,12 @@ import { Send, Award, Folder, Briefcase, BarChart } from "lucide-react";
 export default function SkyBackground() {
   return (
     <div className="absolute inset-0 z-0 pointer-events-none select-none overflow-hidden max-w-screen overflow-x-hidden">
+      {/* Title */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-4xl sm:text-2xl md:text-4xl font-bold neon-text text-center mb-12 pointer-events-none z-0 text-white">
+        <span className="block whitespace-nowrap">Mitchell Kimbell</span>
+        <span className="block whitespace-nowrap">Software Engineer</span>
+      </div>
+
       {/* ————— Invisible header clone (md+) ————— */}
       <div className="fixed top-4 right-4 w-fit px-3 py-2 rounded-full hidden md:flex items-center space-x-4 pointer-events-none">
         <Send className="invisible w-5 h-5" />
@@ -129,7 +135,7 @@ export default function SkyBackground() {
       {/* LARGE-SCREEN CLOUDS (≥768 px)                         */}
       {/* ===================================================== */}
 
-      {/* Foreground – downsized “giants” */}
+      {/* Foreground – downsized "giants" */}
       <Image
         src="/clouds/cloud5.png"
         alt=""

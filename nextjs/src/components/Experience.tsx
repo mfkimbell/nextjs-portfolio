@@ -18,7 +18,6 @@ const BOB_STAGGER_MS = 800;    // ms offset between each badge's bob start
 const BADGE_FULL_PX = 128;    // badge width & height at full size
 const BADGE_SM_PX = BADGE_FULL_PX / 2; // 64px on sm
 const GAP_PX = 32;     // spacing from badge center to card
-const BOX_MAX_WIDTH = 1150;   // max container width in px
 const MD_SIDE_PADDING = BADGE_FULL_PX / 2 + GAP_PX; // 96
 
 export default function Experience() {
@@ -127,88 +126,90 @@ export default function Experience() {
         } as React.CSSProperties}
       />
 
-      <h2 className="text-center text-3xl font-bold neon-text mb-12">
+      <h2 className="text-center text-4xl font-bold neon-text mb-12">
         Experience
       </h2>
 
-      <div
-        ref={containerRef}
-        className={`
-          relative sm:ml-2  mx-auto w-full max-w-[${BOX_MAX_WIDTH}px]
-          px-4 md:px-[${MD_SIDE_PADDING}px]
-        `}
-      >
-
-
-        <ul className="space-y-14 sm:mr-13">
-          {roles.map((role: Role, idx: number) => (
-            <li
-              key={`${role.company}-${role.dates}-${idx}`}
-              className="flex flex-col sm:flex-row items-start sm:items-center gap-6"
-            >
-              {/* desktop badge on left */}
-              <img
-                src={role.logo}
-                alt={`${role.company} badge`}
-                width={BADGE_FULL_PX}
-                height={BADGE_FULL_PX}
-                className={`
-                  hidden sm:block select-none pointer-events-none rounded-md
-                  w-[${BADGE_FULL_PX}px] h-[${BADGE_FULL_PX}px]
-                  badge
-                `}
-              />
-
-              <article className="relative flex-1 bg-black/10 backdrop-blur-md rounded-xl px-6 py-4">
-                {/* mobile badge at top-right */}
+      <div className="flex justify-center w-full">
+        <div
+          ref={containerRef}
+          className={`
+            relative mx-auto w-full max-w-[950px]
+            px-4 md:px-[${MD_SIDE_PADDING}px]
+          `}
+        >
+          <ul className="space-y-14">
+            {roles.map((role: Role, idx: number) => (
+              <li
+                key={`${role.company}-${role.dates}-${idx}`}
+                className="relative flex flex-col items-start sm:items-center"
+              >
+                {/* desktop badge on left, absolutely positioned */}
                 <img
                   src={role.logo}
-                  alt=""
-                  width={BADGE_SM_PX}
-                  height={BADGE_SM_PX}
+                  alt={`${role.company} badge`}
+                  width={BADGE_FULL_PX}
+                  height={BADGE_FULL_PX}
                   className={`
-                    sm:hidden absolute top-4 right-4 select-none pointer-events-none rounded-md
-                    w-[${BADGE_SM_PX}px] h-[${BADGE_SM_PX}px]
-                    badge
+                    hidden sm:block select-none pointer-events-none rounded-md badge
+                    absolute left-[-40px] top-1/2  -translate-y-1/2
                   `}
+                  style={{
+                    left: "-130px",
+                  }}
                 />
 
-                <header className="mb-2">
-                  {/* Mobile header: title, then company, then date */}
-                  <div className="block sm:hidden ">
-                    <h3 className="font-semibold text-lg leading-tight">
-                      {role.title}
-                    </h3>
-                    <p className="text-sm text-gray-300 mt-1">
-                      @ {role.company}
-                    </p>
-                    <p className="text-xs text-blue-200/80 mt-1">
-                      {role.dates}
-                    </p>
-                  </div>
-                  {/* Desktop header: title & company inline, date below */}
-                  <div className="hidden sm:block">
-                    <h3 className="font-semibold text-lg leading-tight">
-                      {role.title}
-                      <span className="ml-1 text-sm text-gray-300">
-                        @ {role.company}
-                      </span>
-                    </h3>
-                    <p className="text-xs text-blue-200/80 mt-1">
-                      {role.dates}
-                    </p>
-                  </div>
-                </header>
+                <article className="relative flex-1 bg-black/10 backdrop-blur-md rounded-xl px-6 py-4 w-full sm:pl-[96px]">
+                  {/* mobile badge at top-right */}
+                  <img
+                    src={role.logo}
+                    alt=""
+                    width={BADGE_SM_PX}
+                    height={BADGE_SM_PX}
+                    className={`
+                      sm:hidden absolute top-6 right-4 select-none pointer-events-none rounded-md
+                      w-[${BADGE_SM_PX}px] h-[${BADGE_SM_PX}px]
+                      badge
+                    `}
+                  />
 
-                <ul className="list-disc list-inside text-sm leading-relaxed marker:text-current/70 pl-1">
-                  {role.bullets.map((b) => (
-                    <li key={b}>{b}</li>
-                  ))}
-                </ul>
-              </article>
-            </li>
-          ))}
-        </ul>
+                  <header className="mb-2">
+                    {/* Mobile header: title, then company, then date */}
+                    <div className="block sm:hidden ">
+                      <h3 className="font-semibold text-lg leading-tight">
+                        {role.title}
+                      </h3>
+                      <p className="text-sm text-gray-300 mt-1">
+                        @ {role.company}
+                      </p>
+                      <p className="text-xs text-blue-200/80 mt-1">
+                        {role.dates}
+                      </p>
+                    </div>
+                    {/* Desktop header: title & company inline, date below */}
+                    <div className="hidden sm:block">
+                      <h3 className="font-semibold text-lg leading-tight">
+                        {role.title}
+                        <span className="ml-1 text-sm text-gray-300">
+                          @ {role.company}
+                        </span>
+                      </h3>
+                      <p className="text-xs text-blue-200/80 mt-1">
+                        {role.dates}
+                      </p>
+                    </div>
+                  </header>
+
+                  <ul className="list-disc list-inside text-sm leading-relaxed marker:text-current/70 pl-1">
+                    {role.bullets.map((b) => (
+                      <li key={b}>{b}</li>
+                    ))}
+                  </ul>
+                </article>
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
 
       {/* Cloud Animation Styles */}

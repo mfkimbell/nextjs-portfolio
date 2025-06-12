@@ -86,7 +86,7 @@ export default function Metrics() {
         {mileFlash && null}
         {scroll && null}
       </div>
-      <h2 className="text-center text-white text-3xl font-bold mb-8">
+      <h2 className="text-center text-white text-4xl font-bold mb-8">
         Canvas
       </h2>
 

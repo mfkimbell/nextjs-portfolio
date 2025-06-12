@@ -14,6 +14,7 @@ import {
   Mail,
   Linkedin,
 } from "lucide-react";
+import { sectionConfigs } from "@/config/sections";
 
 // ——— NavIcons sub‑component ———
 function NavIcons({ scrolled }: { scrolled: boolean }) {
@@ -22,13 +23,36 @@ function NavIcons({ scrolled }: { scrolled: boolean }) {
     { href: "#skills", Icon: Award, label: "Skills" },
     { href: "#projects", Icon: Folder, label: "Projects" },
     { href: "#experience", Icon: Briefcase, label: "Experience" },
-    { href: "#metrics", Icon: Palette, label: "Canvas" },  // ← swapped BarChart for Palette
+    { href: "#metrics", Icon: Palette, label: "Canvas" },
   ];
+
+  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    e.preventDefault();
+    const targetId = href.replace('#', '');
+    const element = document.getElementById(targetId);
+    if (element) {
+      const config = sectionConfigs.find(c => c.id === targetId);
+      const headerHeight = 80; // Approximate header height
+      const elementPosition = element.getBoundingClientRect().top;
+      const offsetPosition = elementPosition + window.pageYOffset - headerHeight - (config?.offset || 0);
+
+      window.scrollTo({
+        top: offsetPosition,
+        behavior: 'smooth'
+      });
+    }
+  };
 
   return (
     <nav className="flex items-center space-x-4 pointer-events-auto">
       {navItems.map(({ href, Icon, label }) => (
-        <Link key={href} href={href} aria-label={label} className="group">
+        <Link
+          key={href}
+          href={href}
+          onClick={(e) => handleClick(e, href)}
+          aria-label={label}
+          className="group"
+        >
           <Icon
             className={`
               w-5 h-5

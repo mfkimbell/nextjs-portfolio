@@ -57,10 +57,8 @@ export default function Home() {
       {/* main content — no need to reapply gradient here */}
       <main className="relative z-10 text-white">
         <AirplaneTracking />
-
         <SkillsCarousel />
         <LeftBird />
-
         <ProjectsSection />
         <RightBird />
         <ExperienceSection />

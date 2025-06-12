@@ -165,7 +165,7 @@ export default function SkillsCarousel() {
 
       <div className="max-w-6xl mx-auto px-4 relative z-20">
         <h2
-          className="text-3xl font-bold neon-text mb-12 text-center pb-15"
+          className="text-4xl sm:text-4xl font-bold neon-text mb-12 text-center pb-15"
         >
           {hovered ?? "Skills"}
         </h2>
