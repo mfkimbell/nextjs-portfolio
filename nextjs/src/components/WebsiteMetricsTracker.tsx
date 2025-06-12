@@ -5,11 +5,16 @@ import { mutate } from "swr";
 import { useAppDispatch } from "@/lib/hooks";
 import { addClicks, addMiles, resetSession } from "@/lib/store";
 
+interface Metrics {
+  totalClicks: number;
+  totalMouseMiles: number;
+}
+
 export default function WebsiteMetricsTracker() {
-  const dispatch  = useAppDispatch();
+  const dispatch = useAppDispatch();
   const clicksRef = useRef(0);
   const distPxRef = useRef(0);
-  const lastPos   = useRef<{ x: number; y: number } | null>(null);
+  const lastPos = useRef<{ x: number; y: number } | null>(null);
   const pxToMiles = (px: number) => px / (96 * 12 * 5280);
 
   /* record visit once */
@@ -19,7 +24,7 @@ export default function WebsiteMetricsTracker() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
       keepalive: true,
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -43,14 +48,16 @@ export default function WebsiteMetricsTracker() {
 
     const flush = () => {
       const clicks = clicksRef.current;
-      const miles  = pxToMiles(distPxRef.current);
+      const miles = pxToMiles(distPxRef.current);
       if (!clicks && !miles) return;
 
       /* optimistic UI update */
-      mutate("/api/metrics", (prev: any) =>
+      mutate("/api/metrics", (prev: Metrics | undefined) =>
         prev
-          ? { ...prev, totalClicks: prev.totalClicks + clicks,
-                     totalMouseMiles: prev.totalMouseMiles + miles }
+          ? {
+            ...prev, totalClicks: prev.totalClicks + clicks,
+            totalMouseMiles: prev.totalMouseMiles + miles
+          }
           : prev,
         false
       );
@@ -61,7 +68,7 @@ export default function WebsiteMetricsTracker() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ clicks, mouseMiles: miles }),
         keepalive: true,
-      }).catch(() => {});
+      }).catch(() => { });
 
       /* reset session counts for next batch */
       clicksRef.current = 0;
