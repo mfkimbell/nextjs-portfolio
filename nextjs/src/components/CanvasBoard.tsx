@@ -95,7 +95,8 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
 
   const clearAll = async () => {
     await fetch("/api/drawings", { method: "DELETE" });
-    setPending([]); mutate([], false);
+    setPending([]);
+    mutate({ strokes: [] }, false);
   };
 
   const undo = () => setPending(lst => lst.slice(0, -1));
