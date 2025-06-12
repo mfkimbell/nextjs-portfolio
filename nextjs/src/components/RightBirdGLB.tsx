@@ -1,7 +1,7 @@
 // components/RightBirdGLB.tsx
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, RefObject } from "react";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF, useHelper } from "@react-three/drei";
 import * as THREE from "three";
@@ -10,7 +10,11 @@ interface GLTFResult {
   scene: THREE.Group;
 }
 
-export default function RightBirdGLB() {
+interface RightBirdGLBProps {
+  containerRef: RefObject<HTMLDivElement>;
+}
+
+export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
   /* ─── load model ─── */
   const { scene } = useGLTF("/models/RightBird.glb") as GLTFResult;
 
@@ -53,9 +57,9 @@ export default function RightBirdGLB() {
     return () => window.removeEventListener("mousemove", update);
   }, []);
 
-  /* ─── per-frame animation ─── */
+  /* ─── animation ─── */
   useFrame(() => {
-    if (!head.current) return;
+    if (!head.current || !containerRef.current) return;
 
     /* target angles - simple, one inversion for yaw */
     const tgtYaw = BASE_YAW + (cursor.current.x) * MAX_YAW;

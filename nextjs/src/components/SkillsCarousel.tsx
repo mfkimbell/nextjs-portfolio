@@ -179,10 +179,12 @@ export default function SkillsCarousel() {
           }}
         >
           {icons.map(({ src, label }, idx) => (
-            <img
+            <Image
               key={idx}
               src={src}
               alt={label}
+              width={96}
+              height={96}
               onMouseEnter={() => setHovered(label)}
               onMouseLeave={() => setHovered(null)}
               className={`
@@ -191,7 +193,6 @@ export default function SkillsCarousel() {
                 object-contain transition-transform duration-200
                 ${hovered === label ? "scale-102" : ""}
               `}
-
               style={{ transformOrigin: "center center", willChange: "transform" }}
             />
           ))}
