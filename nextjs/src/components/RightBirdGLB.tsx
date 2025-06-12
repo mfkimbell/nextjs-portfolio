@@ -30,7 +30,7 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
   const DECAY = 0.12;                          // smoothing factor
 
   /* ─── constants ─── */
-  const BASE_PITCH = 0.25;                     // slight "curious" tilt
+  const BASE_PITCH = 0.3;                     // slight "curious" tilt
   const BASE_YAW = -1.5;                       // faces left on load
 
   // Separate limits for left/right movement
