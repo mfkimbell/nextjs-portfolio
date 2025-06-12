@@ -8,7 +8,7 @@ import useSWR from "swr";
 import { Eraser, Save, Trash2, RotateCcw } from "lucide-react";
 
 /* ---------- types & constants ---------- */
-type Point  = { x: number; y: number };
+type Point = { x: number; y: number };
 type Stroke = { pts: Point[]; color: string; width: number; erase?: boolean };
 
 const COLORS = [
@@ -26,14 +26,14 @@ interface CanvasBoardProps {
 /* ================================================================= */
 export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const ctxRef    = useRef<CanvasRenderingContext2D | null>(null);
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const { data, mutate } = useSWR<{ strokes: Stroke[] }>("/api/drawings", fetcher, { refreshInterval: 3000 });
 
   const [pending, setPending] = useState<Stroke[]>([]);
   const currentRef = useRef<Stroke | null>(null);
-  const [color,   setColor]   = useState(COLORS[1]);
-  const [size,    setSize]    = useState(6);
-  const [eraser,  setEraser]  = useState(false);
+  const [color, setColor] = useState(COLORS[1]);
+  const [size, setSize] = useState(6);
+  const [eraser, setEraser] = useState(false);
 
   /* ---------- Hi-DPI square canvas ---------- */
   useEffect(() => {
@@ -43,9 +43,9 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
     if (!ctx) return;
 
     const setup = () => {
-      const w   = cvs.clientWidth;
+      const w = cvs.clientWidth;
       const dpr = window.devicePixelRatio || 1;
-      cvs.width  = w * dpr;
+      cvs.width = w * dpr;
       cvs.height = w * dpr;
       ctx.resetTransform();
       ctx.scale(dpr, dpr);
@@ -62,7 +62,7 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   useEffect(redraw, [data, pending]);
 
   /* ---------- pointer helpers ---------- */
-  const loc   = (e: React.PointerEvent<HTMLCanvasElement>): Point =>
+  const loc = (e: React.PointerEvent<HTMLCanvasElement>): Point =>
     ({ x: (e.nativeEvent as PointerEvent).offsetX, y: (e.nativeEvent as PointerEvent).offsetY });
 
   const start = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -71,14 +71,14 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
     setPending(lst => [...lst, stroke]);
   };
 
-  const move  = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const move = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const stroke = currentRef.current;
     if (!stroke) return;
     stroke.pts.push(loc(e));
     redraw();
   };
 
-  const end   = () => {
+  const end = () => {
     currentRef.current = null;
   };
 
@@ -86,9 +86,9 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   const save = async () => {
     if (!pending.length) return;
     await fetch("/api/drawings", {
-      method:  "POST",
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ newStrokes: pending }),
+      body: JSON.stringify({ newStrokes: pending }),
     });
     setPending([]); mutate();
   };
@@ -109,7 +109,7 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
     const base = Array.isArray(data?.strokes) ? data!.strokes : [];
 
     [...base, ...pending].forEach(s => {
-      ctx.lineWidth   = s.width;
+      ctx.lineWidth = s.width;
       ctx.strokeStyle = s.erase ? "rgba(0,0,0,1)" : s.color;
       ctx.globalCompositeOperation = s.erase ? "destination-out" : "source-over";
       ctx.beginPath();
@@ -127,9 +127,9 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
           className={`p-2 ml-1.5 rounded-full ${eraser ? "bg-gray-600" : "bg-gray-800"} hover:bg-gray-700`}>
           <Eraser size={16} className="text-white" />
         </button>
-        <button title="Undo"  onClick={undo}      className="p-2 ml-0.5 bg-yellow-500 hover:bg-yellow-600 rounded-full text-white"><RotateCcw size={16}/></button>
-        <button title="Save"  onClick={save}     className="p-2 ml-0.5 bg-blue-500   hover:bg-blue-600   rounded-full text-white"><Save   size={16}/></button>
-        <button title="Clear" onClick={clearAll} className="p-2 ml-0.5 bg-red-500    hover:bg-red-600    rounded-full text-white"><Trash2 size={16}/></button>
+        <button title="Undo" onClick={undo} className="p-2 ml-0.5 bg-yellow-500 hover:bg-yellow-600 rounded-full text-white"><RotateCcw size={16} /></button>
+        <button title="Save" onClick={save} className="p-2 ml-0.5 bg-blue-500   hover:bg-blue-600   rounded-full text-white"><Save size={16} /></button>
+        <button title="Clear" onClick={clearAll} className="p-2 ml-0.5 bg-red-500    hover:bg-red-600    rounded-full text-white"><Trash2 size={16} /></button>
       </div>
     </div>
   );
@@ -164,11 +164,11 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
         <div
           className="rounded-full transition-all"
           style={{
-            width:       `${size}px`,
-            height:      `${size}px`,
+            width: `${size}px`,
+            height: `${size}px`,
             backgroundColor: color,
-            maxWidth:    '90%',
-            maxHeight:   '90%',
+            maxWidth: '90%',
+            maxHeight: '90%',
           }}
         />
       </div>
