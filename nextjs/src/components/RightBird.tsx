@@ -100,7 +100,7 @@ export default function RightBird() {
         />
 
         {/* Bird Canvas - position so bird sits on branch */}
-        <div className="absolute -right-47 sm:-right-[135px] -top-[37px] sm:-top-[10px] z-10">
+        <div className="absolute -right-49 sm:-right-[135px] -top-[9px] sm:-top-[10px] z-10">
           <RightBirdScene />
         </div>
 

@@ -15,7 +15,7 @@ interface GLTFResult {
 }
 
 export default function BirdGLB({ containerRef }: Props) {
-  const { scene } = useGLTF("/models/Bird.glb") as GLTFResult;
+  const { scene } = useGLTF("/models/bird.glb") as GLTFResult;
   const head = useRef<THREE.Object3D>(null!);
 
   /* --------------------------------------------------
@@ -34,7 +34,7 @@ export default function BirdGLB({ containerRef }: Props) {
   const BASE_ROLL = 0.0;   // + tilt right ear down, − left ear down
 
   // Maximum rotation delta driven by pointer
-  const MAX_PITCH_DELTA = 0.8;
+  const MAX_PITCH_DELTA = 1.2;
   const MAX_YAW_DELTA = 0.5;
   const MAX_ROLL_DELTA = 0.2;
 
@@ -55,7 +55,7 @@ export default function BirdGLB({ containerRef }: Props) {
   useEffect(() => {
     head.current = scene.getObjectByName("Head")!;
     head.current.rotation.set(BASE_PITCH, BASE_YAW, BASE_ROLL);
-  }, [scene, BASE_PITCH, BASE_YAW, BASE_ROLL]);
+  }, [scene, BASE_YAW]);
 
   /* pointer tracking with pixel-based dead zone and center offset */
   useEffect(() => {
@@ -114,7 +114,7 @@ export default function BirdGLB({ containerRef }: Props) {
       window.removeEventListener("scroll", onScrollResize);
       window.removeEventListener("resize", onScrollResize);
     };
-  }, [containerRef, DEAD_ZONE, SENSITIVITY, INVERT_X, INVERT_Y, CENTER_OFFSET_X]);
+  }, [containerRef, INVERT_Y]);
 
   /* per-frame smoothing toward target rotations */
   useFrame(() => {
@@ -145,6 +145,7 @@ export default function BirdGLB({ containerRef }: Props) {
     head.current.rotation.z += (targetRoll - head.current.rotation.z) * SMOOTHING;
   });
 
+
   return (
     <primitive
       object={scene}
@@ -156,4 +157,4 @@ export default function BirdGLB({ containerRef }: Props) {
 }
 
 // preload for performance
-useGLTF.preload("/models/Bird.glb");
+useGLTF.preload("/models/bird.glb");

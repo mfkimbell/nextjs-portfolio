@@ -18,7 +18,7 @@ export default function RightBirdScene() {
           absolute right-0 top-0
           w-[140px] sm:w-[160px] h-[140px] sm:h-[160px]
           pointer-events-none z-100
-          scale-105 sm:scale-100
+          scale-85 sm:scale-100
         "
       >
         <Canvas camera={{ position: [0, 1, 3], fov: 40 }}>

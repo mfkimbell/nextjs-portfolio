@@ -30,11 +30,20 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
   const DECAY = 0.12;                          // smoothing factor
 
   /* ─── constants ─── */
-  const BASE_PITCH = 0.25;                   // slight "curious" tilt
-  const BASE_YAW = -0.8;                    // faces left on load
-  const MAX_PITCH = 0.9;                    // rad
-  const MAX_YAW = 1.0;                    // rad
-  const MAX_ROLL = 0.25;                   // subtle roll
+  const BASE_PITCH = 0.25;                     // slight "curious" tilt
+  const BASE_YAW = -1.5;                       // faces left on load
+
+  // Separate limits for left/right movement
+  const MAX_YAW_LEFT = 0.2               // how far it can turn left
+  const MAX_YAW_RIGHT = 1.8;                   // how far it can turn right
+
+  // Separate limits for up/down movement
+  const MAX_PITCH_UP = 1.0;                    // how far it can look up
+  const MAX_PITCH_DOWN = 1.4;                  // how far it can look down
+
+  const MAX_ROLL = -0.25;                      // subtle roll
+  const YAW_OFFSET = 0.2;                      // adjust center point of yaw
+  const PITCH_OFFSET = 0.1;                    // adjust center point of pitch
 
   /* ─── find head bone ─── */
   useEffect(() => {
@@ -50,8 +59,9 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
   /* ─── cursor listener (viewport-wide) ─── */
   useEffect(() => {
     const update = (e: MouseEvent) => {
-      cursor.current.x = (e.clientX / window.innerWidth) * 2 - 1; // –1 … 1
-      cursor.current.y = (e.clientY / window.innerHeight) * 2 - 1; // –1 … 1
+      // Adjust cursor range to be more centered
+      cursor.current.x = ((e.clientX / window.innerWidth) * 2 - 1) + YAW_OFFSET;
+      cursor.current.y = ((e.clientY / window.innerHeight) * 2 - 1) + PITCH_OFFSET;
     };
     window.addEventListener("mousemove", update);
     return () => window.removeEventListener("mousemove", update);
@@ -61,9 +71,15 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
   useFrame(() => {
     if (!head.current || !containerRef.current) return;
 
-    /* target angles - simple, one inversion for yaw */
-    const tgtYaw = BASE_YAW + (cursor.current.x) * MAX_YAW;
-    const tgtPitch = BASE_PITCH + (cursor.current.y) * MAX_PITCH;
+    /* target angles with separate limits for each direction */
+    const tgtYaw = BASE_YAW + (cursor.current.x > 0
+      ? cursor.current.x * MAX_YAW_RIGHT
+      : cursor.current.x * MAX_YAW_LEFT);
+
+    const tgtPitch = BASE_PITCH + (cursor.current.y > 0
+      ? cursor.current.y * MAX_PITCH_UP
+      : cursor.current.y * MAX_PITCH_DOWN);
+
     const tgtRoll = cursor.current.x * MAX_ROLL * -1; // roll with yaw
 
     /* ease toward targets */
@@ -78,7 +94,7 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
       ref={sceneRef}
       object={scene}
       position={[0, -1.5, -1.8]}
-      scale={[0.035, 0.035, 0.035]}
+      scale={[0.04, 0.04, 0.04]}
       rotation={[0, -1.2, 0]}   /* root rotation so bird faces left */
     />
   );
