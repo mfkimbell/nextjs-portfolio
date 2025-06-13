@@ -12,6 +12,24 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Mitchell Kimbell",
   description: "Portfolio and interactive resume",
+  openGraph: {
+    title: "Mitchell Kimbell",
+    description: "Software Engineer Portfolio",
+    url: "https://mitchellkimbell.com/",
+    images: [
+      {
+        url: "https://mitchellkimbell.com/backdrop.png",
+        width: 1200,
+        height: 630,
+        alt: "Mitchell Kimbell Portfolio",
+        type: "image/png",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    images: ["https://mitchellkimbell.com/backdrop.png"],
+  },
 };
 
 export default function RootLayout({
@@ -21,23 +39,6 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <head>
-        <meta property="og:title" content="Mitchell Kimbell" />
-        <meta property="og:description" content="Software Engineer Portfolio" />
-        <meta
-          property="og:image"
-          content="https://mitchellkimbell.com/backdrop.png"
-        />
-        <meta property="og:image:type" content="image/png" />
-        <meta property="og:image:width" content="1200" />
-        <meta property="og:image:height" content="630" />
-        <meta property="og:url" content="https://mitchellkimbell.com/" />
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta
-          name="twitter:image"
-          content="https://mitchellkimbell.com/backdrop.png"
-        />
-      </head>
       {/* gradient follows the document scroll (no bg-fixed!) */}
       <body
         className={`
