@@ -18,7 +18,6 @@ const BOB_STAGGER_MS = 800; // ms offset between each badge's bob start
 const BADGE_FULL_PX = 128; // badge width & height at full size
 const BADGE_SM_PX = BADGE_FULL_PX / 2; // 64px on sm
 const GAP_PX = 32; // spacing from badge center to card
-const MD_SIDE_PADDING = BADGE_FULL_PX / 2 + GAP_PX; // 96
 
 export default function Experience() {
   const containerRef = useRef<HTMLDivElement>(null);
