@@ -15,23 +15,26 @@ interface GLTFResult {
 }
 
 export default function BirdGLB({ containerRef }: Props) {
-  const { scene } = useGLTF("/models/bird.glb") as GLTFResult;
+  const { scene } = useGLTF("/models/Bird.glb") as GLTFResult;
   const head = useRef<THREE.Object3D>(null!);
 
   /* --------------------------------------------------
      POINTER STATE
   -------------------------------------------------- */
   const pointer = useRef({ x: 0, y: 0 });
-  const lastPos = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const lastPos = useRef({
+    x: window.innerWidth / 2,
+    y: window.innerHeight / 2,
+  });
 
   /* --------------------------------------------------
      TUNEABLE "KNOBS"
      Adjust these to control behavior
   -------------------------------------------------- */
   // Base (starting) head orientation
-  const BASE_PITCH = 0.3;   // + looks up,  − looks down
-  const BASE_YAW = -1;  // + looks right, − looks left
-  const BASE_ROLL = 0.0;   // + tilt right ear down, − left ear down
+  const BASE_PITCH = 0.3; // + looks up,  − looks down
+  const BASE_YAW = -1; // + looks right, − looks left
+  const BASE_ROLL = 0.0; // + tilt right ear down, − left ear down
 
   // Maximum rotation delta driven by pointer
   const MAX_PITCH_DELTA = 1.2;
@@ -39,15 +42,15 @@ export default function BirdGLB({ containerRef }: Props) {
   const MAX_ROLL_DELTA = 0.2;
 
   // Responsiveness
-  const DEAD_ZONE = 0.2;   // fraction of half-width before head starts turning
-  const SENSITIVITY = 2.0;   // scales pointer→rotation
-  const INVERT_X = 1;     // 1 = normal, −1 flips horizontal mapping
-  const INVERT_Y = -1;    // 1 = normal, −1 flips vertical mapping
-  const CENTER_OFFSET_X = 1;   // fraction of half-width to shift pointer origin rightwards
-  const SMOOTHING = 0.1;   // interpolation factor for smooth motion
+  const DEAD_ZONE = 0.2; // fraction of half-width before head starts turning
+  const SENSITIVITY = 2.0; // scales pointer→rotation
+  const INVERT_X = 1; // 1 = normal, −1 flips horizontal mapping
+  const INVERT_Y = -1; // 1 = normal, −1 flips vertical mapping
+  const CENTER_OFFSET_X = 1; // fraction of half-width to shift pointer origin rightwards
+  const SMOOTHING = 0.1; // interpolation factor for smooth motion
 
   // How many pixels from the bird before nodding is fully flattened
-  const PITCH_FALLOFF_RADIUS = 2000;  // try 250-350px
+  const PITCH_FALLOFF_RADIUS = 2000; // try 250-350px
 
   /* -------------------------------------------------- */
 
@@ -96,15 +99,24 @@ export default function BirdGLB({ containerRef }: Props) {
       }
 
       // apply sensitivity, inversion, and clamp
-      pointer.current.x = THREE.MathUtils.clamp(xNorm * SENSITIVITY * INVERT_X, -1, 1);
-      pointer.current.y = THREE.MathUtils.clamp(yNorm * SENSITIVITY * INVERT_Y, -1, 1);
+      pointer.current.x = THREE.MathUtils.clamp(
+        xNorm * SENSITIVITY * INVERT_X,
+        -1,
+        1
+      );
+      pointer.current.y = THREE.MathUtils.clamp(
+        yNorm * SENSITIVITY * INVERT_Y,
+        -1,
+        1
+      );
     };
 
     const onMouseMove = (e: MouseEvent) => {
       lastPos.current = { x: e.clientX, y: e.clientY };
       updatePointer(e.clientX, e.clientY);
     };
-    const onScrollResize = () => updatePointer(lastPos.current.x, lastPos.current.y);
+    const onScrollResize = () =>
+      updatePointer(lastPos.current.x, lastPos.current.y);
 
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("scroll", onScrollResize);
@@ -132,19 +144,36 @@ export default function BirdGLB({ containerRef }: Props) {
     const pitchScale = 1 - distRatio; // fades linearly to 0
 
     // Target rotations
-    const targetPitch = BASE_PITCH +
-      THREE.MathUtils.clamp(pointer.current.y * MAX_PITCH_DELTA * pitchScale, -MAX_PITCH_DELTA, MAX_PITCH_DELTA);
-    const targetYaw = BASE_YAW +
-      THREE.MathUtils.clamp(pointer.current.x * MAX_YAW_DELTA, -MAX_YAW_DELTA, MAX_YAW_DELTA);
-    const targetRoll = BASE_ROLL +
-      THREE.MathUtils.clamp(-pointer.current.x * MAX_ROLL_DELTA, -MAX_ROLL_DELTA, MAX_ROLL_DELTA);
+    const targetPitch =
+      BASE_PITCH +
+      THREE.MathUtils.clamp(
+        pointer.current.y * MAX_PITCH_DELTA * pitchScale,
+        -MAX_PITCH_DELTA,
+        MAX_PITCH_DELTA
+      );
+    const targetYaw =
+      BASE_YAW +
+      THREE.MathUtils.clamp(
+        pointer.current.x * MAX_YAW_DELTA,
+        -MAX_YAW_DELTA,
+        MAX_YAW_DELTA
+      );
+    const targetRoll =
+      BASE_ROLL +
+      THREE.MathUtils.clamp(
+        -pointer.current.x * MAX_ROLL_DELTA,
+        -MAX_ROLL_DELTA,
+        MAX_ROLL_DELTA
+      );
 
     // Smooth interpolation
-    head.current.rotation.x += (targetPitch - head.current.rotation.x) * SMOOTHING;
-    head.current.rotation.y += (targetYaw - head.current.rotation.y) * SMOOTHING;
-    head.current.rotation.z += (targetRoll - head.current.rotation.z) * SMOOTHING;
+    head.current.rotation.x +=
+      (targetPitch - head.current.rotation.x) * SMOOTHING;
+    head.current.rotation.y +=
+      (targetYaw - head.current.rotation.y) * SMOOTHING;
+    head.current.rotation.z +=
+      (targetRoll - head.current.rotation.z) * SMOOTHING;
   });
-
 
   return (
     <primitive
@@ -157,4 +186,4 @@ export default function BirdGLB({ containerRef }: Props) {
 }
 
 // preload for performance
-useGLTF.preload("/models/bird.glb");
+useGLTF.preload("/models/Bird.glb");
