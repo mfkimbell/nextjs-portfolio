@@ -12,10 +12,13 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Mitchell Kimbell",
   description: "Portfolio and interactive resume",
+  metadataBase: new URL("https://mitchellkimbell.com"),
   openGraph: {
     title: "Mitchell Kimbell",
     description: "Software Engineer Portfolio",
     url: "https://mitchellkimbell.com/",
+    siteName: "Mitchell Kimbell Portfolio",
+    type: "website",
     images: [
       {
         url: "https://mitchellkimbell.com/backdrop.png",
@@ -28,7 +31,12 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
+    title: "Mitchell Kimbell",
+    description: "Software Engineer Portfolio",
     images: ["https://mitchellkimbell.com/backdrop.png"],
+  },
+  other: {
+    "theme-color": "#0ea5e9",
   },
 };
 
