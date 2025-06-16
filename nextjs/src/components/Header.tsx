@@ -28,6 +28,13 @@ function NavIcons({ scrolled }: { scrolled: boolean }) {
 
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
     e.preventDefault();
+
+    // If the user clicked the paper-airplane ("Home") icon, just scroll to the very top
+    if (href === "#home") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
     const targetId = href.replace('#', '');
     const element = document.getElementById(targetId);
     if (element) {
@@ -75,7 +82,7 @@ function SocialIcons({ scrolled }: { scrolled: boolean }) {
     { href: "https://github.com/mfkimbell", Icon: Github, label: "GitHub", external: true },
     { href: "/resume.pdf", Icon: Download, label: "Resume", download: true },
     { href: "mailto:mfkimbell@gmail.com?subject=Job%20Offer", Icon: Mail, label: "Email" },
-    { href: "https://www.linkedin.com/in/mfkimbell", Icon: Linkedin, label: "LinkedIn", external: true },
+    { href: "https://www.linkedin.com/in/kimbell151/", Icon: Linkedin, label: "LinkedIn", external: true },
   ];
 
   return (

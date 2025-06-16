@@ -31,11 +31,11 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
 
   /* ─── constants ─── */
   const BASE_PITCH = 0.3;                     // slight "curious" tilt
-  const BASE_YAW = -1.5;                       // faces left on load
+  const BASE_YAW = -2.1;                       // faces left on load
 
   // Separate limits for left/right movement
-  const MAX_YAW_LEFT = 0.2               // how far it can turn left
-  const MAX_YAW_RIGHT = 1.8;                   // how far it can turn right
+  const MAX_YAW_LEFT = -0.6               // how far it can turn left
+  const MAX_YAW_RIGHT = 2.2;                   // how far it can turn right
 
   // Separate limits for up/down movement
   const MAX_PITCH_UP = 1.0;                    // how far it can look up

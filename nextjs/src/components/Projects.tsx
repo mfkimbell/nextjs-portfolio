@@ -11,6 +11,7 @@ import { useState } from "react";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import { projects, Project } from "@/lib/projects";
+import { Github } from "lucide-react";
 
 export default function ProjectsSection() {
   const [active, setActive] = useState<Project>(projects[0]);
@@ -152,12 +153,13 @@ export default function ProjectsSection() {
                 href={active.github}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-block mt-4 text-sm neon-text underline"
+                className="inline-flex items-center gap-1 mt-4 text-sm neon-text underline"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.35, duration: 0.3 }}
               >
-                View on GitHub →
+                <Github size={16} className="inline-block" aria-hidden="true" />
+                <span>View on GitHub</span>
               </motion.a>
             </motion.div>
           </AnimatePresence>

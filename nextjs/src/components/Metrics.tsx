@@ -79,14 +79,74 @@ export default function Metrics() {
   const scroll = base.totalScroll;
 
   return (
-    <section id="metrics" className="mt-20">
+    <section id="metrics" className="relative mt-20">
       {/* Use variables in a minimal way to satisfy linter */}
       <div style={{ display: 'none' }}>
         {clickFlash && null}
         {mileFlash && null}
         {scroll && null}
       </div>
-      <h2 className="text-center text-white text-4xl font-bold mb-8">
+
+      {/* ——— floating tiny clouds (top 50%) ——— */}
+      <div className="pointer-events-none select-none absolute inset-0 overflow-hidden z-0">
+        {/* mobile / default tiny wisps */}
+        <Image
+          src="/clouds/cloud2.png"
+          alt=""
+          width={60}
+          height={80}
+          priority
+          className="absolute left-[65%] top-[8%] blur-[1px] opacity-45 object-contain cloud md:hidden"
+          style={{
+            "--float-distance": "8px",
+            animationDuration: "5.5s",
+            animationDelay: "-1.8s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud3.png"
+          alt=""
+          width={60}
+          height={80}
+          priority
+          className="absolute left-[20%] top-[28%] blur-[1px] opacity-50 object-contain cloud md:hidden"
+          style={{
+            "--float-distance": "8px",
+            animationDuration: "6.2s",
+            animationDelay: "-0.7s",
+          } as React.CSSProperties}
+        />
+
+        {/* desktop tiny clouds */}
+        <Image
+          src="/clouds/cloud2.png"
+          alt=""
+          width={110}
+          height={140}
+          priority
+          className="hidden md:block absolute left-[30%] top-[18%] opacity-60 object-contain cloud"
+          style={{
+            "--float-distance": "14px",
+            animationDuration: "8s",
+            animationDelay: "-1s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud3.png"
+          alt=""
+          width={100}
+          height={120}
+          priority
+          className="hidden md:block absolute left-[70%] top-[35%] opacity-65 object-contain cloud"
+          style={{
+            "--float-distance": "12px",
+            animationDuration: "7s",
+            animationDelay: "-2s",
+          } as React.CSSProperties}
+        />
+      </div>
+
+      <h2 className="text-center text-white text-4xl font-bold mb-8 z-10 relative">
         Canvas
       </h2>
 
