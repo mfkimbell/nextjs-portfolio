@@ -10,14 +10,14 @@ export default function RightBirdScene() {
   const containerRef = useRef<HTMLDivElement>(null!);
 
   return (
-    <div className="relative">
+    <div className="relative z-0">
       {/* Bird Canvas */}
       <div
         ref={containerRef}
         className="
           absolute right-0 top-0
           w-[140px] sm:w-[160px] h-[140px] sm:h-[160px]
-          pointer-events-none z-100
+          pointer-events-none z-0
           scale-85 sm:scale-100
         "
       >

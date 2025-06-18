@@ -7,7 +7,7 @@
 -------------------------------------------------------------------*/
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import useSWRImmutable from "swr/immutable";
 import Image from "next/image";
 import { useAppSelector } from "@/lib/hooks";
@@ -23,6 +23,8 @@ const fetcher = (u: string) => fetch(u).then((r) => r.json());
 const swrOpts = { revalidateOnFocus: false, dedupingInterval: 300_000 };
 
 export default function Metrics() {
+  const faunaRef = useRef<HTMLDivElement>(null);
+
   /* 1 ▸ DB totals */
   const { data: base } = useSWRImmutable<{
     totalVisits: number;
@@ -70,6 +72,31 @@ export default function Metrics() {
     }
   }, [session.mouseMiles]);
 
+  /* Prevent scrolling on fauna section for iOS */
+  useEffect(() => {
+    const faunaElement = faunaRef.current;
+    if (!faunaElement) return;
+
+    const preventScroll = (e: TouchEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    };
+
+    // Add aggressive touch event prevention
+    faunaElement.addEventListener('touchstart', preventScroll, { passive: false });
+    faunaElement.addEventListener('touchmove', preventScroll, { passive: false });
+    faunaElement.addEventListener('touchend', preventScroll, { passive: false });
+    faunaElement.addEventListener('touchcancel', preventScroll, { passive: false });
+
+    return () => {
+      faunaElement.removeEventListener('touchstart', preventScroll);
+      faunaElement.removeEventListener('touchmove', preventScroll);
+      faunaElement.removeEventListener('touchend', preventScroll);
+      faunaElement.removeEventListener('touchcancel', preventScroll);
+    };
+  }, []);
+
   if (!base) return null;
 
   /* 3 ▸ merge totals + increments */
@@ -79,7 +106,14 @@ export default function Metrics() {
   const scroll = base.totalScroll;
 
   return (
-    <section id="metrics" className="relative mt-20">
+    <section
+      id="metrics"
+      className="relative mt-20"
+      style={{
+        touchAction: 'pan-y',
+        overscrollBehavior: 'auto'
+      }}
+    >
       {/* Use variables in a minimal way to satisfy linter */}
       <div style={{ display: 'none' }}>
         {clickFlash && null}
@@ -164,9 +198,22 @@ export default function Metrics() {
         </div>
       </div>
 
-      {/* grass / raccoon / bees strip ▸ unchanged but with metrics overlay */}
-      <div className="relative w-full overflow-x-hidden overflow-y-visible   py-11.5 mt-9 sm:py-0   max-w-[100vw] z-50">
-        <div className="relative w-full scale-[2] sm:scale-100 origin-center max-w-[120vw]">
+      {/* grass / raccoon / bees strip ▸ website footer */}
+      <div className="relative w-full overflow-x-hidden overflow-y-visible py-11.5 mt-9 sm:py-0 max-w-[100vw] z-50">
+        <div
+          ref={faunaRef}
+          className="relative w-full scale-[2] sm:scale-100 origin-center max-w-[120vw]"
+          style={{
+            touchAction: 'none',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            WebkitTouchCallout: 'none',
+            overscrollBehavior: 'none'
+          } as React.CSSProperties}
+          onTouchStart={(e) => e.preventDefault()}
+          onTouchMove={(e) => e.preventDefault()}
+          onTouchEnd={(e) => e.preventDefault()}
+        >
           <Image
             src="/fauna2.png"
             alt="Low-poly grass strip"
@@ -180,10 +227,8 @@ export default function Metrics() {
           <img
             src="/gifs/racoon.gif"
             alt="Raccoon"
-            className="absolute left-[57%] top-[3%] w-[10%] pointer-events-none  z-350 overflow-visible"
+            className="absolute left-[57%] top-[3%] w-[10%] pointer-events-none z-350"
           />
-
-
 
           {/* bees */}
           <img

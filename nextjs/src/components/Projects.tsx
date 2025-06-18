@@ -17,7 +17,7 @@ export default function ProjectsSection() {
   const [active, setActive] = useState<Project>(projects[0]);
 
   return (
-    <section id="projects" className="py-24">
+    <section id="projects" className="sm:py-24 z-10">
       <h2 className="text-4xl font-bold neon-text text-center mb-12">
         Projects
       </h2>
@@ -76,7 +76,7 @@ export default function ProjectsSection() {
         </div>
 
         {/* CONTENT PANEL */}
-        <div className="flex-1 space-y-4 mt-10 lg:mt-0">
+        <div className="flex-1 space-y-4 mt-10 lg:mt-0 min-h-[500px] md:h-[500px]">
           <AnimatePresence mode="wait">
             <motion.div
               key={active.name}
@@ -101,7 +101,7 @@ export default function ProjectsSection() {
 
               {/* Architecture diagram with darker background */}
               <motion.div
-                className="w-full my-4 p-4 rounded-lg border border-white"
+                className="w-full my-4 p-4 rounded-lg border border-white h-[300px] md:h-[400px] flex items-center justify-center"
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: 0.15, duration: 0.35 }}
@@ -111,8 +111,7 @@ export default function ProjectsSection() {
                   alt={`${active.name} architecture diagram`}
                   width={1000}
                   height={600}
-                  className="w-full h-auto rounded-lg"
-                  priority
+                  className="max-w-full max-h-full object-contain rounded-lg"
                 />
               </motion.div>
 
@@ -126,7 +125,7 @@ export default function ProjectsSection() {
               </motion.p>
 
               <motion.div
-                className="flex flex-wrap gap-2"
+                className="flex flex-wrap gap-2 z-10"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.25, duration: 0.3 }}

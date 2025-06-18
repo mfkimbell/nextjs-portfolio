@@ -61,24 +61,50 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
 
   useEffect(redraw, [data, pending, redraw]);
 
+  /* ---------- prevent scroll during canvas interaction ---------- */
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Prevent all touch-based scrolling on the canvas itself
+    const preventCanvasScroll = (e: TouchEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    // Add touch event listeners directly to canvas
+    canvas.addEventListener('touchstart', preventCanvasScroll, { passive: false });
+    canvas.addEventListener('touchmove', preventCanvasScroll, { passive: false });
+    canvas.addEventListener('touchend', preventCanvasScroll, { passive: false });
+
+    return () => {
+      canvas.removeEventListener('touchstart', preventCanvasScroll);
+      canvas.removeEventListener('touchmove', preventCanvasScroll);
+      canvas.removeEventListener('touchend', preventCanvasScroll);
+    };
+  }, []);
+
   /* ---------- pointer helpers ---------- */
   const loc = (e: React.PointerEvent<HTMLCanvasElement>): Point =>
     ({ x: (e.nativeEvent as PointerEvent).offsetX, y: (e.nativeEvent as PointerEvent).offsetY });
 
   const start = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.preventDefault(); // Prevent any default touch behaviors
     const stroke: Stroke = { pts: [loc(e)], color, width: size, erase: eraser };
     currentRef.current = stroke;
     setPending(lst => [...lst, stroke]);
   };
 
   const move = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.preventDefault(); // Prevent any default touch behaviors
     const stroke = currentRef.current;
     if (!stroke) return;
     stroke.pts.push(loc(e));
     redraw();
   };
 
-  const end = () => {
+  const end = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.preventDefault(); // Prevent any default touch behaviors
     currentRef.current = null;
   };
 
@@ -180,7 +206,7 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   /*                              render                               */
   /* ================================================================= */
   return (
-    <div className="flex justify-center w-full mb-3">
+    <div className="flex justify-center w-full mb-3" style={{ touchAction: 'pan-y' }}>
       {/* Use props in a minimal way to satisfy linter */}
       <div style={{ display: 'none' }}>
         {visits && null}
@@ -188,22 +214,41 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
         {mouseMiles && null}
       </div>
       {/* ------------- card + sidebar wrapper ------------- */}
-      <div className="relative"> {/* relative only hugs the card */}
+      <div className="relative" style={{ touchAction: 'none' }}> {/* relative only hugs the card */}
         {/* === Drawing card === */}
         <div
           className="w-full max-w-[24rem] p-4 mx-auto
                      bg-white/10 backdrop-blur-lg shadow-lg border border-white/20
-                     rounded-xl flex flex-col gap-4 mb-0">
+                     rounded-xl flex flex-col gap-4 mb-0"
+          style={{
+            touchAction: 'none',
+            overflowX: 'hidden',
+            overflowY: 'hidden'
+          }}>
           <canvas
             ref={canvasRef}
-            style={{ touchAction: 'none' }}
+            style={{
+              touchAction: 'none',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              WebkitTouchCallout: 'none',
+              overscrollBehavior: 'none',
+              position: 'relative'
+            } as React.CSSProperties}
             className="w-full aspect-square bg-transparent rounded-md border-2 border-white"
             onPointerDown={start}
             onPointerMove={move}
             onPointerUp={end}
             onPointerLeave={end}
+            onTouchStart={(e) => e.preventDefault()}
+            onTouchMove={(e) => e.preventDefault()}
+            onTouchEnd={(e) => e.preventDefault()}
           />
-          <div id="ios-controls" className="sm:hidden flex flex-col items-center gap-4">
+          <div
+            id="ios-controls"
+            className="sm:hidden flex flex-col items-center gap-4"
+            style={{ touchAction: 'manipulation' }}
+          >
             {Palette}
             {Slider}
 

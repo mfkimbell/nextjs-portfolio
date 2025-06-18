@@ -6,7 +6,7 @@ import Image from "next/image";
 
 export default function RightBird() {
   return (
-    <section className="relative overflow-hidden p-35 w-full pt-0 sm:pb-60 min-h-[100px]">
+    <section className="relative overflow-hidden p-35 w-full pt-0 sm:pb-60 min-h-[100px] z-0">
       {/* Mobile Clouds (< 768px) */}
       <Image
         src="/clouds/cloud4.png"
@@ -100,7 +100,7 @@ export default function RightBird() {
         />
 
         {/* Bird Canvas - position so bird sits on branch */}
-        <div className="absolute -right-49 sm:-right-[135px] -top-[9px] sm:-top-[10px] z-10">
+        <div className="absolute -right-49 sm:-right-[135px] -top-[9px] sm:-top-[10px] z-0">
           <RightBirdScene />
         </div>
 

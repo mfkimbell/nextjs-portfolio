@@ -40,7 +40,7 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
 
   // Separate limits for up/down movement
   const MAX_PITCH_UP = 1;                    // how far it can look up
-  const MAX_PITCH_DOWN = 1.6;                  // how far it can look down
+  const MAX_PITCH_DOWN = 1;                  // how far it can look down
 
   const MAX_ROLL = -0;                      // subtle roll
   const YAW_OFFSET = 0;                      // adjust center point of yaw
