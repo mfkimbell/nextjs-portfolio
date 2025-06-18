@@ -123,31 +123,83 @@ export default function Metrics() {
 
       {/* ——— floating tiny clouds (top 50%) ——— */}
       <div className="pointer-events-none select-none absolute inset-0 overflow-hidden z-0">
-        {/* mobile / default tiny wisps */}
+        {/* mobile / default tiny wisps - more naturally spaced */}
         <Image
           src="/clouds/cloud2.png"
           alt=""
-          width={60}
-          height={80}
+          width={45}
+          height={60}
           priority
-          className="absolute left-[65%] top-[8%] blur-[1px] opacity-45 object-contain cloud md:hidden"
+          className="absolute left-[75%] top-[12%] blur-[1px] opacity-40 object-contain cloud md:hidden"
           style={{
-            "--float-distance": "8px",
-            animationDuration: "5.5s",
-            animationDelay: "-1.8s",
+            "--float-distance": "6px",
+            animationDuration: "7s",
+            animationDelay: "-2s",
           } as React.CSSProperties}
         />
         <Image
           src="/clouds/cloud3.png"
           alt=""
-          width={60}
-          height={80}
+          width={55}
+          height={70}
           priority
-          className="absolute left-[20%] top-[28%] blur-[1px] opacity-50 object-contain cloud md:hidden"
+          className="absolute left-[15%] top-[35%] blur-[1px] opacity-45 object-contain cloud md:hidden"
           style={{
             "--float-distance": "8px",
-            animationDuration: "6.2s",
-            animationDelay: "-0.7s",
+            animationDuration: "8.5s",
+            animationDelay: "-1s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud2.png"
+          alt=""
+          width={35}
+          height={45}
+          priority
+          className="absolute left-[45%] top-[20%] blur-[1px] opacity-35 object-contain cloud md:hidden"
+          style={{
+            "--float-distance": "5px",
+            animationDuration: "6s",
+            animationDelay: "-3.5s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud3.png"
+          alt=""
+          width={40}
+          height={50}
+          priority
+          className="absolute left-[85%] top-[45%] blur-[1px] opacity-30 object-contain cloud md:hidden"
+          style={{
+            "--float-distance": "7px",
+            animationDuration: "9s",
+            animationDelay: "-0.5s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud2.png"
+          alt=""
+          width={30}
+          height={40}
+          priority
+          className="absolute left-[5%] top-[15%] blur-[1px] opacity-25 object-contain cloud md:hidden"
+          style={{
+            "--float-distance": "4px",
+            animationDuration: "7.5s",
+            animationDelay: "-4s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud3.png"
+          alt=""
+          width={50}
+          height={65}
+          priority
+          className="absolute left-[60%] top-[8%] blur-[1px] opacity-35 object-contain cloud md:hidden"
+          style={{
+            "--float-distance": "6px",
+            animationDuration: "8s",
+            animationDelay: "-2.5s",
           } as React.CSSProperties}
         />
 
@@ -178,6 +230,45 @@ export default function Metrics() {
             animationDelay: "-2s",
           } as React.CSSProperties}
         />
+        <Image
+          src="/clouds/cloud2.png"
+          alt=""
+          width={85}
+          height={110}
+          priority
+          className="hidden md:block absolute left-[10%] top-[25%] opacity-45 object-contain cloud"
+          style={{
+            "--float-distance": "10px",
+            animationDuration: "9s",
+            animationDelay: "-3s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud3.png"
+          alt=""
+          width={90}
+          height={115}
+          priority
+          className="hidden md:block absolute left-[85%] top-[12%] opacity-50 object-contain cloud"
+          style={{
+            "--float-distance": "13px",
+            animationDuration: "7.5s",
+            animationDelay: "-0.5s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud2.png"
+          alt=""
+          width={75}
+          height={95}
+          priority
+          className="hidden md:block absolute left-[50%] top-[8%] opacity-40 object-contain cloud"
+          style={{
+            "--float-distance": "11px",
+            animationDuration: "8.5s",
+            animationDelay: "-4s",
+          } as React.CSSProperties}
+        />
       </div>
 
       <h2 className="text-center text-white text-4xl font-bold mb-8 z-10 relative">
@@ -196,6 +287,63 @@ export default function Metrics() {
           <div className="flex items-center gap-1"><MousePointerClick size={16} /> <span>{clicks.toLocaleString()}</span></div>
           <div className="flex items-center gap-1"><MousePointer size={16} /> <span>{mouseMiles.toFixed(4).toLocaleString()}</span></div>
         </div>
+      </div>
+
+      {/* ——— middle section clouds (mobile only) ——— */}
+      <div className="md:hidden pointer-events-none select-none relative w-full h-12 overflow-visible">
+
+        <Image
+          src="/clouds/cloud2.png"
+          alt=""
+          width={55}
+          height={70}
+          priority
+          className="absolute left-[80%] top-[25%] opacity-35 object-contain cloud"
+          style={{
+            "--float-distance": "6px",
+            animationDuration: "8s",
+            animationDelay: "-3s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud3.png"
+          alt=""
+          width={45}
+          height={60}
+          priority
+          className="absolute left-[45%] top-[5%] opacity-30 object-contain cloud"
+          style={{
+            "--float-distance": "7px",
+            animationDuration: "7s",
+            animationDelay: "-0.8s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud2.png"
+          alt=""
+          width={40}
+          height={50}
+          priority
+          className="absolute left-[4%] top-[35%] opacity-25 object-contain cloud"
+          style={{
+            "--float-distance": "5px",
+            animationDuration: "9s",
+            animationDelay: "-2.2s",
+          } as React.CSSProperties}
+        />
+        <Image
+          src="/clouds/cloud3.png"
+          alt=""
+          width={60}
+          height={75}
+          priority
+          className="absolute left-[25%] top-[65%] opacity-35 object-contain cloud"
+          style={{
+            "--float-distance": "9px",
+            animationDuration: "7.5s",
+            animationDelay: "-4.5s",
+          } as React.CSSProperties}
+        />
       </div>
 
       {/* grass / raccoon / bees strip ▸ website footer */}

@@ -5,7 +5,7 @@ import Image from "next/image";
 
 export default function LeftBird() {
   return (
-    <section className="relative overflow-visible pt-10">
+    <section className="relative overflow-visible pt-0">
       {/* Mobile Clouds (< 768px) */}
       <Image
         src="/clouds/cloud3.png"

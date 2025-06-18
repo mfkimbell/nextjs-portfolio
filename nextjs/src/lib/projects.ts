@@ -104,7 +104,7 @@ export const projects: Project[] = [
   {
     name: 'AI Recruit Tracker',
     description:
-      'Built in 24 hours for UA Hackathon 2024. React web app designed to help CGI in their recruiting efforts. The application allows mobile users to easily input information into a MongoDB database. It implements a combined authentication portal for both students and CGI staff with secure endpoints that cannot be accessed manually. Students can update their information and upload resumes at any time. HR staff can provide additional feedback, update any fields, and use the OpenAI API to generate feedback based on parsing submitted resumes.',
+      'Built in 24 hours at UA Hackathon 2025, this project auto-provisions inventory and suggestion workflows on Google Cloud. Terraform + GitHub Actions deploy Cloud Run services, push container images to Artifact Registry, and manage secrets with Secret Manager. A FastAPI backend pairs with a zipped Next.js frontend served via Cloud Functions behind Firebase. Admins manage requests, inventory, and costs on a dashboard, while users submit and track requests in real time.',
     logo: '/projects/recruit.png',
     tech: ['Docker', 'React', 'FastAPI', 'OpenAI', 'MongoDB'],
     github: 'https://github.com/mfkimbell/ai-recruit-tracker',

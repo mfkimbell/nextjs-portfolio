@@ -55,7 +55,7 @@ export default function SkyBackground() {
         width={140}
         height={180}
         priority
-        className="absolute left-[6%] top-[46%] md:hidden object-contain cloud"
+        className="absolute left-[6%] top-[53%] md:hidden object-contain cloud"
         style={{
           "--float-distance": "20px",
           animationDuration: "7s",
@@ -83,7 +83,7 @@ export default function SkyBackground() {
         width={110}
         height={140}
         priority
-        className="absolute left-[30%] top-[20%] md:hidden object-contain cloud"
+        className="absolute left-[10%] top-[20%] md:hidden object-contain cloud"
         style={{
           "--float-distance": "14px",
           animationDuration: "8s",
@@ -204,7 +204,7 @@ export default function SkyBackground() {
         width={260}
         height={260}
         priority
-        className="hidden  md:block absolute left-[55%] top-[45%] object-contain cloud"
+        className="hidden  md:block absolute left-[55%] top-[55%] object-contain cloud"
         style={
           {
             "--float-distance": "18px",
