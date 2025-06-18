@@ -132,10 +132,11 @@ export default function BirdGLB({ containerRef }: Props) {
   useFrame(() => {
     if (!head.current || !containerRef.current) return;
 
-    // Calculate distance from mouse to bird center on screen
+    // Calculate distance from mouse to bird center on screen (scroll-aware)
     const container = containerRef.current;
-    const birdScreenX = container.offsetLeft + container.offsetWidth / 2;
-    const birdScreenY = container.offsetTop + container.offsetHeight / 2;
+    const rect = container.getBoundingClientRect();
+    const birdScreenX = rect.left + rect.width / 2;
+    const birdScreenY = rect.top + rect.height / 2;
     const dx = lastPos.current.x - birdScreenX;
     const dy = lastPos.current.y - birdScreenY;
 
