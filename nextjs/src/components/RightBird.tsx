@@ -34,19 +34,7 @@ export default function RightBird() {
           animationDelay: "-3.4s",
         } as React.CSSProperties}
       />
-      <Image
-        src="/clouds/cloud3.png"
-        alt=""
-        width={55}
-        height={55}
-        priority
-        className="absolute left-[65%] top-[80%] opacity-40 pointer-events-none cloud md:hidden"
-        style={{
-          "--float-distance": "6px",
-          animationDuration: "8.8s",
-          animationDelay: "-2.3s",
-        } as React.CSSProperties}
-      />
+
 
       {/* Desktop Clouds (≥ 768px) */}
       <Image
@@ -81,7 +69,7 @@ export default function RightBird() {
         width={120}
         height={120}
         priority
-        className="absolute left-[70%] top-[75%] opacity-55 pointer-events-none cloud hidden md:block"
+        className="absolute left-[30%] top-[55%] opacity-55 pointer-events-none cloud hidden md:block"
         style={{
           "--float-distance": "10px",
           animationDuration: "10.7s",

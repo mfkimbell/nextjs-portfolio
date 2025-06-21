@@ -49,8 +49,11 @@ export default function BirdGLB({ containerRef }: Props) {
   const CENTER_OFFSET_X = 1; // fraction of half-width to shift pointer origin rightwards
   const SMOOTHING = 0.1; // interpolation factor for smooth motion
 
-  // How many pixels from the bird before nodding is fully flattened
-  const PITCH_FALLOFF_RADIUS = 2000; // try 250-350px
+  // Distance-based intensity scaling config
+  const PITCH_FALLOFF_RADIUS = 2000; // pixels from bird before nodding is fully flattened
+  const MIN_PITCH_SCALE = 0.15; // minimum intensity when close to bird (0 = no movement, 1 = full intensity)
+  const MAX_PITCH_SCALE = 1.0; // maximum intensity when far from bird
+  const PITCH_CURVE_POWER = 1.5; // curve shape: 1 = linear, >1 = more gradual falloff, <1 = sharper falloff
 
   /* -------------------------------------------------- */
 
@@ -142,7 +145,10 @@ export default function BirdGLB({ containerRef }: Props) {
 
     // 0 when mouse is on the bird, 1 when cursor is ≥ radius away
     const distRatio = Math.min(1, Math.hypot(dx, dy) / PITCH_FALLOFF_RADIUS);
-    const pitchScale = 1 - distRatio; // fades linearly to 0
+
+    // Apply configurable curve and scale range
+    const curvedRatio = Math.pow(distRatio, PITCH_CURVE_POWER);
+    const pitchScale = MIN_PITCH_SCALE + (MAX_PITCH_SCALE - MIN_PITCH_SCALE) * (.8 - curvedRatio);
 
     // Target rotations
     const targetPitch =

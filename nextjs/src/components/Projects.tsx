@@ -17,7 +17,7 @@ export default function ProjectsSection() {
   const [active, setActive] = useState<Project>(projects[0]);
 
   return (
-    <section id="projects" className="sm:py-0 sm:mb-20 z-10">
+    <section id="projects" className="sm:py-0 sm:mb-20 z-20 relative">
       <h2 className="text-4xl font-bold neon-text text-center mb-12">
         Projects
       </h2>
@@ -39,7 +39,7 @@ export default function ProjectsSection() {
               key={p.name}
               onClick={() => setActive(p)}
               className={`flex flex-col items-center focus:outline-none
-                 transform transition-transform duration-150
+                 transform transition-transform duration-150 relative z-30
                  ${active.name === p.name
                   ? "scale-110"
                   : "hover:scale-105"

@@ -32,19 +32,22 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
 
   /* ─── constants ─── */
   const BASE_PITCH = 0.3;                     // slight "curious" tilt
-  const BASE_YAW = -1;                       // faces left on load
+  const BASE_YAW = -1.6;                       // faces left on load
 
   // Separate limits for left/right movement
-  const MAX_YAW_LEFT = -.30               // how far it can turn left
-  const MAX_YAW_RIGHT = 1.2;                   // how far it can turn right
+  const MAX_YAW_LEFT = 0;               // how far it can turn left
+  const MAX_YAW_RIGHT = 1.8;               // how far it can turn right
 
   // Separate limits for up/down movement
-  const MAX_PITCH_UP = 1;                    // how far it can look up
-  const MAX_PITCH_DOWN = 1;                  // how far it can look down
+  const MAX_PITCH_UP = 0.6;                // how far it can look up
+  const MAX_PITCH_DOWN = 0.6;              // how far it can look down
 
-  const MAX_ROLL = -0;                      // subtle roll
-  const YAW_OFFSET = 0;                      // adjust center point of yaw
-  const PITCH_OFFSET = -.1;                    // adjust center point of pitch
+  const MAX_ROLL = -0;                     // subtle roll
+  const YAW_OFFSET = 0;                    // adjust center point of yaw
+  const PITCH_OFFSET = -.1;                // adjust center point of pitch
+  const YAW_SENSITIVITY = 3.2;             // multiplier for left-right reactivity (reduced from 5.9)
+  const PITCH_SENSITIVITY = 3.2;          // multiplier for up-down reactivity
+  const MOUSE_X_OFFSET = -.6;              // shift mouse X position to align bird gaze (+ = shift right, - = shift left)
 
   /* ─── find head bone ─── */
   useEffect(() => {
@@ -63,19 +66,19 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
       // Store mouse position for scroll updates
       lastMousePos.current = { x: clientX, y: clientY };
 
-      // Keep X calculation unchanged (left/right movement)
-      cursor.current.x = ((clientX / window.innerWidth) * 2 - 1) + YAW_OFFSET;
+      // Apply sensitivity multiplier to X calculation (left/right movement)
+      cursor.current.x = (((clientX / window.innerWidth) * 2 - 1 + MOUSE_X_OFFSET) + YAW_OFFSET) * YAW_SENSITIVITY;
 
-      // Make Y calculation scroll-aware (up/down movement)
+      // Make Y calculation scroll-aware with sensitivity (up/down movement)
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const birdCenterY = rect.top + rect.height / 2;
         // Calculate mouse position relative to bird center, normalized to -1 to 1 range  
         const relativeY = (clientY - birdCenterY) / (window.innerHeight / 2);
-        cursor.current.y = THREE.MathUtils.clamp(relativeY, -1, 1) + PITCH_OFFSET;
+        cursor.current.y = (THREE.MathUtils.clamp(relativeY, -1, 1) + PITCH_OFFSET) * PITCH_SENSITIVITY;
       } else {
         // Fallback to original calculation if container not available
-        cursor.current.y = ((clientY / window.innerHeight) * 2 - 1) + PITCH_OFFSET;
+        cursor.current.y = (((clientY / window.innerHeight) * 2 - 1) + PITCH_OFFSET) * PITCH_SENSITIVITY;
       }
     };
 

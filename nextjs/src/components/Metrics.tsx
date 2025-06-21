@@ -281,11 +281,18 @@ export default function Metrics() {
         clicks={clicks}
       />
 
-      <div className="flex justify-center mt-2 sm:mb-10 md:mb-5 lg:-mb-19  pb-2 ">
+      <div className="flex justify-center items-center mt-2 sm:mb-10 md:mb-5 lg:-mb-9 pb-2">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1"><Eye size={16} /> <span>{visits.toLocaleString()}</span></div>
           <div className="flex items-center gap-1"><MousePointerClick size={16} /> <span>{clicks.toLocaleString()}</span></div>
           <div className="flex items-center gap-1"><MousePointer size={16} /> <span>{mouseMiles.toFixed(4).toLocaleString()}</span></div>
+        </div>
+        <div className="flex items-center gap-2 ml-6">
+          <div className="relative">
+            <div className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></div>
+            <div className="absolute inset-0 w-2.5 h-2.5 bg-green-400 rounded-full animate-ping"></div>
+          </div>
+          <span className="text-green-400 text-xs font-medium">LIVE</span>
         </div>
       </div>
 
@@ -347,7 +354,7 @@ export default function Metrics() {
       </div>
 
       {/* grass / raccoon / bees strip ▸ website footer */}
-      <div className="relative w-full overflow-x-hidden overflow-y-visible py-11.5 mt-9 sm:py-0 max-w-[100vw] z-50">
+      <div className="relative w-full overflow-x-hidden overflow-y-visible py-11.5 -mt-10 sm:mt-4 sm:py-0 max-w-[100vw] z-50">
         <div
           ref={faunaRef}
           className="relative w-full scale-[2] sm:scale-100 origin-center max-w-[120vw]"

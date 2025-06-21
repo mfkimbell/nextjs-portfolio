@@ -434,20 +434,12 @@ export const projects: Project[] = [
     github: 'https://github.com/mfkimbell/rust-s-notation-parser',
     gradient: 'from-gray-500 to-gray-700',
   },
-  {
-    name: 'Multiple File Search & Execute',
-    description:
-      'POSIX C utility that filters files by size, type, and name using command-line flags, then executes arbitrary shell commands on the matching set.',
-    logo: '/projects/search.png',
-    tech: ['C', 'Linux'],
-    github: 'https://github.com/mfkimbell/multiple-file-search-and-execute',
-    gradient: 'from-slate-500 to-slate-700',
-  },
+
   {
     name: 'AI Image Generator',
     description:
       'Serverless Lambda (invoked via API Gateway) that calls AWS Bedrock to run Stable Diffusion. Generates an image, stores it in S3, and returns a presigned URL; also supports text-summarization tasks.',
-    logo: '/projects/image-gen.png',
+    logo: '/projects/image.png',
     tech: ['API Gateway', 'Bedrock', 'Stable Diffusion', 'Lambda', 'S3'],
     github:
       'https://github.com/mfkimbell/aws-basic-ai-image-generation-and-text-summarization',
@@ -462,15 +454,6 @@ export const projects: Project[] = [
     github: 'https://github.com/mfkimbell/quad-tree-area-calculator',
     gradient: 'from-cyan-700 to-cyan-900',
   },
-  {
-    name: 'Golang Translate Tool',
-    description:
-      'CLI translator demonstrating Go’s concurrency primitives—goroutines, channels, and waitgroups—to perform parallel language translation requests.',
-    logo: '/projects/translate.png',
-    tech: ['Go', 'Concurrency'],
-    github: 'https://github.com/mfkimbell/google-translate-tool',
-    gradient: 'from-yellow-500 to-yellow-700',
-  },
 
   {
     name: 'SQLAlchemy Postgres ORM',
@@ -484,10 +467,10 @@ export const projects: Project[] = [
   {
     name: 'Personal Website',
     description:
-      'Responsive portfolio site with a JavaScript contact form that hits Web3Forms. Styled with Bootstrap and hosted on Google Domains.',
-    logo: '/projects/logo2.png',
-    tech: ['JavaScript', 'Bootstrap', 'Google Domains'],
-    github: 'https://github.com/mfkimbell/personal-website',
+      'My portfolio website built with NextJS and TailwindCSS. It keeps track of total page views, clicks, and mouse miles. It features a live canvas that users can draw on and update. It also features ThreeJS models that react to the user, tracking mouse movement and following the mouse.',
+    logo: '/projects/website.png',
+    tech: ['NextJS', 'ThreeJS', 'TailwindCSS', 'Vercel', 'Prisma'],
+    github: 'https://github.com/mfkimbell/nextjs-portfolio',
     gradient: 'from-gray-700 to-gray-900',
   },
 ];
