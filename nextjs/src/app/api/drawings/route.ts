@@ -5,11 +5,9 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 const BOARD_ID = 'shared-board';
 
-interface Stroke {
-  points: number[];
-  color: string;
-  width: number;
-}
+// Fix: Match the frontend types exactly
+type Point = { x: number; y: number };
+type Stroke = { pts: Point[]; color: string; width: number; erase?: boolean };
 
 export async function GET() {
   const board = await prisma.drawing.findUnique({ where: { id: BOARD_ID } });

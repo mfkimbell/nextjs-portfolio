@@ -11,6 +11,13 @@ import { Eraser, Save, Trash2, RotateCcw } from "lucide-react";
 type Point = { x: number; y: number };
 type Stroke = { pts: Point[]; color: string; width: number; erase?: boolean };
 
+// Add history state type
+type CanvasState = {
+  savedStrokes: Stroke[];
+  pendingStrokes: Stroke[];
+  action: 'draw' | 'clear' | 'save';
+};
+
 const COLORS = [
   "#ffffff", "#000000", "#ff0000",
   "#00a83e", "#0055ff", "#ffa800", "#9400d3",
@@ -34,6 +41,30 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   const [color, setColor] = useState(COLORS[1]);
   const [size, setSize] = useState(6);
   const [eraser, setEraser] = useState(false);
+
+  // Add history state
+  const [history, setHistory] = useState<CanvasState[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+
+  // Helper function to save current state to history
+  const saveToHistory = (action: 'draw' | 'clear' | 'save') => {
+    const currentState: CanvasState = {
+      savedStrokes: Array.isArray(data?.strokes) ? [...data!.strokes] : [],
+      pendingStrokes: [...pending],
+      action
+    };
+
+    setHistory(prev => {
+      // Remove any future history if we're not at the end
+      const newHistory = prev.slice(0, historyIndex + 1);
+      // Add new state
+      newHistory.push(currentState);
+      // Limit history to last 50 states to prevent memory issues
+      return newHistory.slice(-50);
+    });
+
+    setHistoryIndex(prev => Math.min(prev + 1, 49));
+  };
 
   /* ---------- Hi-DPI square canvas ---------- */
   useEffect(() => {
@@ -111,6 +142,10 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   /* ---------- actions ---------- */
   const save = async () => {
     if (!pending.length) return;
+
+    // Save current state before making changes
+    saveToHistory('save');
+
     await fetch("/api/drawings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -120,12 +155,44 @@ export default function CanvasBoard({ visits, clicks, mouseMiles }: CanvasBoardP
   };
 
   const clearAll = async () => {
+    // Save current state before clearing
+    saveToHistory('clear');
+
     await fetch("/api/drawings", { method: "DELETE" });
     setPending([]);
     mutate({ strokes: [] }, false);
   };
 
-  const undo = () => setPending(lst => lst.slice(0, -1));
+  const undo = async () => {
+    if (pending.length > 0) {
+      // If there are pending strokes, remove the last one
+      setPending(lst => lst.slice(0, -1));
+    } else if (historyIndex >= 0) {
+      // If no pending strokes, try to restore from history
+      const previousState = history[historyIndex];
+
+      if (previousState) {
+        // Restore the saved strokes to the database
+        if (previousState.savedStrokes.length > 0) {
+          await fetch("/api/drawings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ newStrokes: previousState.savedStrokes }),
+          });
+        } else {
+          // If previous state had no saved strokes, clear the database
+          await fetch("/api/drawings", { method: "DELETE" });
+        }
+
+        // Restore pending strokes
+        setPending(previousState.pendingStrokes);
+
+        // Update local data and move history index back
+        mutate({ strokes: previousState.savedStrokes }, false);
+        setHistoryIndex(prev => prev - 1);
+      }
+    }
+  };
 
   /* ---------- drawing ---------- */
   function redraw() {
