@@ -33,12 +33,12 @@ export default function BirdGLB({ containerRef }: Props) {
   -------------------------------------------------- */
   // Base (starting) head orientation
   const BASE_PITCH = 0.3; // + looks up,  − looks down
-  const BASE_YAW = -1; // + looks right, − looks left
+  const BASE_YAW = -.8; // + looks right, − looks left
   const BASE_ROLL = 0.0; // + tilt right ear down, − left ear down
 
   // Maximum rotation delta driven by pointer
   const MAX_PITCH_DELTA = 1.2;
-  const MAX_YAW_DELTA = 0.5;
+  const MAX_YAW_DELTA = 0.8;
   const MAX_ROLL_DELTA = 0.2;
 
   // Responsiveness
@@ -46,7 +46,8 @@ export default function BirdGLB({ containerRef }: Props) {
   const SENSITIVITY = 2.0; // scales pointer→rotation
   const INVERT_X = 1; // 1 = normal, −1 flips horizontal mapping
   const INVERT_Y = -1; // 1 = normal, −1 flips vertical mapping
-  const CENTER_OFFSET_X = 1; // fraction of half-width to shift pointer origin rightwards
+  const CENTER_OFFSET_X = .8; // fraction of half-width to shift pointer origin rightwards
+  const CENTER_OFFSET_Y = .45; // fraction of half-height to shift pointer origin (+ = shift down, - = shift up)
   const SMOOTHING = 0.1; // interpolation factor for smooth motion
 
   // Distance-based intensity scaling config
@@ -71,9 +72,9 @@ export default function BirdGLB({ containerRef }: Props) {
       const halfW = rect.width / 2;
       const halfH = rect.height / 2;
 
-      // calculate shifted center X
+      // calculate shifted center X and Y
       const centerX = rect.left + halfW + halfW * CENTER_OFFSET_X;
-      const centerY = rect.top + halfH;
+      const centerY = rect.top + halfH + halfH * CENTER_OFFSET_Y;
 
       // raw offsets from shifted center
       const dx = clientX - centerX;
@@ -150,14 +151,7 @@ export default function BirdGLB({ containerRef }: Props) {
     const curvedRatio = Math.pow(distRatio, PITCH_CURVE_POWER);
     const pitchScale = MIN_PITCH_SCALE + (MAX_PITCH_SCALE - MIN_PITCH_SCALE) * (.8 - curvedRatio);
 
-    // Target rotations
-    const targetPitch =
-      BASE_PITCH +
-      THREE.MathUtils.clamp(
-        pointer.current.y * MAX_PITCH_DELTA * pitchScale,
-        -MAX_PITCH_DELTA,
-        MAX_PITCH_DELTA
-      );
+    // Calculate target yaw first
     const targetYaw =
       BASE_YAW +
       THREE.MathUtils.clamp(
@@ -165,6 +159,22 @@ export default function BirdGLB({ containerRef }: Props) {
         -MAX_YAW_DELTA,
         MAX_YAW_DELTA
       );
+
+    // Reduce pitch sensitivity when bird is looking away (right for left bird), keep normal when facing user (left)
+    const yawFromBase = targetYaw - BASE_YAW; // how much bird has turned from center
+    const pitchReduction = yawFromBase > 0
+      ? Math.max(0.3, 1 - yawFromBase * 0.5)  // reduce when turning more right (positive)
+      : 1.0; // full sensitivity when turning left (towards user)
+
+    // Target rotations with yaw-based pitch reduction
+    const targetPitch =
+      BASE_PITCH +
+      THREE.MathUtils.clamp(
+        pointer.current.y * MAX_PITCH_DELTA * pitchScale * pitchReduction,
+        -MAX_PITCH_DELTA,
+        MAX_PITCH_DELTA
+      );
+
     const targetRoll =
       BASE_ROLL +
       THREE.MathUtils.clamp(
@@ -180,6 +190,9 @@ export default function BirdGLB({ containerRef }: Props) {
       (targetYaw - head.current.rotation.y) * SMOOTHING;
     head.current.rotation.z +=
       (targetRoll - head.current.rotation.z) * SMOOTHING;
+
+    // Set rotation order so pitch is applied after yaw (in local space)
+    head.current.rotation.order = 'YXZ';
   });
 
   return (
