@@ -42,19 +42,15 @@ export default function BirdGLB({ containerRef }: Props) {
   const MAX_ROLL_DELTA = 0.2;
 
   // Responsiveness
-  const DEAD_ZONE = 0.2; // fraction of half-width before head starts turning
+  const DEAD_ZONE = 0.05; // fraction of half-width before head starts turning
   const SENSITIVITY = 2.0; // scales pointer→rotation
   const INVERT_X = 1; // 1 = normal, −1 flips horizontal mapping
   const INVERT_Y = -1; // 1 = normal, −1 flips vertical mapping
   const CENTER_OFFSET_X = .8; // fraction of half-width to shift pointer origin rightwards
-  const CENTER_OFFSET_Y = .45; // fraction of half-height to shift pointer origin (+ = shift down, - = shift up)
+  const CENTER_OFFSET_Y = .25; // fraction of half-height to shift pointer origin (+ = shift down, - = shift up)
   const SMOOTHING = 0.1; // interpolation factor for smooth motion
 
-  // Distance-based intensity scaling config
-  const PITCH_FALLOFF_RADIUS = 2000; // pixels from bird before nodding is fully flattened
-  const MIN_PITCH_SCALE = 0.15; // minimum intensity when close to bird (0 = no movement, 1 = full intensity)
-  const MAX_PITCH_SCALE = 1.0; // maximum intensity when far from bird
-  const PITCH_CURVE_POWER = 1.5; // curve shape: 1 = linear, >1 = more gradual falloff, <1 = sharper falloff
+
 
   /* -------------------------------------------------- */
 
@@ -80,7 +76,7 @@ export default function BirdGLB({ containerRef }: Props) {
       const dx = clientX - centerX;
       const dy = clientY - centerY;
 
-      // apply dead zone in pixels
+      // apply dead zone in pixels (much smaller now)
       const deadPxX = halfW * DEAD_ZONE;
       const deadPxY = halfH * DEAD_ZONE;
 
@@ -103,16 +99,18 @@ export default function BirdGLB({ containerRef }: Props) {
       }
 
       // apply sensitivity, inversion, and clamp
-      pointer.current.x = THREE.MathUtils.clamp(
-        xNorm * SENSITIVITY * INVERT_X,
-        -1,
-        1
-      );
-      pointer.current.y = THREE.MathUtils.clamp(
-        yNorm * SENSITIVITY * INVERT_Y,
-        -1,
-        1
-      );
+      let finalX = xNorm * SENSITIVITY * INVERT_X;
+      let finalY = yNorm * SENSITIVITY * INVERT_Y;
+
+      // Normalize diagonal movement to prevent it from being weaker
+      const magnitude = Math.hypot(finalX, finalY);
+      if (magnitude > 1) {
+        finalX = finalX / magnitude;
+        finalY = finalY / magnitude;
+      }
+
+      pointer.current.x = THREE.MathUtils.clamp(finalX, -1, 1);
+      pointer.current.y = THREE.MathUtils.clamp(finalY, -1, 1);
     };
 
     const onMouseMove = (e: MouseEvent) => {
@@ -136,21 +134,6 @@ export default function BirdGLB({ containerRef }: Props) {
   useFrame(() => {
     if (!head.current || !containerRef.current) return;
 
-    // Calculate distance from mouse to bird center on screen (scroll-aware)
-    const container = containerRef.current;
-    const rect = container.getBoundingClientRect();
-    const birdScreenX = rect.left + rect.width / 2;
-    const birdScreenY = rect.top + rect.height / 2;
-    const dx = lastPos.current.x - birdScreenX;
-    const dy = lastPos.current.y - birdScreenY;
-
-    // 0 when mouse is on the bird, 1 when cursor is ≥ radius away
-    const distRatio = Math.min(1, Math.hypot(dx, dy) / PITCH_FALLOFF_RADIUS);
-
-    // Apply configurable curve and scale range
-    const curvedRatio = Math.pow(distRatio, PITCH_CURVE_POWER);
-    const pitchScale = MIN_PITCH_SCALE + (MAX_PITCH_SCALE - MIN_PITCH_SCALE) * (.8 - curvedRatio);
-
     // Calculate target yaw first
     const targetYaw =
       BASE_YAW +
@@ -162,15 +145,15 @@ export default function BirdGLB({ containerRef }: Props) {
 
     // Reduce pitch sensitivity when bird is looking away (right for left bird), keep normal when facing user (left)
     const yawFromBase = targetYaw - BASE_YAW; // how much bird has turned from center
-    const pitchReduction = yawFromBase > 0
-      ? Math.max(0.3, 1 - yawFromBase * 0.5)  // reduce when turning more right (positive)
+    const yawBasedReduction = yawFromBase > 0
+      ? Math.max(0.5, 1 - yawFromBase * 0.3)  // gentler reduction when turning more right (positive)
       : 1.0; // full sensitivity when turning left (towards user)
 
-    // Target rotations with yaw-based pitch reduction
+    // Target rotations with only yaw-based pitch scaling (removed distance-based scaling)
     const targetPitch =
       BASE_PITCH +
       THREE.MathUtils.clamp(
-        pointer.current.y * MAX_PITCH_DELTA * pitchScale * pitchReduction,
+        pointer.current.y * MAX_PITCH_DELTA * yawBasedReduction,
         -MAX_PITCH_DELTA,
         MAX_PITCH_DELTA
       );

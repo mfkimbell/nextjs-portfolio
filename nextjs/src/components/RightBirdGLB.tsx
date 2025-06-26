@@ -46,7 +46,7 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
   const YAW_OFFSET = 0;                    // adjust center point of yaw
   const PITCH_OFFSET = -.1;                // adjust center point of pitch
   const PITCH_SENSITIVITY = 3.2;          // multiplier for up-down reactivity
-  const MOUSE_X_OFFSET = -.6;              // shift mouse X position to align bird gaze (+ = shift right, - = shift left)
+  const MOUSE_X_OFFSET = 0.3;              // shift mouse X position to align bird gaze (+ = shift right, - = shift left)
 
   /* ─── find head bone ─── */
   useEffect(() => {
@@ -65,29 +65,39 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
       // Store mouse position for scroll updates
       lastMousePos.current = { x: clientX, y: clientY };
 
-      // Calculate distance-based sensitivity (bird is at ~90% right side of screen)
-      const birdScreenX = window.innerWidth * 0.9; // bird's screen position
-      const distanceFromBird = Math.abs(clientX - birdScreenX) / (window.innerWidth * 0.5); // normalize to 0-1
+      if (!containerRef.current) {
+        // Fallback to basic calculation if container not available
+        cursor.current.x = ((clientX / window.innerWidth) * 2 - 1 + MOUSE_X_OFFSET) + YAW_OFFSET;
+        cursor.current.y = (((clientY / window.innerHeight) * 2 - 1) + PITCH_OFFSET) * PITCH_SENSITIVITY;
+        return;
+      }
+
+      // Get the bird's actual screen position from the container
+      const rect = containerRef.current.getBoundingClientRect();
+      const birdCenterX = rect.left + rect.width / 2;
+      const birdCenterY = rect.top + rect.height / 2;
+
+      // Use fixed distances for normalization (independent of screen size)
+      const FIXED_X_RANGE = 400; // pixels - fixed horizontal range for normalization
+      const FIXED_Y_RANGE = 300; // pixels - fixed vertical range for normalization
+      const PROXIMITY_RANGE = 200; // pixels - fixed range for proximity calculation
+
+      // Calculate distance-based sensitivity using fixed range
+      const distanceFromBird = Math.abs(clientX - birdCenterX) / PROXIMITY_RANGE;
 
       // Exponential falloff - high sensitivity when close, dramatic drop when far
       const proximityFactor = Math.pow(Math.max(0, 1 - distanceFromBird), 2.5);
       const dynamicSensitivity = 0.5 + proximityFactor * 4; // ranges from 0.5 to 4.5
 
-      // Apply dynamic sensitivity to X calculation (left/right movement)
-      const baseX = ((clientX / window.innerWidth) * 2 - 1 + MOUSE_X_OFFSET) + YAW_OFFSET;
-      cursor.current.x = baseX * dynamicSensitivity;
+      // Calculate mouse position relative to bird center for X (left/right movement)
+      const relativeX = (clientX - birdCenterX) / FIXED_X_RANGE;
+      cursor.current.x = (THREE.MathUtils.clamp(relativeX, -2, 2) + MOUSE_X_OFFSET + YAW_OFFSET) * dynamicSensitivity;
 
-      // Make Y calculation scroll-aware with sensitivity (up/down movement)
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        const birdCenterY = rect.top + rect.height / 2;
-        // Calculate mouse position relative to bird center, normalized to -1 to 1 range  
-        const relativeY = (clientY - birdCenterY) / (window.innerHeight / 2);
-        cursor.current.y = (THREE.MathUtils.clamp(relativeY, -1, 1) + PITCH_OFFSET) * PITCH_SENSITIVITY;
-      } else {
-        // Fallback to original calculation if container not available
-        cursor.current.y = (((clientY / window.innerHeight) * 2 - 1) + PITCH_OFFSET) * PITCH_SENSITIVITY;
-      }
+      // Calculate mouse position relative to bird center for Y (up/down movement)
+      // Apply distance-based sensitivity to pitch as well, but less dramatically than yaw
+      const pitchSensitivity = 0.3 + proximityFactor * 1.2; // ranges from 0.3 to 1.5 (less dramatic than yaw)
+      const relativeY = (clientY - birdCenterY) / FIXED_Y_RANGE;
+      cursor.current.y = (THREE.MathUtils.clamp(relativeY, -2, 2) + PITCH_OFFSET) * PITCH_SENSITIVITY * pitchSensitivity;
     };
 
     const onMouseMove = (e: MouseEvent) => {
