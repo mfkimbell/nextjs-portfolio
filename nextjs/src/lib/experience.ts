@@ -10,11 +10,14 @@ export const roles: Role[] = [
     {
       company: "Twilio",
       logo: "/gifs/twilio.gif",
-      title: "Demo Engineer",
+      title: "Senior Software Engineer GTM (Go To Market) Innovation",
       dates: "May 2025 – Present",
       bullets: [
-        "Creating technical demos to show off Twilio software services"
-      ],
+        "Developing Conversational Agentic AI Solutions",
+
+        "Creating technical demos for high-stakes clients and conferences", 
+        
+        "Collaborating with companies to architect and sell CRM solutions"      ],
     },
     {
       company: "Regions Bank",
