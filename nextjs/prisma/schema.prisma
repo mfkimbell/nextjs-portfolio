@@ -26,3 +26,48 @@ model Drawing {
   strokes   Json
   createdAt DateTime @default(now())
 }
+
+/// ───────── Taiwan trip planner ─────────
+
+model TaipeiSettings {
+  id   String @id @default("singleton")
+  mode String @default("real")
+}
+
+model TaipeiDay {
+  id        String        @id @default(cuid())
+  dayNum    Int           @unique
+  date      String
+  label     String
+  focus     String
+  fakeFocus String        @default("")
+  notes     String
+  order     Int
+  events    TaipeiEvent[]
+}
+
+model TaipeiEvent {
+  id          String            @id @default(cuid())
+  dayId       String
+  time        String
+  emoji       String
+  title       String
+  description String
+  location    String
+  transit     String
+  tips        String
+  order       Int
+  realOnly    Boolean           @default(false)
+  fakeOnly    Boolean           @default(false)
+  day         TaipeiDay         @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  checklist   TaipeiCheckItem[]
+}
+
+model TaipeiCheckItem {
+  id      String      @id @default(cuid())
+  eventId String
+  label   String
+  done    Boolean     @default(false)
+  order   Int
+  event   TaipeiEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
