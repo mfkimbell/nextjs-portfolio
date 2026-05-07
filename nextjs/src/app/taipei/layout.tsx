@@ -45,10 +45,10 @@ function Polaroid({ src, rotate }: { src: string; rotate: number }) {
   );
 }
 
-function PhotoColumn({ photos, topPad }: { photos: string[]; topPad: number }) {
+function PhotoColumn({ photos, topPad, side, className }: { photos: string[]; topPad: number; side: "left" | "right"; className: string }) {
   return (
     <div
-      className="hidden xl:flex flex-col items-center gap-6 flex-shrink-0 pb-16"
+      className={`${className} absolute top-0 ${side}-0 flex-col items-center gap-6 overflow-hidden pointer-events-none`}
       style={{ width: "116px", paddingTop: `${topPad}px` }}
     >
       {photos.map((src, i) => (
@@ -66,10 +66,11 @@ function PolaroidWall({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <div className="flex min-h-screen">
-      <PhotoColumn photos={left} topPad={112} />
-      <div className="flex-1 min-w-0">{children}</div>
-      <PhotoColumn photos={right} topPad={176} />
+    <div className="relative min-h-screen">
+      <PhotoColumn photos={left} topPad={280} side="left" className="hidden xl:flex" />
+      <PhotoColumn photos={[...left, ...right]} topPad={280} side="right" className="flex xl:hidden" />
+      <PhotoColumn photos={right} topPad={280} side="right" className="hidden xl:flex" />
+      {children}
     </div>
   );
 }

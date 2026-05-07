@@ -80,9 +80,9 @@ function EventCard({
   const hasRight = event.location || event.transit || event.tips;
 
   return (
-    <div className="relative pl-8">
+    <div className="relative sm:pl-8">
       {/* Timeline dot */}
-      <div className="absolute left-0 top-2 w-6 h-6 rounded-full bg-sky-500/80 border-2 border-sky-400 flex items-center justify-center text-xs select-none">
+      <div className="hidden sm:flex absolute left-0 top-2 w-6 h-6 rounded-full bg-sky-500/80 border-2 border-sky-400 items-center justify-center text-xs select-none">
         {event.emoji || "•"}
       </div>
 
@@ -90,20 +90,17 @@ function EventCard({
         <div className={`${hasRight ? "grid grid-cols-1 md:grid-cols-2" : ""}`}>
 
           {/* ── LEFT: main info ── */}
-          <div className="p-4 space-y-2">
-            <div className="flex items-start gap-3">
-              <span className="text-sky-300 text-sm font-mono whitespace-nowrap mt-0.5 min-w-[85px]">
-                <EditableField value={event.time} onSave={save("time")} className="text-sm font-mono text-sky-300" />
-              </span>
-              <EditableField
-                value={event.title}
-                onSave={save("title")}
-                className="font-semibold text-white text-base"
-              />
+          <div className="p-4 space-y-1">
+            <div className="text-sky-300 text-xs font-mono">
+              <EditableField value={event.time} onSave={save("time")} className="text-xs font-mono text-sky-300" />
             </div>
-
+            <EditableField
+              value={event.title}
+              onSave={save("title")}
+              className="font-semibold text-white text-base"
+            />
             {event.description && (
-              <div className="ml-[97px] text-white/70 text-sm leading-relaxed">
+              <div className="text-white/70 text-sm leading-relaxed">
                 <EditableField
                   value={event.description}
                   onSave={save("description")}
@@ -296,18 +293,20 @@ export default function TaipeiSchedule() {
         })}
       </div>
 
-      {/* Content */}
-      {current && (
-        <DayPanel
-          day={current}
-          mode={mode}
-          onUpdateEvent={updateEvent}
-        />
-      )}
+      {/* Content — padded right so text doesn't go under the photo column */}
+      <div className="pr-[116px] xl:pr-0">
+        {current && (
+          <DayPanel
+            day={current}
+            mode={mode}
+            onUpdateEvent={updateEvent}
+          />
+        )}
 
-      <p className="text-center text-white/20 text-xs mt-12">
-        Click any field to edit it live · Changes save instantly to the database
-      </p>
+        <p className="text-center text-white/20 text-xs mt-12">
+          Click any field to edit it live · Changes save instantly to the database
+        </p>
+      </div>
     </div>
   );
 }
