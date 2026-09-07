@@ -6,8 +6,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 
+import Matte from "@/components/Matte";
 const BEAR_URL = "/wildpoly/bear_sit_fixed.glb";
-const BANJO_URL = "/bear/campfire/banjo_clean.glb";
+const BANJO_URL = "/bear/1/banjo_clean.glb";
 useGLTF.preload(BEAR_URL);
 useGLTF.preload(BANJO_URL);
 
@@ -349,6 +350,7 @@ ${lines}
     <div style={{ display: "flex", height: "100vh", background: "#111", color: "#eee", fontFamily: "monospace" }}>
       <div style={{ flex: 1, position: "relative" }}>
         <Canvas camera={{ position: [1.8, 1.1, 2.0], fov: 40 }}>
+          <Matte />
           <ambientLight intensity={0.7} />
           <directionalLight position={[3, 5, 3]} intensity={1.2} />
           <directionalLight position={[-2, 3, -2]} intensity={0.4} />

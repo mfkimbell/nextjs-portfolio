@@ -7,6 +7,7 @@ import { OrbitControls, Environment } from "@react-three/drei";
 import ToucanGLB, { type VoiceState } from "./ToucanGLB";
 import { toucanConfig as CFG, toucan2Config } from "@/config/toucan";
 
+import Matte from "@/components/Matte";
 type ToucanSceneProps = {
   /**
    * Live voice state. A ref, not a value: the voice hook updates the audio
@@ -27,6 +28,7 @@ function ToucanScene({ voiceRef }: ToucanSceneProps) {
       className="w-full h-[320px] sm:h-[440px] md:h-[520px] cursor-grab active:cursor-grabbing"
     >
       <Canvas shadows dpr={[1, 2]} camera={{ position: [0, 0, CFG.CAMERA_Z], fov: 40 }}>
+        <Matte />
         <Environment preset="city" environmentIntensity={0.6} />
         <ambientLight intensity={0.35} />
         <directionalLight

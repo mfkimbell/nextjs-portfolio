@@ -29,6 +29,7 @@ import { Environment } from "@react-three/drei";
 import * as THREE from "three";
 import LeftTreeGLB from "./LeftTreeGLB";
 
+import Matte from "@/components/Matte";
 /* ── measurements of public/fauna/left_tree.png ────────────────────────────
  * The <img> was stretched with object-fill, so these are fractions of the
  * asset, not pixels, and stay correct at any rendered size. Taken from the
@@ -229,6 +230,7 @@ export default function LeftTreeScene({
             invalidate();
           }}
         >
+          <Matte />
           {/* Matched to the Projects scene, where the sign's logs read well.
               Ambient was 1.25 here against 0.85 there — 47% more flat fill,
               which is what was washing the trunk's facets into one tone. A

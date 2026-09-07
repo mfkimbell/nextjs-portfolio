@@ -17,6 +17,7 @@ import * as THREE from "three";
 import { projects, Project } from "@/lib/projects";
 import { Github } from "lucide-react";
 
+import Matte from "@/components/Matte";
 // =========== CONFIG ===========
 const CONFIG = {
   LEFT_OWL_URL: "/birds/white_owl.glb",
@@ -811,6 +812,7 @@ export default function ProjectsSection() {
             dpr={[1, 2]}
             gl={{ alpha: true, antialias: true }}
           >
+            <Matte />
             {/* Outdoor daylight — bright but not flat. Ambient stays
                 moderate so the strong overhead-right key can carve the top
                 highlight and let the outward side face fall into a distinct

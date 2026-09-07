@@ -19,9 +19,9 @@ from mathutils import Vector, Quaternion
 
 REPO = "/Users/mkimbell/repositories/nextjs-portfolio"
 POSE_JSON = os.path.join(REPO, "nextjs/src/config/cubHeadPose.json")
-BLEND_SITTING = os.path.join(REPO, "nextjs/public/bear/cub/cub_sitting.blend")
-BLEND_SOURCE = os.path.join(REPO, "nextjs/public/bear/cub/Bear_Baby.blend")
-OUT_GLB = os.path.join(REPO, "nextjs/public/bear/cub/cub.glb")
+BLEND_SITTING = os.path.join(REPO, "nextjs/public/bear/2/cub_sitting.blend")
+BLEND_SOURCE = os.path.join(REPO, "nextjs/public/bear/2/Bear_Baby.blend")
+OUT_GLB = os.path.join(REPO, "nextjs/public/bear/2/cub.glb")
 
 
 def load_pose():

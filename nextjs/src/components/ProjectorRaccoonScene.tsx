@@ -10,6 +10,7 @@ import { Environment } from "@react-three/drei";
 import * as THREE from "three";
 import ProjectorRaccoonGLB from "./ProjectorRaccoonGLB";
 
+import Matte from "@/components/Matte";
 /** Authored extents of the GLB (8.45 x 4.36), padded off the frame edge. */
 const FIT_WIDTH = 9.3;
 const FIT_HEIGHT = 4.9;
@@ -51,6 +52,7 @@ function ProjectorRaccoonScene({ archSrc, className }: Props) {
       }
     >
       <Canvas shadows dpr={[1, 2]} camera={{ position: [0, 0, 9], fov: 40 }}>
+        <Matte />
         <FitCamera />
         <Environment preset="apartment" environmentIntensity={0.5} />
         <ambientLight intensity={0.3} />

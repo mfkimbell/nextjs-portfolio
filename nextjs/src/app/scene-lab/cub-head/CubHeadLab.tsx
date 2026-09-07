@@ -6,7 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 
-const CUB_URL = "/bear/cub/cub.glb";
+import Matte from "@/components/Matte";
+const CUB_URL = "/bear/2/cub.glb";
 
 useGLTF.preload(CUB_URL);
 
@@ -227,6 +228,7 @@ export default function CubHeadLab() {
     >
       <div style={{ flex: 1 }}>
         <Canvas camera={{ position: [1.2, 0.6, 1.2], fov: 45 }}>
+          <Matte />
           <ambientLight intensity={0.8} />
           <directionalLight position={[3, 5, 3]} intensity={1.2} />
           <gridHelper args={[4, 20, "#444", "#222"]} />

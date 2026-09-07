@@ -6,6 +6,7 @@ import { Canvas } from "@react-three/fiber";
 import type { DirectionalLight } from "three";
 import FooterAnimalGLB, { type FooterAnimalGLBProps } from "./FooterAnimalGLB";
 
+import Matte from "@/components/Matte";
 export type ShadowCatcherConfig = {
   /** World-space center of the receiver plane. Should sit behind the animal (negative Z). */
   position: readonly [number, number, number];
@@ -76,6 +77,7 @@ export default function FooterAnimalScene({
         // still works via the sibling `<button>` hitbox below.
         style={{ pointerEvents: "none" }}
       >
+        <Matte />
         {!shadowOnly && (
           <>
             <ambientLight intensity={1.35} />

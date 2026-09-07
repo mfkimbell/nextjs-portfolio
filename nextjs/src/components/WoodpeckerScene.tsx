@@ -6,6 +6,7 @@ import { Canvas } from "@react-three/fiber";
 import { Environment } from "@react-three/drei";
 import WoodpeckerGLB from "./WoodpeckerGLB";
 
+import Matte from "@/components/Matte";
 /**
  * Transparent overlay canvas. The tree the bird clings to is painted by the
  * page behind this widget, so nothing is drawn here except the bird itself.
@@ -20,6 +21,7 @@ export default function WoodpeckerScene() {
       className="w-[180px] h-[180px] sm:w-[210px] sm:h-[210px] pointer-events-none"
     >
       <Canvas dpr={[1, 2]} camera={{ position: [0, 0.15, 4], fov: 35 }}>
+        <Matte />
         <Environment preset="forest" environmentIntensity={0.6} />
         <ambientLight intensity={0.3} />
         <directionalLight position={[3, 5, 4]} intensity={2.4} color="#fff0cf" />

@@ -47,33 +47,23 @@ export interface CampfireSceneConfig {
   moonZ: number;
   /** Whether the moon directional light casts shadows. Cheap - one depth
    *  pass per frame - so leave on unless perf is bad. */
-  moonCastShadow: number;
   /** Shadow map resolution as a raw pixel count on one edge (square). Higher
    *  = sharper but quadratic memory + cost. Common values: 512/1024/2048/4096. */
-  moonShadowMapSize: number;
   /** Constant depth offset to eat shadow acne. Typically small negative,
    *  e.g. -0.0005. Too negative causes peter-panning (shadows detach). */
-  moonShadowBias: number;
   /** Bias along the surface normal - a nicer fix than shadowBias because it
    *  doesn't cause peter-panning as easily. Typical 0.02-0.05. */
-  moonShadowNormalBias: number;
   /** PCF blur radius in texels. 0 = crisp, ~4 = classic soft shadow. Only
    *  affects PCFSoftShadowMap (the r3f `shadows` default). */
-  moonShadowRadius: number;
   /** How dark the moon's shadow gets. three.js LightShadow.intensity, 0..1:
    *  1 = fully black, 0 = shadow invisible. Global to this light. */
-  moonShadowIntensity: number;
   /** Half-width of the orthographic shadow camera frustum in world units.
    *  Frustum spans [-frustum..+frustum] on both axes. Tight = better shadow
    *  resolution over the scene; too tight = shadows clip. Campsite is ~30u,
    *  so 20 is a good starting point. */
-  moonShadowFrustum: number;
   /** Ortho camera near plane. Small so nearby geometry casts. */
-  moonShadowNear: number;
   /** Ortho camera far plane. Must exceed distance from light to the farthest
    *  shadow-casting mesh, but stay tight for depth precision. */
-  moonShadowFar: number;
-
   /** Whether the fire's main point light also casts shadows. EXPENSIVE - six
    *  cubemap renders per frame - so off by default. Turn on for a hero look
    *  where bears throw long shadows across the ring. */
@@ -91,6 +81,76 @@ export interface CampfireSceneConfig {
   groundColorR: number;
   groundColorG: number;
   groundColorB: number;
+  /** ---------------------------------------------------------------------
+   *  1 - Trodden ground patches at the campfire.
+   *
+   *  Two flat irregular POLYGONS stacked on the ground disc, not a texture.
+   *  That is how the desk diorama gets its look: in camping.glb the camp's
+   *  dirt is "Object_222", its own 300-triangle mesh in Material.045
+   *  (0.227/0.133/0.063) laid over the tan Material.108 terrain
+   *  (0.316/0.197/0.076) - raycasting near that camp hits the patch first and
+   *  the terrain 3.5 units below. Its outline is 844 straight segments,
+   *  median 0.95 units long, across a patch ~27 units wide: hard, angular,
+   *  never a fade. Two earlier attempts here painted a canvas gradient and it
+   *  read as nothing.
+   *
+   *  Jag pulls each boundary vertex in by a fraction of the radius. Round
+   *  chooses HOW that fraction varies: at 0 it is an independent draw per
+   *  vertex, so neighbours are uncorrelated and the edge reads as torn; at 1
+   *  it comes from three low harmonics around the circle, which drift across
+   *  many vertices and give broad lobes - a rounded outline still built from
+   *  straight segments. The harmonics are exactly periodic in the angle, so
+   *  the ring always closes cleanly, and they are drawn before the per-vertex
+   *  values so Round reshapes an outline instead of reshuffling it. That
+   *  holds for every Seed, which is the point: the outer ring stays the
+   *  rounded one whatever seed you land on.
+   *
+   *  Sides is the vertex count - fewer is chunkier. Each patch has its own
+   *  PRNG seeded from Seed plus its layer, so changing one patch's Sides
+   *  cannot disturb the other's shape.
+   *
+   *  Radii are WORLD units and must stay SMALL. The ground reads only where
+   *  the fire lights it and that light reaches about 8.9 units; the earlier
+   *  version authored its edge at 6.6-13.1 and drew most of it in the dark.
+   *
+   *  The patches centre on the CAMPFIRE camp - location 0 on the ring, world
+   *  (0.18, -15.20) - not on the ground disc, which is centred on the ring's
+   *  hub 15 units away. Offset X/Z nudge from there.
+   *
+   *  Opacity under 1 drops the patch into the transparent pass and turns its
+   *  depthWrite off with it - otherwise a see-through decal still occludes
+   *  what should show through. The two patches carry explicit renderOrder
+   *  because they sit millimetres apart and distance sorting between them is
+   *  not stable as the camera swings.
+   *
+   *  Colours are absolute, not tints: these are their own meshes with their
+   *  own materials, so groundColorR/G/B still owns the disc underneath and
+   *  nothing has two homes.
+   *  ------------------------------------------------------------------- */
+  groundPatchOn: number;
+  groundPatchSeed: number;
+  groundPatchOffsetX: number;
+  groundPatchOffsetZ: number;
+  groundPatchOuterRadius: number;
+  groundPatchOuterJag: number;
+  groundPatchOuterSides: number;
+  groundPatchOuterSpin: number;
+  groundPatchOuterRound: number;
+  groundPatchOuterR: number;
+  groundPatchOuterG: number;
+  groundPatchOuterB: number;
+  groundPatchOuterY: number;
+  groundPatchOuterOpacity: number;
+  groundPatchInnerRadius: number;
+  groundPatchInnerJag: number;
+  groundPatchInnerSides: number;
+  groundPatchInnerSpin: number;
+  groundPatchInnerRound: number;
+  groundPatchInnerR: number;
+  groundPatchInnerG: number;
+  groundPatchInnerB: number;
+  groundPatchInnerY: number;
+  groundPatchInnerOpacity: number;
   /** Desk-scene light sources (attached to the two lanterns and the computer
    *  inside ContactSector). Each source has intensity, distance falloff, and
    *  an RGB color 0..1 so the lab can tune warm-vs-cool without hex strings. */
@@ -118,6 +178,192 @@ export interface CampfireSceneConfig {
   /** Warm ambient fill just for the desk scene - a HemisphereLight parented
    *  inside ContactSector, so it only lights the desk without touching the
    *  campfire or arcade. Tunable so the whole desk can read cozier or dim. */
+  deskCampGroundMaxY: number;
+  /** The river in camping.glb ("Object_119", material "Material.057").
+   *
+   *  deskWaterHeight is an OFFSET in camp-local units, not an absolute level,
+   *  so 0 leaves the water exactly where the model authored it (the slab runs
+   *  y -1.63 to 0.56). Positive floods the banks, negative drains the river.
+   *  It moves the whole slab, so the surface and the bed rise together.
+   *
+   *  deskWaterOpacity is 1 = solid. Anything below 1 puts the slab in the
+   *  transparent pass and drops depthWrite with it, so the riverbed shows
+   *  through and the campfire's glow/sparks are not occluded by water you can
+   *  otherwise see through. */
+  deskWaterHeight: number;
+  deskWaterOpacity: number;
+  /** One long skinny RectAreaLight over the camp's string-light run.
+   *
+   *  Defaults fitted to the 26 bulbs: centroid (1.520, 3.366, -1.171) in camp
+   *  space, topping out at y 4.05, principal axis at 44.9 deg -> RotY 0.783.
+   *
+   *  X/Y/Z and the Rot* are CAMP units - it hangs in the diorama's frame and
+   *  follows it. Width/Height are WORLD units: three rebuilds a rect light's
+   *  extent through extractRotation, which normalises away the parent scale
+   *  (WebGLLights.js:524), so the camp's 0.207 never reaches them. The run is
+   *  6.81 camp units long, which is 1.41 world units - hence Width 1.6.
+   *
+   *  RotX -PI/2 aims it at the ground: a rect light emits along local -Z, so
+   *  standing +Z up points the emitting face down. Show draws a proxy bar at
+   *  the light's exact size for positioning; turn it off when placed. */
+  deskStringLightOn: number;
+  deskStringLightShow: number;
+  deskStringLightIntensity: number;
+  deskStringLightWidth: number;
+  deskStringLightHeight: number;
+  deskStringLightX: number;
+  deskStringLightY: number;
+  deskStringLightZ: number;
+  deskStringLightRotX: number;
+  deskStringLightRotY: number;
+  deskStringLightRotZ: number;
+  deskStringLightColorR: number;
+  deskStringLightColorG: number;
+  deskStringLightColorB: number;
+  /** ---------------------------------------------------------------------
+   *  3 - Fish. THREE independent shoals, ids from DESK_FISH_GROUPS.
+   *
+   *  Camp units. Placement was chosen against a water mask built by
+   *  raycasting the scene: a point is swimmable when the river slab is
+   *  present AND no terrain sits above the fish's depth - so under the dock
+   *  counts as water, the bank does not. Each shoal was then simulated over
+   *  four laps and every sample checked.
+   *
+   *  A - mills under the dock. (11.1, 7.3) r 1.0/1.3, scatter 0.35:
+   *      0/1680 samples on land, 27% of them under the deck.
+   *  B - one long lap PAST the dock lantern and back out. A plain circle
+   *      could not fit: the shore runs diagonally, and round loops of r
+   *      2.4-3.0 put 13-62 samples on land. An ellipse turned to 2.64 rad -
+   *      along the shoreline - fits: (10.6, 8.0) r 3.2/1.8 scores 0/840 and
+   *      passes within 0.26 units of the lantern.
+   *  C - spare, off.
+   *
+   *  Rotate turns a whole shoal; Twist rotates each fish's path individually
+   *  (1 for a milling shoal, 0 for a clean shared loop); Scatter offsets each
+   *  fish's path centre so they interleave instead of sitting concentric.
+   *  ------------------------------------------------------------------- */
+  /** Shoal · milling under the dock */
+  deskFishAOn: number;
+  deskFishACount: number;
+  deskFishAX: number;
+  deskFishAY: number;
+  deskFishAZ: number;
+  deskFishARadiusX: number;
+  deskFishARadiusZ: number;
+  deskFishARotate: number;
+  deskFishATwist: number;
+  deskFishAScatter: number;
+  deskFishASpeed: number;
+  deskFishAScale: number;
+  deskFishABob: number;
+  deskFishAEight: number;
+  deskFishAWander: number;
+  deskFishADepthSpread: number;
+  deskFishABank: number;
+  deskFishAYawOffset: number;
+  /** Loop · long lap past the lantern */
+  deskFishBOn: number;
+  deskFishBCount: number;
+  deskFishBX: number;
+  deskFishBY: number;
+  deskFishBZ: number;
+  deskFishBRadiusX: number;
+  deskFishBRadiusZ: number;
+  deskFishBRotate: number;
+  deskFishBTwist: number;
+  deskFishBScatter: number;
+  deskFishBSpeed: number;
+  deskFishBScale: number;
+  deskFishBBob: number;
+  deskFishBEight: number;
+  deskFishBWander: number;
+  deskFishBDepthSpread: number;
+  deskFishBBank: number;
+  deskFishBYawOffset: number;
+  /** Spare shoal (off by default) */
+  deskFishCOn: number;
+  deskFishCCount: number;
+  deskFishCX: number;
+  deskFishCY: number;
+  deskFishCZ: number;
+  deskFishCRadiusX: number;
+  deskFishCRadiusZ: number;
+  deskFishCRotate: number;
+  deskFishCTwist: number;
+  deskFishCScatter: number;
+  deskFishCSpeed: number;
+  deskFishCScale: number;
+  deskFishCBob: number;
+  deskFishCEight: number;
+  deskFishCWander: number;
+  deskFishCDepthSpread: number;
+  deskFishCBank: number;
+  deskFishCYawOffset: number;
+  deskCampLampEnabled: number;
+  /** ---------------------------------------------------------------------
+   *  3 - Desk sector camp lamps, one block PER FIXTURE.
+   *
+   *  These replace the old shared deskCampLampIntensity/Distance/Decay/
+   *  Color* block, which drove all of them off one set of sliders. Ids come
+   *  from DESK_CAMP_LAMPS in CampfireScene.tsx and the keys are built from
+   *  them, so renaming an id there orphans the values saved here.
+   *
+   *  deskCampLampEnabled is still the master switch for all five.
+   *  The 26 string bulbs are deliberately NOT in this list - they stay
+   *  emissive-only, at about 4x the fragment cost if they were not.
+   *  ------------------------------------------------------------------- */
+  /** Camper van headlights - BOTH bulbs off this one block */
+  deskLampVanHeadsOn: number;
+  deskLampVanHeadsIntensity: number;
+  deskLampVanHeadsReach: number;
+  deskLampVanHeadsDecay: number;
+  deskLampVanHeadsR: number;
+  deskLampVanHeadsG: number;
+  deskLampVanHeadsB: number;
+  deskLampVanHeadsEmissive: number;
+  /** Nudge the whole camper van headlights (both) - glass AND housing - in camp units. */
+  deskLampVanHeadsOffX: number;
+  deskLampVanHeadsOffY: number;
+  deskLampVanHeadsOffZ: number;
+  /** Small lamp · near the fire pit */
+  deskLampSmallAOn: number;
+  deskLampSmallAIntensity: number;
+  deskLampSmallAReach: number;
+  deskLampSmallADecay: number;
+  deskLampSmallAR: number;
+  deskLampSmallAG: number;
+  deskLampSmallAB: number;
+  deskLampSmallAEmissive: number;
+  /** Nudge the whole small lamp - glass AND housing - in camp units. */
+  deskLampSmallAOffX: number;
+  deskLampSmallAOffY: number;
+  deskLampSmallAOffZ: number;
+  /** Small lamp · far side of camp */
+  deskLampSmallBOn: number;
+  deskLampSmallBIntensity: number;
+  deskLampSmallBReach: number;
+  deskLampSmallBDecay: number;
+  deskLampSmallBR: number;
+  deskLampSmallBG: number;
+  deskLampSmallBB: number;
+  deskLampSmallBEmissive: number;
+  /** Nudge the whole lantern - glass AND housing - in camp units. */
+  deskLampSmallBOffX: number;
+  deskLampSmallBOffY: number;
+  deskLampSmallBOffZ: number;
+  /** Hooded lantern · on the signpost */
+  deskLampHoodOn: number;
+  deskLampHoodIntensity: number;
+  deskLampHoodReach: number;
+  deskLampHoodDecay: number;
+  deskLampHoodR: number;
+  deskLampHoodG: number;
+  deskLampHoodB: number;
+  deskLampHoodEmissive: number;
+  /** Nudge the whole hooded lantern - glass AND housing - in camp units. */
+  deskLampHoodOffX: number;
+  deskLampHoodOffY: number;
+  deskLampHoodOffZ: number;
   deskAmbientIntensity: number;
   deskAmbientColorR: number;
   deskAmbientColorG: number;
@@ -204,6 +450,78 @@ export interface CampfireSceneConfig {
   truckTailgateScaleX: number;
   truckTailgateScaleY: number;
   truckTailgateScaleZ: number;
+  // Size of the TWLO decal laid over the truck's licence plates. 1 = the
+  // baseline quad, which is 84% of the plate slab's width and 78% of its
+  // height. Applies to the front and rear plate together so they match.
+  truckPlateScaleX: number;
+  truckPlateScaleY: number;
+
+  // --- Arcade truck lamps + lights -----------------------------------------
+  // truckHeadLamp* / truckTailLamp* drive the LENS GEOMETRY, which is built at
+  // runtime (rounded-rect extrusion) rather than baked into the GLB, so the
+  // shape itself is adjustable: Radius 0 = hard rectangle, 1 = full stadium
+  // oval. truckHeadLight* / truckTailLight* drive the actual lights.
+  // Colours are LINEAR (three's working space), matching arcadeFireLightColor*.
+  truckHeadLampW: number;
+  truckHeadLampH: number;
+  truckHeadLampRadius: number;
+  truckHeadLampDepth: number;
+  truckHeadLampSpanX: number;
+  truckHeadLampY: number;
+  truckHeadLampZ: number;
+  truckHeadLampRotX: number;
+  truckHeadLampRotY: number;
+  truckHeadLampRotZ: number;
+  truckHeadLampBezelPad: number;
+  truckHeadLampBezelDepth: number;
+  truckHeadLampProud: number;
+  truckHeadLampColorR: number;
+  truckHeadLampColorG: number;
+  truckHeadLampColorB: number;
+  truckHeadLampEmissive: number;
+  truckHeadLampHide: number;
+  truckTailLampW: number;
+  truckTailLampH: number;
+  truckTailLampRadius: number;
+  truckTailLampDepth: number;
+  truckTailLampSpanX: number;
+  truckTailLampY: number;
+  truckTailLampZ: number;
+  truckTailLampRotX: number;
+  truckTailLampRotY: number;
+  truckTailLampRotZ: number;
+  truckTailLampBezelPad: number;
+  truckTailLampBezelDepth: number;
+  truckTailLampProud: number;
+  truckTailLampColorR: number;
+  truckTailLampColorG: number;
+  truckTailLampColorB: number;
+  truckTailLampEmissive: number;
+  truckTailLampHide: number;
+  truckHeadLightX: number;
+  truckHeadLightY: number;
+  truckHeadLightZ: number;
+  truckHeadLightAimX: number;
+  truckHeadLightAimY: number;
+  truckHeadLightAimZ: number;
+  truckHeadLightIntensity: number;
+  truckHeadLightDistance: number;
+  truckHeadLightDecay: number;
+  truckHeadLightAngle: number;
+  truckHeadLightPenumbra: number;
+  truckHeadLightColorR: number;
+  truckHeadLightColorG: number;
+  truckHeadLightColorB: number;
+  truckHeadLightFlicker: number;
+  truckTailLightX: number;
+  truckTailLightY: number;
+  truckTailLightZ: number;
+  truckTailLightIntensity: number;
+  truckTailLightDistance: number;
+  truckTailLightDecay: number;
+  truckTailLightColorR: number;
+  truckTailLightColorG: number;
+  truckTailLightColorB: number;
   /** Extra height added to the inside bed walls (left, right, and front cab
    *  wall). 0 = flush with the authored top rail; positive raises a matching
    *  panel above the rail so the bed can hold taller cargo. Measured in truck
@@ -258,6 +576,16 @@ export interface CampfireSceneConfig {
   arcadeSparkLifetime: number;
   /** Global multiplier on every arcade CRT's screen glow — brightens or dims
    *  all four TVs at once so their combined spill onto the cubs can be tuned. */
+  arcadeCabinLampX: number;
+  arcadeCabinLampY: number;
+  arcadeCabinLampZ: number;
+  arcadeCabinLampIntensity: number;
+  arcadeCabinLampDistance: number;
+  arcadeCabinLampDecay: number;
+  arcadeCabinLampColorR: number;
+  arcadeCabinLampColorG: number;
+  arcadeCabinLampColorB: number;
+  arcadeCabinLampEmissive: number;
   arcadeCrtGlow: number;
   /* --- arcade CRT spot-light shape ----------------------------------------
    * Each of the 4 CRTs runs its own THREE.SpotLight aimed OUT the screen face
@@ -281,6 +609,113 @@ export interface CampfireSceneConfig {
   arcadeCrtLightOffsetY: number;
   fireDecay: number;
   flickerAmount: number;
+  // --- Fire ground glow (the pool of light on the dirt) ---------------------
+  // Colours are LINEAR. Width/Length replace what used to be a hard-coded
+  // 9 x 6.3 disc, so the pool can be stretched instead of forced circular.
+  glowColorR: number;
+  glowColorG: number;
+  glowColorB: number;
+  glowWidth: number;
+  glowLength: number;
+  glowRotY: number;
+  glowFalloff: number;
+  glowFlicker: number;
+  glowBreathe: number;
+  glowOffsetX: number;
+  glowOffsetZ: number;
+  arcadeGlowColorR: number;
+  arcadeGlowColorG: number;
+  arcadeGlowColorB: number;
+  arcadeGlowWidth: number;
+  arcadeGlowLength: number;
+  arcadeGlowRotY: number;
+  arcadeGlowFalloff: number;
+  arcadeGlowFlicker: number;
+  arcadeGlowBreathe: number;
+  arcadeGlowOffsetX: number;
+  arcadeGlowOffsetZ: number;
+  /** ---------------------------------------------------------------------
+   *  3 - Desk sector campfire.
+   *
+   *  camping.glb used to ship its own fire: a 484-vert orange blob
+   *  (material "Lamp.004") sitting on a small log pile, ringed by 15 stones.
+   *  All of that was deleted from the GLB in Blender, and this is the
+   *  replacement - the SAME procedural fire the campfire and arcade sectors
+   *  use (FlameCone stack + FireGlowDisc + Sparks + two point lights), with
+   *  the rocks-and-logs "bonfire" node cloned out of campfire_scene.glb.
+   *
+   *  deskCampfireX/Y/Z are in CAMPING.GLB's own space, not the sector's: the
+   *  fire hangs off an anchor group in ContactSector that mirrors the camping
+   *  Selectable's resolved position/rotation/scale. The defaults are measured
+   *  straight off the GLB - the old fire pit sits at (4.25, 1.12, -0.07) - and
+   *  they keep pointing at the pit no
+   *  matter how the diorama is dragged, spun or resized. (It is currently at
+   *  0.207 scale with a -2.71 rad heading, which is why placing this fire in
+   *  sector space left it hanging in the air above the camp.)
+   *
+   *  Sizes therefore mean CAMP units, not world units, with two exceptions
+   *  that three.js keeps in world space no matter what scales them:
+   *  deskFireLightReach / deskFarGlowReach (a point light's `distance`) and
+   *  deskGlowWidth / deskGlowLength (the disc divides the ancestor scale back
+   *  out on purpose, so Width really is metres of ground).
+   *
+   *  Unlike the arcade fire - which reuses the primary campfire's flame and
+   *  glow numbers - this one owns every knob, because the diorama is at a
+   *  different scale from the two hero campsites and sharing the tuning made
+   *  the flame the size of the tent.
+   *  ------------------------------------------------------------------- */
+  deskCampfireX: number;
+  deskCampfireY: number;
+  deskCampfireZ: number;
+  deskCampfireRotationY: number;
+  deskCampfireScale: number;
+  /** 1 = draw the cloned rocks-and-logs pile under the flames, 0 = flames
+   *  only (use this if you'd rather drop the fire onto something else). */
+  deskCampfirePileVisible: number;
+  deskFlameX: number;
+  deskFlameY: number;
+  deskFlameZ: number;
+  deskFlameScale: number;
+  deskFlameOuterScale: number;
+  deskFlameInnerScale: number;
+  deskFlameHaloScale: number;
+  deskFireIntensity: number;
+  deskFireDecay: number;
+  deskFlickerAmount: number;
+  deskFireLightX: number;
+  deskFireLightY: number;
+  deskFireLightZ: number;
+  deskFireLightReach: number;
+  /** LINEAR colour (three's working space), matching arcadeFireLightColor*. */
+  deskFireLightColorR: number;
+  deskFireLightColorG: number;
+  deskFireLightColorB: number;
+  deskFarGlowIntensity: number;
+  deskFarGlowReach: number;
+  deskFarGlowDecay: number;
+  deskGlowOpacity: number;
+  deskGlowY: number;
+  deskGlowScale: number;
+  deskGlowColorR: number;
+  deskGlowColorG: number;
+  deskGlowColorB: number;
+  deskGlowWidth: number;
+  deskGlowLength: number;
+  deskGlowRotY: number;
+  deskGlowFalloff: number;
+  deskGlowFlicker: number;
+  deskGlowBreathe: number;
+  deskGlowOffsetX: number;
+  deskGlowOffsetZ: number;
+  deskSparkOpacity: number;
+  deskSparkCount: number;
+  deskSparkSpread: number;
+  deskSparkMaxHeight: number;
+  deskSparkSpeed: number;
+  deskSparkSway: number;
+  deskSparkBurstChance: number;
+  deskSparkSize: number;
+  deskSparkLifetime: number;
   glowOpacity: number;
   glowY: number;
   glowScale: number;
@@ -736,15 +1171,6 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   moonX: -4,
   moonY: 7,
   moonZ: -6,
-  moonCastShadow: 0,
-  moonShadowMapSize: 2048,
-  moonShadowBias: -0.0005,
-  moonShadowNormalBias: 0.03,
-  moonShadowRadius: 4,
-  moonShadowIntensity: 1,
-  moonShadowFrustum: 20,
-  moonShadowNear: 1,
-  moonShadowFar: 60,
   fireCastShadow: 1,
   fireShadowMapSize: 1024,
   fireShadowBias: -0.003,
@@ -755,6 +1181,31 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   groundColorR: 0.13,
   groundColorG: 0.24,
   groundColorB: 0.13,
+  // --- 1 - trodden ground patches (polygons, like camping.glb's Object_222)
+  groundPatchOn: 1,
+  groundPatchSeed: 7,
+  groundPatchOffsetX: 0,
+  groundPatchOffsetZ: 0,
+  groundPatchOuterRadius: 6.4,
+  groundPatchOuterJag: 0.34,
+  groundPatchOuterSides: 22,
+  groundPatchOuterSpin: 0.4,
+  groundPatchOuterRound: 0.85,
+  groundPatchOuterR: 0.135,
+  groundPatchOuterG: 0.118,
+  groundPatchOuterB: 0.088,
+  groundPatchOuterY: 0.006,
+  groundPatchOuterOpacity: 1,
+  groundPatchInnerRadius: 3.3,
+  groundPatchInnerJag: 0.38,
+  groundPatchInnerSides: 11,
+  groundPatchInnerSpin: 1.1,
+  groundPatchInnerRound: 0.15,
+  groundPatchInnerR: 0.235,
+  groundPatchInnerG: 0.196,
+  groundPatchInnerB: 0.138,
+  groundPatchInnerY: 0.012,
+  groundPatchInnerOpacity: 1,
   deskLanternIntensity: 2.4,
   deskLanternDistance: 4,
   deskLanternColorR: 1.0,
@@ -776,6 +1227,135 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskComputerLightZ: 0.2,
   // Warm desk fill - hemisphere sky/ground tint, kept low so the lanterns and
   // computer still carry most of the light. Slightly amber sky, cool ground.
+  deskCampGroundMaxY: 4.0,
+  deskWaterHeight: 0,
+  deskWaterOpacity: 0.72,
+  // --- 3 - the bar light over the string-light run (see the interface
+  // block for why Width/Height are world units and X/Y/Z are camp units).
+  deskStringLightOn: 1,
+  deskStringLightShow: 1,
+  deskStringLightIntensity: 3,
+  deskStringLightWidth: 1.6,
+  deskStringLightHeight: 0.12,
+  deskStringLightX: 1.52,
+  deskStringLightY: 4.4,
+  deskStringLightZ: -1.17,
+  deskStringLightRotX: -1.5708,
+  deskStringLightRotY: 0.783,
+  deskStringLightRotZ: 0,
+  deskStringLightColorR: 1,
+  deskStringLightColorG: 0.86,
+  deskStringLightColorB: 0.66,
+  // Shoal · milling under the dock
+  deskFishAOn: 1,
+  deskFishACount: 12,
+  deskFishAX: 11.1,
+  deskFishAY: 0.38,
+  deskFishAZ: 7.3,
+  deskFishARadiusX: 1.0,
+  deskFishARadiusZ: 1.3,
+  deskFishARotate: 0,
+  deskFishATwist: 1,
+  deskFishAScatter: 0.35,
+  deskFishASpeed: 0.5,
+  deskFishAScale: 0.09,
+  deskFishABob: 0.04,
+  deskFishAEight: 1,
+  deskFishAWander: 0.7,
+  deskFishADepthSpread: 0.18,
+  deskFishABank: 0.5,
+  deskFishAYawOffset: 0,
+  // Loop · long lap past the lantern
+  deskFishBOn: 1,
+  deskFishBCount: 6,
+  deskFishBX: 10.6,
+  deskFishBY: 0.34,
+  deskFishBZ: 8.0,
+  deskFishBRadiusX: 3.2,
+  deskFishBRadiusZ: 1.8,
+  deskFishBRotate: 2.64,
+  deskFishBTwist: 0,
+  deskFishBScatter: 0,
+  deskFishBSpeed: 0.32,
+  deskFishBScale: 0.11,
+  deskFishBBob: 0.03,
+  deskFishBEight: 0,
+  deskFishBWander: 0.2,
+  deskFishBDepthSpread: 0.12,
+  deskFishBBank: 0.7,
+  deskFishBYawOffset: 0,
+  // Spare shoal (off by default)
+  deskFishCOn: 0,
+  deskFishCCount: 0,
+  deskFishCX: 11.1,
+  deskFishCY: 0.38,
+  deskFishCZ: 7.3,
+  deskFishCRadiusX: 1.0,
+  deskFishCRadiusZ: 1.3,
+  deskFishCRotate: 0,
+  deskFishCTwist: 1,
+  deskFishCScatter: 0.35,
+  deskFishCSpeed: 0.5,
+  deskFishCScale: 0.09,
+  deskFishCBob: 0.04,
+  deskFishCEight: 1,
+  deskFishCWander: 0.7,
+  deskFishCDepthSpread: 0.18,
+  deskFishCBank: 0.5,
+  deskFishCYawOffset: 0,
+  deskCampLampEnabled: 1,
+  // --- 3 - Desk camp lamps, per fixture. Seeded from the single shared
+  // block these replaced (0.2 / 4.5 / 2 / warm white), so nothing changes
+  // on load except the two bollard posts, which the old material-based
+  // filter could not see and which were dark until now.
+  // Camper van headlights (one block drives both bulbs)
+  deskLampVanHeadsOn: 1,
+  deskLampVanHeadsIntensity: 0.2,
+  deskLampVanHeadsReach: 4.5,
+  deskLampVanHeadsDecay: 2,
+  deskLampVanHeadsR: 1,
+  deskLampVanHeadsG: 0.72,
+  deskLampVanHeadsB: 0.35,
+  deskLampVanHeadsEmissive: 4.01,
+  deskLampVanHeadsOffX: 0,
+  deskLampVanHeadsOffY: 0,
+  deskLampVanHeadsOffZ: 0,
+  // Small lamp · near the fire pit
+  deskLampSmallAOn: 1,
+  deskLampSmallAIntensity: 0.2,
+  deskLampSmallAReach: 4.5,
+  deskLampSmallADecay: 2,
+  deskLampSmallAR: 1,
+  deskLampSmallAG: 0.72,
+  deskLampSmallAB: 0.35,
+  deskLampSmallAEmissive: 3.8,
+  deskLampSmallAOffX: 0,
+  deskLampSmallAOffY: 0,
+  deskLampSmallAOffZ: 0,
+  // Small lamp · far side of camp
+  deskLampSmallBOn: 1,
+  deskLampSmallBIntensity: 0.2,
+  deskLampSmallBReach: 4.5,
+  deskLampSmallBDecay: 2,
+  deskLampSmallBR: 1,
+  deskLampSmallBG: 0.72,
+  deskLampSmallBB: 0.35,
+  deskLampSmallBEmissive: 3.8,
+  deskLampSmallBOffX: -1.34,
+  deskLampSmallBOffY: 0,
+  deskLampSmallBOffZ: 0,
+  // Hooded lantern · on the signpost
+  deskLampHoodOn: 1,
+  deskLampHoodIntensity: 2.5,
+  deskLampHoodReach: 3,
+  deskLampHoodDecay: 2,
+  deskLampHoodR: 1,
+  deskLampHoodG: 0.72,
+  deskLampHoodB: 0.35,
+  deskLampHoodEmissive: 4.0,
+  deskLampHoodOffX: 0,
+  deskLampHoodOffY: 0,
+  deskLampHoodOffZ: 0,
   deskAmbientIntensity: 0.4,
   deskAmbientColorR: 1.0,
   deskAmbientColorG: 0.55,
@@ -829,6 +1409,68 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   truckTailgateScaleX: 1,
   truckTailgateScaleY: 1,
   truckTailgateScaleZ: 1,
+  truckPlateScaleX: 1,
+  truckPlateScaleY: 1,
+  truckHeadLampW: 0.325,
+  truckHeadLampH: 0.13,
+  truckHeadLampRadius: 0.35,
+  truckHeadLampDepth: 0.05,
+  truckHeadLampSpanX: 0.7,
+  truckHeadLampY: 0.645,
+  truckHeadLampZ: 2.288,
+  truckHeadLampRotX: 0.0,
+  truckHeadLampRotY: 0.0,
+  truckHeadLampRotZ: 0.0,
+  truckHeadLampBezelPad: 0.022,
+  truckHeadLampBezelDepth: 0.05,
+  truckHeadLampProud: 0.016,
+  truckHeadLampColorR: 1.0,
+  truckHeadLampColorG: 0.9,
+  truckHeadLampColorB: 0.62,
+  truckHeadLampEmissive: 4.0,
+  truckHeadLampHide: 0,
+  truckTailLampW: 0.115,
+  truckTailLampH: 0.21,
+  truckTailLampRadius: 1.0,
+  truckTailLampDepth: 0.05,
+  truckTailLampSpanX: 0.755,
+  truckTailLampY: 1.01,
+  truckTailLampZ: -2.381,
+  truckTailLampRotX: 0.0,
+  truckTailLampRotY: 0.0,
+  truckTailLampRotZ: 0.0,
+  truckTailLampBezelPad: 0.022,
+  truckTailLampBezelDepth: 0.05,
+  truckTailLampProud: 0.016,
+  truckTailLampColorR: 0.9,
+  truckTailLampColorG: 0.02,
+  truckTailLampColorB: 0.01,
+  truckTailLampEmissive: 3.6,
+  truckTailLampHide: 0,
+  truckHeadLightX: 0.62,
+  truckHeadLightY: 0.96,
+  truckHeadLightZ: 2.6,
+  truckHeadLightAimX: 0.0,
+  truckHeadLightAimY: 0.0,
+  truckHeadLightAimZ: 7.4,
+  truckHeadLightIntensity: 5.2,
+  truckHeadLightDistance: 12.0,
+  truckHeadLightDecay: 1.6,
+  truckHeadLightAngle: 0.6,
+  truckHeadLightPenumbra: 0.55,
+  truckHeadLightColorR: 1.0,
+  truckHeadLightColorG: 0.92,
+  truckHeadLightColorB: 0.64,
+  truckHeadLightFlicker: 1.0,
+  truckTailLightX: 0.0,
+  truckTailLightY: 1.0,
+  truckTailLightZ: -2.55,
+  truckTailLightIntensity: 2.8,
+  truckTailLightDistance: 4.2,
+  truckTailLightDecay: 1.8,
+  truckTailLightColorR: 1.0,
+  truckTailLightColorG: 0.023,
+  truckTailLightColorB: 0.012,
   // Non-zero default so walls appear the moment the editor opens without the
   // user having to hunt for the on/off switch. Set to 0 in campfireScene.json
   // to hide the extension in the arcade scene.
@@ -870,6 +1512,16 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   arcadeSparkBurstChance: 0.12,
   arcadeSparkSize: 0.045,
   arcadeSparkLifetime: 1.6,
+  arcadeCabinLampX: 16.05,
+  arcadeCabinLampY: 33.04,
+  arcadeCabinLampZ: 47.62,
+  arcadeCabinLampIntensity: 2.4,
+  arcadeCabinLampDistance: 2.6,
+  arcadeCabinLampDecay: 1.8,
+  arcadeCabinLampColorR: 1.0,
+  arcadeCabinLampColorG: 0.87,
+  arcadeCabinLampColorB: 0.55,
+  arcadeCabinLampEmissive: 3.5,
   arcadeCrtGlow: 1,
   arcadeCrtLightForwardOffset: 0.35,
   arcadeCrtLightAngle: Math.PI / 3,
@@ -881,6 +1533,85 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   arcadeCrtLightOffsetY: 0,
   fireDecay: 2,
   flickerAmount: 1,
+  glowColorR: 1.0,
+  glowColorG: 0.194,
+  glowColorB: 0.014,
+  glowWidth: 9.0,
+  glowLength: 6.3,
+  glowRotY: 0.0,
+  glowFalloff: 1.4,
+  glowFlicker: 1.0,
+  glowBreathe: 1.0,
+  glowOffsetX: 0.0,
+  glowOffsetZ: 0.0,
+  arcadeGlowColorR: 1.0,
+  arcadeGlowColorG: 0.194,
+  arcadeGlowColorB: 0.014,
+  arcadeGlowWidth: 9.0,
+  arcadeGlowLength: 6.3,
+  arcadeGlowRotY: 0.0,
+  arcadeGlowFalloff: 1.4,
+  arcadeGlowFlicker: 1.0,
+  arcadeGlowBreathe: 1.0,
+  arcadeGlowOffsetX: 0.0,
+  arcadeGlowOffsetZ: 0.0,
+  // --- 3 - Desk sector campfire (replaces the blob baked into camping.glb).
+  // Camp-local placement, straight off the GLB: the pit is at x 4.25, z -0.07.
+  // Y is 1.12 because that is where the ground actually is - raycast straight
+  // down onto the diorama's surface meshes, which hit "Object_222" (the dirt
+  // layer) at 1.117. The 1.41 the terrain bounding pass reported was a raised
+  // vertex just off to the side, and trusting it floated the whole fire.
+  // Scale 0.85 because the diorama's stone ring measured ~1.6 across and the
+  // bonfire pile out of campfire_scene.glb is ~1.85.
+  deskCampfireX: 4.25,
+  deskCampfireY: 1.12,
+  deskCampfireZ: -0.07,
+  deskCampfireRotationY: 0,
+  deskCampfireScale: 0.85,
+  deskCampfirePileVisible: 1,
+  deskFlameX: 0,
+  deskFlameY: 0.2,
+  deskFlameZ: 0,
+  deskFlameScale: 1,
+  deskFlameOuterScale: 1,
+  deskFlameInnerScale: 1,
+  deskFlameHaloScale: 1,
+  deskFireIntensity: 3.1,
+  deskFireDecay: 2,
+  deskFlickerAmount: 1,
+  deskFireLightX: 0,
+  deskFireLightY: 0.35,
+  deskFireLightZ: 0,
+  deskFireLightReach: 3,
+  deskFireLightColorR: 1.0,
+  deskFireLightColorG: 0.47,
+  deskFireLightColorB: 0.12,
+  deskFarGlowIntensity: 1.2,
+  deskFarGlowReach: 7,
+  deskFarGlowDecay: 1.2,
+  deskGlowOpacity: 0.24,
+  deskGlowY: 0.15,
+  deskGlowScale: 1,
+  deskGlowColorR: 1.0,
+  deskGlowColorG: 0.194,
+  deskGlowColorB: 0.014,
+  deskGlowWidth: 2.2,
+  deskGlowLength: 1.8,
+  deskGlowRotY: 0.0,
+  deskGlowFalloff: 1.4,
+  deskGlowFlicker: 1.0,
+  deskGlowBreathe: 1.0,
+  deskGlowOffsetX: 0.0,
+  deskGlowOffsetZ: 0.0,
+  deskSparkOpacity: 0.75,
+  deskSparkCount: 160,
+  deskSparkSpread: 0.5,
+  deskSparkMaxHeight: 2,
+  deskSparkSpeed: 1.5,
+  deskSparkSway: 0.35,
+  deskSparkBurstChance: 0.12,
+  deskSparkSize: 0.045,
+  deskSparkLifetime: 1.6,
   glowOpacity: 0.24,
   glowY: 0.035,
   glowScale: 1,

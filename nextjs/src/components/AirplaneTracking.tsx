@@ -4,6 +4,7 @@ import { Canvas } from "@react-three/fiber";
 import { Suspense } from "react";
 import AirplaneGLB from "./AirplaneGLB";
 
+import Matte from "@/components/Matte";
 interface AirplaneTrackingProps {
   className?: string;
 }
@@ -19,6 +20,7 @@ export default function AirplaneTracking({
         camera={{ position: [0, 0, 5], fov: 50 }}
         className="pointer-events-none"
       >
+        <Matte />
         {/* Ambient fill */}
         <ambientLight intensity={1.6} />
 

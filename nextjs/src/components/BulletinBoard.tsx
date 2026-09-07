@@ -10,6 +10,7 @@ import * as THREE from "three";
 import { A4_PAPER_ASPECT_RATIO, BULLETIN_BOARD_CONFIG } from "@/config/signs";
 import { drawPaintStroke, fillPaperTexture, PAPER_COLOR, type PaintPoint } from "@/lib/paint";
 
+import Matte from "@/components/Matte";
 /**
  * The contact board, in 3D.
  *
@@ -939,6 +940,7 @@ export default function BulletinBoard({
         camera={{ position: [0, 0, 4.2], fov: 42 }}
         gl={{ alpha: true, antialias: true }}
       >
+        <Matte />
         <Scene
           subs={subs}
           mailto={mailto}

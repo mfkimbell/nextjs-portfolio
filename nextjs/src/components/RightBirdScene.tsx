@@ -6,6 +6,7 @@ import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Environment } from "@react-three/drei";
 import RightBirdGLB from "./RightBirdGLB";
 
+import Matte from "@/components/Matte";
 export default function RightBirdScene() {
   const containerRef = useRef<HTMLDivElement>(null!);
 
@@ -22,6 +23,7 @@ export default function RightBirdScene() {
         "
       >
         <Canvas dpr={[1, 2]} camera={{ position: [0, 1, 3], fov: 40 }}>
+          <Matte />
           <Environment preset="city" environmentIntensity={0.6} />
           <ambientLight intensity={0.35} />
           <directionalLight

@@ -13,6 +13,7 @@ import { OrbitControls, useGLTF } from "@react-three/drei";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
+import Matte from "@/components/Matte";
 const TRUCK_URL = "/vehicles/pickup_truck.glb";
 const CONFIG_URL = "/api/dev/scene-config";
 
@@ -513,6 +514,7 @@ export default function TruckEditor() {
           camera={{ position: [3, 2.5, 4], fov: 45 }}
           onCreated={({ scene }) => { sceneRef.current = scene; }}
         >
+          <Matte />
           <EditorScene
             cfg={cfg}
             selection={selection}

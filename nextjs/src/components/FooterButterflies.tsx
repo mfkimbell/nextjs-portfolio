@@ -7,6 +7,7 @@ import { useGLTF, Environment } from "@react-three/drei";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import * as THREE from "three";
 
+import Matte from "@/components/Matte";
 /**
  * Ambient butterflies for the footer.
  *
@@ -377,6 +378,7 @@ export default function FooterButterflies({
         gl={{ alpha: true, antialias: true }}
         style={{ background: "transparent", pointerEvents: "none" }}
       >
+        <Matte />
         <Environment preset="park" environmentIntensity={0.5} />
         <ambientLight intensity={0.35} />
         <directionalLight position={[2, 4, 5]} intensity={1.8} color="#fff3d6" />

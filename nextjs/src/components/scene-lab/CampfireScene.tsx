@@ -8,14 +8,15 @@ import { RetroCrtTv, Table, Chair, type CrtScreen } from "@/components/scene-lab
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Clone, OrbitControls, Stars, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
+import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { CampfireSceneConfig, LocationView, ObjectOverride } from "@/components/scene-lab/sceneConfig";
 import { defaultLocationView, DUPLICATE_PREFIX, EMPTY_OVERRIDE } from "@/components/scene-lab/sceneConfig";
-import cubHeadPoseRaw from "@/config/cubHeadPose.json";
 import banjoBearPoseRaw from "@/config/banjoBearPose.json";
 import bearPosesRaw from "@/config/bearPoses.json";
 import { useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
 
+import Matte from "@/components/Matte";
 const FIRE_CRACKLING_URL = "/sound/fire_crackling.mp3";
 const BANJO_URL_SOUND = "/sound/banjo.mp3";
 const CLICK_URL = "/sound/click.mp3";
@@ -28,13 +29,6 @@ function clampUnit(v: number) {
   if (v > 1) return 1;
   return v;
 }
-
-const CUB_HEAD_POSE = cubHeadPoseRaw as {
-  bone?: string;
-  rx?: number; ry?: number; rz?: number;
-  px?: number; py?: number; pz?: number;
-  ox?: number; oy?: number; oz?: number;
-};
 
 type ArmRot = { x: number; y: number; z: number };
 type BanjoBearArmName =
@@ -70,13 +64,33 @@ type BearPoseProp = {
   // fish (or whichever prop is stuck on it) via the bear-pose lab.
   stickPx?: number; stickPy?: number; stickPz?: number;
   stickRx?: number; stickRy?: number; stickRz?: number;
+  // How much the Food socket bone follows sit_log's paw rotation.
+  //   1.0 = full swing (bear turns the fish as it wags its paw)
+  //   0.0 = held rock steady (fish stays still while the paw wiggles)
+  // Applied at runtime by slerping Food.quaternion back toward rest.
+  foodRotationScale?: number;
+  // Same for both hand_L / hand_R wrists - a 0 here locks the wrists at rest
+  // regardless of the sit_log clip.
+  handRotationScale?: number;
 };
 type BearPoseEntry = {
   animation?: string;
+  // The lab's transport state. `paused` + `frame` are what the pose was
+  // AUTHORED against, so the site has to reproduce them or the clip carries
+  // the bones away from the pose that was baked. 24 fps, same as the lab.
+  paused?: boolean;
+  frame?: number;
+  speed?: number;
   bones?: Record<string, BearPoseBone>;
   prop?: BearPoseProp;
 };
 const BEAR_POSES = bearPosesRaw as Record<string, BearPoseEntry>;
+
+// Scratch for the wrist damping in Animal's useFrame - that runs once per bear
+// per frame, so it must not allocate.
+const HAND_TARGET_Q = new THREE.Quaternion();
+const HAND_DELTA_Q = new THREE.Quaternion();
+const HAND_DELTA_E = new THREE.Euler();
 
 /** Overlay any prop transform authored in /scene-lab/bear-pose on top of the
  *  placement's baseline. Fields left undefined in JSON fall through to the
@@ -123,13 +137,177 @@ const DEER_URL = "/models/deer.glb";
 const DOE_URL = "/models/doe.glb";
 const RACCOON_URL = "/wildpoly/raccoon.glb";
 const BEAR_URL = "/wildpoly/bear_sit_fixed.glb";
+// Bear pose baked into GLBs by nextjs/scripts/bake_bear_pose.py (invoked from
+// /api/dev/bake-bear-pose whenever the pose lab saves). The site loads these
+// instead of BEAR_URL for the fish-holding bears, so the lab's edits are
+// visible on the site the moment the bake finishes - no runtime overlay.
+const BEAR_URL_FRONT_LOG = "/wildpoly/bear_sit_front_log.glb";
+const BEAR_URL_BACK_RIGHT_LOG = "/wildpoly/bear_sit_back_right_log.glb";
 const FISH_URL = "/animals/fish.glb";
 // Byte-identical copy of fish.glb served under a different URL so useGLTF caches
 // it as an independent asset. That gives the fish-on-stick its own materials and
 // scene graph, so hover-highlighting the flopping fish no longer bleeds into
 // the bear's caught fish (and vice versa).
 const FISH_STICK_URL = "/animals/fish_stick.glb";
+// Plain body model. The lamps are NOT baked in - they are extruded at runtime
+// from config (see TruckLamps) so their shape stays adjustable. The anchors
+// below were measured in Blender against this exact file.
+// (pickup_truck_lit.glb has the same lamps baked in, kept as a reference.)
 const PICKUP_TRUCK_URL = "/vehicles/pickup_truck.glb";
+
+/**
+ * Where each lamp pair sits on the body, and which way that bit of bodywork
+ * faces. Measured by raycasting the mesh in Blender, not eyeballed - the front
+ * of this truck curves away toward the corners (y -2.393 at centre, -2.281 at
+ * the corner), so a lamp has to be aligned to its own face normal or it floats
+ * off the surface at one end. Positions are the DEFAULTS; the config's
+ * SpanX/Y/Z sliders move each pair from here.
+ *
+ * Rear is easier: the bed's back panel is genuinely flat (normal straight down
+ * -Z) between |x| 0.68-0.83 and y 0.88-1.15.
+ */
+const HEAD_LAMP_NORMAL: [number, number, number] = [0.14, -0.16, 0.98];
+const TAIL_LAMP_NORMAL: [number, number, number] = [0, 0, -1];
+
+/**
+ * Rounded-rectangle lens outline. `radius01` runs 0 (hard rectangle) to 1,
+ * where the corner radius reaches half the short side and the outline becomes
+ * a stadium - the oval LED look.
+ */
+function lampShape(w: number, h: number, radius01: number) {
+  const hw = Math.max(0.001, w / 2);
+  const hh = Math.max(0.001, h / 2);
+  const r = Math.min(hw, hh) * Math.max(0, Math.min(1, radius01));
+  const sh = new THREE.Shape();
+  if (r <= 0.0005) {
+    sh.moveTo(-hw, -hh); sh.lineTo(hw, -hh); sh.lineTo(hw, hh); sh.lineTo(-hw, hh);
+    sh.closePath();
+    return sh;
+  }
+  sh.moveTo(-hw + r, -hh);
+  sh.lineTo(hw - r, -hh);
+  sh.absarc(hw - r, -hh + r, r, -Math.PI / 2, 0, false);
+  sh.lineTo(hw, hh - r);
+  sh.absarc(hw - r, hh - r, r, 0, Math.PI / 2, false);
+  sh.lineTo(-hw + r, hh);
+  sh.absarc(-hw + r, hh - r, r, Math.PI / 2, Math.PI, false);
+  sh.lineTo(-hw, -hh + r);
+  sh.absarc(-hw + r, -hh + r, r, Math.PI, Math.PI * 1.5, false);
+  sh.closePath();
+  return sh;
+}
+
+const LAMP_UP = new THREE.Vector3(0, 1, 0);
+
+/** Orientation that lays a lens flat on a piece of bodywork facing `normal`. */
+function lampQuaternion(normal: [number, number, number], mirror: boolean) {
+  const n = new THREE.Vector3(normal[0] * (mirror ? -1 : 1), normal[1], normal[2]).normalize();
+  const right = new THREE.Vector3().crossVectors(LAMP_UP, n);
+  if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
+  right.normalize();
+  const up = new THREE.Vector3().crossVectors(n, right).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(right, up, n)
+  );
+}
+
+interface LampPairProps {
+  normal: [number, number, number];
+  spanX: number; y: number; z: number;
+  w: number; h: number; radius: number; depth: number;
+  rotX: number; rotY: number; rotZ: number;
+  bezelPad: number; bezelDepth: number; proud: number;
+  color: THREE.Color; emissive: number; hide: number;
+}
+
+function LampPair(p: LampPairProps) {
+  // Geometry only rebuilds when the shape itself changes, not when the pair is
+  // dragged around - moving is a transform, not a re-extrude.
+  const lens = useMemo(
+    () => new THREE.ExtrudeGeometry(lampShape(p.w, p.h, p.radius), {
+      depth: p.depth, bevelEnabled: true, bevelThickness: 0.006,
+      bevelSize: 0.006, bevelSegments: 2, curveSegments: 18,
+    }),
+    [p.w, p.h, p.radius, p.depth]
+  );
+  const bezel = useMemo(
+    () => new THREE.ExtrudeGeometry(
+      lampShape(p.w + p.bezelPad * 2, p.h + p.bezelPad * 2, p.radius), {
+        depth: p.bezelDepth, bevelEnabled: true, bevelThickness: 0.004,
+        bevelSize: 0.004, bevelSegments: 2, curveSegments: 18,
+      }),
+    [p.w, p.h, p.radius, p.bezelPad, p.bezelDepth]
+  );
+  useEffect(() => () => { lens.dispose(); bezel.dispose(); }, [lens, bezel]);
+  if (p.hide >= 0.5) return null;
+
+  return (
+    <>
+      {[false, true].map((mirror) => {
+        const sx = mirror ? -1 : 1;
+        return (
+          <group
+            key={mirror ? "r" : "l"}
+            position={[p.spanX * sx, p.y, p.z]}
+            quaternion={lampQuaternion(p.normal, mirror)}
+          >
+            {/* Extrusion runs 0..depth along +Z, so each mesh is pushed back by
+                its own depth to leave its FRONT face at the offset we want. */}
+            <group rotation={[p.rotX, p.rotY * sx, p.rotZ * sx]}>
+              <mesh position={[0, 0, 0.004 - p.bezelDepth]} geometry={bezel} castShadow={false} receiveShadow>
+                <meshStandardMaterial color="#0a0a0c" roughness={0.85} metalness={0} />
+              </mesh>
+              <mesh position={[0, 0, p.proud - p.depth]} geometry={lens} castShadow={false}>
+                <meshStandardMaterial
+                  color={p.color}
+                  emissive={p.color}
+                  emissiveIntensity={p.emissive}
+                  toneMapped={false}
+                />
+              </mesh>
+            </group>
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
+/** Both lamp pairs, entirely config-driven. */
+function TruckLamps({ config: c }: { config: CampfireSceneConfig }) {
+  const headColor = useMemo(
+    () => new THREE.Color().setRGB(c.truckHeadLampColorR, c.truckHeadLampColorG, c.truckHeadLampColorB),
+    [c.truckHeadLampColorR, c.truckHeadLampColorG, c.truckHeadLampColorB]
+  );
+  const tailColor = useMemo(
+    () => new THREE.Color().setRGB(c.truckTailLampColorR, c.truckTailLampColorG, c.truckTailLampColorB),
+    [c.truckTailLampColorR, c.truckTailLampColorG, c.truckTailLampColorB]
+  );
+  return (
+    <>
+      <LampPair
+        normal={HEAD_LAMP_NORMAL}
+        spanX={c.truckHeadLampSpanX} y={c.truckHeadLampY} z={c.truckHeadLampZ}
+        w={c.truckHeadLampW} h={c.truckHeadLampH}
+        radius={c.truckHeadLampRadius} depth={c.truckHeadLampDepth}
+        rotX={c.truckHeadLampRotX} rotY={c.truckHeadLampRotY} rotZ={c.truckHeadLampRotZ}
+        bezelPad={c.truckHeadLampBezelPad} bezelDepth={c.truckHeadLampBezelDepth}
+        proud={c.truckHeadLampProud} color={headColor}
+        emissive={c.truckHeadLampEmissive} hide={c.truckHeadLampHide}
+      />
+      <LampPair
+        normal={TAIL_LAMP_NORMAL}
+        spanX={c.truckTailLampSpanX} y={c.truckTailLampY} z={c.truckTailLampZ}
+        w={c.truckTailLampW} h={c.truckTailLampH}
+        radius={c.truckTailLampRadius} depth={c.truckTailLampDepth}
+        rotX={c.truckTailLampRotX} rotY={c.truckTailLampRotY} rotZ={c.truckTailLampRotZ}
+        bezelPad={c.truckTailLampBezelPad} bezelDepth={c.truckTailLampBezelDepth}
+        proud={c.truckTailLampProud} color={tailColor}
+        emissive={c.truckTailLampEmissive} hide={c.truckTailLampHide}
+      />
+    </>
+  );
+}
 const CARAVAN_URL = "/vehicles/caravan.glb";
 // Hollow variant of the caravan: window material (02___Default) is transparent
 // and every material has doubleSided=true so you can see the back interior wall
@@ -137,70 +315,83 @@ const CARAVAN_URL = "/vehicles/caravan.glb";
 // caravan_original_backup.glb.
 const CARAVAN_HOLLOW_URL = "/vehicles/caravan_hollow.glb";
 const CAMPER_URL = "/bear/low_poly_camper.glb";
-const CUB_URL = "/bear/cub/cub.glb";
-const WOODEN_CABIN_URL = "/bear/cub/wooden_cabin.glb";
+const CUB_URL = "/bear/2/cub.glb";
+const WOODEN_CABIN_URL = "/bear/2/wooden_cabin.glb";
 // Spaces in the filename, so percent-encoded.
 const GLASSES_URL = "/bear/Glasses%20by%20jeremy%20-%209i5mmOwt7cu.glb";
 const TENT_URL = "/bear/low-poly_tent.glb";
 
 // New per-scene props. Spaces in filenames are percent-encoded.
-const HONEY_WAND_URL = "/bear/cub/Honey%20wand%20by%20Poly%20by%20Google%20-%205DhrBw4JgWW.glb";
-const WOOD_PILE_URL = "/bear/campfire/Wood%20Pile%20by%20K%20H%20(Kash)%20-%208ueXsvnRjC1.glb";
-const BANJO_URL = "/bear/campfire/banjo_clean.glb";
+const HONEY_WAND_URL = "/bear/2/Honey%20wand%20by%20Poly%20by%20Google%20-%205DhrBw4JgWW.glb";
+const WOOD_PILE_URL = "/bear/1/Wood%20Pile%20by%20K%20H%20(Kash)%20-%208ueXsvnRjC1.glb";
+const BANJO_URL = "/bear/1/banjo_clean.glb";
 // Quaternius fishing rod, authored ~6cm long along Z. baseScale on the
 // Selectable brings it up to a usable size next to the campfire benches.
-const FISHING_ROD_URL = "/bear/campfire/Fishing%20Rod%20by%20Quaternius%20-%200YAR0Lg58p.glb";
+const FISHING_ROD_URL = "/bear/1/Fishing%20Rod%20by%20Quaternius%20-%200YAR0Lg58p.glb";
 // Quaternius backpack, authored ~1.6 cm across - baseScale gets it to a
 // campfire-appropriate size and the drawer slider tunes from there.
-const BACKPACK_URL = "/bear/campfire/Backpack%20by%20Quaternius%20-%202g9Jm7kvIU.glb";
+const BACKPACK_URL = "/bear/1/Backpack%20by%20Quaternius%20-%202g9Jm7kvIU.glb";
 // Voxel_dev hiking backpack. Real-world scale (~0.98 m tall) but authored
 // offset ~20 units in -X, so a normalization group re-centers before scale.
-const HIKING_BACKPACK_URL = "/bear/campfire/Hiking%20Backpack%20by%20Voxel_dev%20-%20pVuHdEBRUs.glb";
+const HIKING_BACKPACK_URL = "/bear/1/Hiking%20Backpack%20by%20Voxel_dev%20-%20pVuHdEBRUs.glb";
 // Quaternius book (0.31 x 0.81 x 0.67, y-tall, min_y = -0.407). Anchor drops
 // the bottom to y=0.
-const BOOK_URL = "/bear/campfire/Book%20by%20Quaternius%20-%20h3Wh4fxSQX.glb";
+const BOOK_URL = "/bear/1/Book%20by%20Quaternius%20-%20h3Wh4fxSQX.glb";
 // Second Quaternius backpack, real-world sized (~1.07 x 0.95 x 0.80).
-const BACKPACK_Q2_URL = "/bear/campfire/Backpack%20by%20Quaternius%20-%20vF7TuXCPDH.glb";
+const BACKPACK_Q2_URL = "/bear/1/Backpack%20by%20Quaternius%20-%20vF7TuXCPDH.glb";
 // J-Toastie backpack. Real-world sized, already sitting on y=0.
-const BACKPACK_TOASTIE_URL = "/bear/campfire/Backpack%20by%20J-Toastie%20-%20N2wKlicUau.glb";
+const BACKPACK_TOASTIE_URL = "/bear/1/Backpack%20by%20J-Toastie%20-%20N2wKlicUau.glb";
 // Quaternius fish bone, authored ~9 mm long. baseScale gets it to plate size.
-const FISH_BONE_URL = "/bear/campfire/Fish%20Bone%20by%20Quaternius%20-%20bU5RLZnq6v.glb";
+const FISH_BONE_URL = "/bear/1/Fish%20Bone%20by%20Quaternius%20-%20bU5RLZnq6v.glb";
 // Don Carson keg, authored ~1 cm tall. baseScale gets it to a plausible barrel.
-const KEG_URL = "/bear/campfire/Keg%20by%20Don%20Carson%20-%20uaTAOcUXa4.glb";
+const KEG_URL = "/bear/1/Keg%20by%20Don%20Carson%20-%20uaTAOcUXa4.glb";
 // MilkAndBanana kettle, authored ~6 units across. Normalization group centers
 // X/Z and sinks the bottom to y=0; outer baseScale sets its final world size.
-const KETTLE_URL = "/bear/campfire/Kettle%20by%20MilkAndBanana%20-%20XggUrd5f03.glb";
+const KETTLE_URL = "/bear/1/Kettle%20by%20MilkAndBanana%20-%20XggUrd5f03.glb";
 // Ancient wooden beer mug (low poly). Sketchfab source authored ~1635 units
 // tall - normalization group centers X/Z, drops the bottom to y=0.
-const BEER_MUG_URL = "/bear/campfire/ancient_wooden_beer_mug_-_low_poly.glb";
+const BEER_MUG_URL = "/bear/1/ancient_wooden_beer_mug_-_low_poly.glb";
 // Jimi Youm soju bottle, authored ~0.89 units tall - normalization centers
 // X/Z and drops the bottom to y=0; baseScale=0.22 lands it at ~20 cm.
-const SOJU_URL = "/bear/campfire/Soju%20by%20Jimi%20Youm%20-%200FJq5yTfjg5.glb";
+const SOJU_URL = "/bear/1/Soju%20by%20Jimi%20Youm%20-%200FJq5yTfjg5.glb";
 // Poly-by-Google stool. Source is ~2.3 x 3.1 x 2.3 with min-Y at -2.00, so
 // normalization drops the bottom to zero and baseScale sets its world size.
-const STOOL_URL = "/bear/campfire/Stool%20by%20Poly%20by%20Google%20-%20cLydFlVg-wI.glb";
+const STOOL_URL = "/bear/1/Stool%20by%20Poly%20by%20Google%20-%20cLydFlVg-wI.glb";
 // Poly-by-Google camera-on-tripod. Source ~4.83 x 3.82 x 4.05 with min-Y at
 // ~0, so no anchor needed; baseScale sets its final size.
-const CAMERA_URL = "/bear/campfire/Camera%20by%20Poly%20by%20Google%20-%200nfSsetwy0Z.glb";
+const CAMERA_URL = "/bear/1/Camera%20by%20Poly%20by%20Google%20-%200nfSsetwy0Z.glb";
 // Don Carson chopping-block log with axe stuck in it. Source ~0.27 x 0.30 x
 // 0.28 with a small offset from origin; light anchor + baseScale places it.
-const LOG_AXE_URL = "/bear/campfire/Log%20%26%20Axe%20-%20Game%20Asset%20by%20Don%20Carson%20-%20ayOM0vyW_qd.glb";
-const LAPTOP_URL = "/bear/campfire/Laptop%20by%20Kenney%20-%20GnbwSUiVty.glb";
-const OLD_BEAR_TABLE_URL = "/bear/old-bear/Table%20by%20Hunter%20Paramore%20-%207qAyGZnerYt.glb";
-const OLD_BEAR_CHAIR_URL = "/bear/old-bear/Chair%20by%20Quaternius%20-%20iMNqRzPwwe.glb";
-const OLD_BEAR_COMPUTER_URL = "/bear/old-bear/low_poly_computer_with_devices.glb";
-const OLD_BEAR_BOOKS_URL = "/bear/old-bear/Book%20Stack%20by%20Danni%20Bittman%20-%201WggoIFq8tx.glb";
-const OLD_BEAR_MUG_URL = "/bear/old-bear/Mug%20With%20Office%20Tool%20by%20CreativeTrio%20-%204jSgnM5WWk.glb";
-const OLD_BEAR_BOXES_URL = "/bear/old-bear/Cardboard%20Boxes%20by%20Quaternius%20-%20V9KbWC8Vd6.glb";
-const OLD_BEAR_PAPERS_URL = "/bear/old-bear/Small%20Stack%20of%20Paper%20by%20Jarlan%20Perez%20-%20aiBozYlPe--.glb";
-const OLD_BEAR_TOILET_URL = "/bear/old-bear/Toilet%20Paper%20stack%20by%20Quaternius%20-%206jlZSAxsYb.glb";
-const OLD_BEAR_POSTIT_URL = "/bear/old-bear/Yellow%20Post-it%20by%20Zack%20Huang%20-%201-ZStsi8S91.glb";
-const OLD_BEAR_DEBRIS_URL = "/bear/old-bear/Debris%20Papers%20by%20Quaternius%20-%20MujITy1NRR.glb";
-const OLD_BEAR_LANTERN_URL = "/bear/old-bear/Lantern%20by%20Poly%20by%20Google%20-%209YMVn5hMiv8.glb";
-const OLD_BEAR_CARAVAN_URL = "/bear/old-bear/Caravan%20by%20Poly%20by%20Google%20-%20aiDmjN8uOmA%20(1).glb";
+const LOG_AXE_URL = "/bear/1/Log%20%26%20Axe%20-%20Game%20Asset%20by%20Don%20Carson%20-%20ayOM0vyW_qd.glb";
+const LAPTOP_URL = "/bear/1/Laptop%20by%20Kenney%20-%20GnbwSUiVty.glb";
+// Quaternius A-frame tent, edited from the original download:
+//   - groundsheet removed (18 horizontal tris off the Green primitive, the
+//     only near-ground horizontal geometry in the model)
+//   - the two long guy lines pulled in from z +/-12.37 to +/-8.66, with their
+//     ground stakes moved to match, so the wires land just outside the tent
+//     instead of reaching twice its depth away
+// The source node is Z-up scaled 348.6x, so the mesh's local Y is world depth.
+// Body is 10.91 x 9.54 x 12.49 with min-Y at -0.18 (the stakes sit below
+// ground on purpose); full extent including the lines is 14.58 x 10.32 x 17.36.
+// baseScale 0.16 puts the body at ~1.75 x 1.53 x 2.0 m, matching the height of
+// the low-poly tent already pitched across camp; the anchor lifts min-Y to y=0.
+// Original file kept alongside as "Tent by Quaternius - 5Q7qIrfDxA.glb".
+const TENT_AFRAME_URL = "/bear/1/tent_a_frame.glb";
+const OLD_BEAR_TABLE_URL = "/bear/3/Table%20by%20Hunter%20Paramore%20-%207qAyGZnerYt.glb";
+const OLD_BEAR_CHAIR_URL = "/bear/3/Chair%20by%20Quaternius%20-%20iMNqRzPwwe.glb";
+const OLD_BEAR_COMPUTER_URL = "/bear/3/low_poly_computer_with_devices.glb";
+const OLD_BEAR_BOOKS_URL = "/bear/3/Book%20Stack%20by%20Danni%20Bittman%20-%201WggoIFq8tx.glb";
+const OLD_BEAR_MUG_URL = "/bear/3/Mug%20With%20Office%20Tool%20by%20CreativeTrio%20-%204jSgnM5WWk.glb";
+const OLD_BEAR_BOXES_URL = "/bear/3/Cardboard%20Boxes%20by%20Quaternius%20-%20V9KbWC8Vd6.glb";
+const OLD_BEAR_PAPERS_URL = "/bear/3/Small%20Stack%20of%20Paper%20by%20Jarlan%20Perez%20-%20aiBozYlPe--.glb";
+const OLD_BEAR_TOILET_URL = "/bear/3/Toilet%20Paper%20stack%20by%20Quaternius%20-%206jlZSAxsYb.glb";
+const OLD_BEAR_POSTIT_URL = "/bear/3/Yellow%20Post-it%20by%20Zack%20Huang%20-%201-ZStsi8S91.glb";
+const OLD_BEAR_DEBRIS_URL = "/bear/3/Debris%20Papers%20by%20Quaternius%20-%20MujITy1NRR.glb";
+const OLD_BEAR_LANTERN_URL = "/bear/3/Lantern%20by%20Poly%20by%20Google%20-%209YMVn5hMiv8.glb";
+const OLD_BEAR_CARAVAN_URL = "/bear/3/Caravan%20by%20Poly%20by%20Google%20-%20aiDmjN8uOmA%20(1).glb";
 // New camping scene GLB dropped into old-bear/. Kept as a raw placeable so the
 // user can decide what to keep or strip out.
-const OLD_BEAR_CAMPING_URL = "/bear/old-bear/camping.glb";
+const OLD_BEAR_CAMPING_URL = "/bear/3/camping.glb";
 
 /**
  * GameCube, split out of gamecube_with_controller.glb.
@@ -221,33 +412,33 @@ const OLD_BEAR_CAMPING_URL = "/bear/old-bear/camping.glb";
  * centre, and its cord leaves toward -Z as well.
  */
 const GAMECUBE_URL = "/bear/gamecube.glb";
-// New arcade consoles (added to /public/bear/cub/). Sources vary wildly in
+// New arcade consoles (added to /public/bear/2/). Sources vary wildly in
 // authoring scale, so each Selectable that uses one wraps it in a small
 // anchor + baseScale normalization.
-const XBOX360_URL = "/bear/cub/xbox_360_fat_low_poly.glb";
-const PS2_SLIM_URL = "/bear/cub/a_playstation_2_slim.glb";
-const GAMECUBE_CONSOLE_URL = "/bear/cub/gamecube_console.glb";
+const XBOX360_URL = "/bear/2/xbox_360_fat_low_poly.glb";
+const PS2_SLIM_URL = "/bear/2/a_playstation_2_slim.glb";
+const GAMECUBE_CONSOLE_URL = "/bear/2/gamecube_console.glb";
 const CONTROLLER_URL = "/bear/gamecube_controller.glb";
 
-// Snacks, packs, and props dropped into /public/bear/cub/. Every asset here is
+// Snacks, packs, and props dropped into /public/bear/2/. Every asset here is
 // surfaced as one Selectable in the arcade sector so the object drawer can
 // find and place them; default positions form a loose grid behind the cubs
 // which you drag/scale in the lab. Source authoring scales are all over the
 // place, so the default baseScale is a rough starting point per asset.
-const CUB_BACKPACK_URL = "/bear/cub/Backpack%20by%20Emmett%20%E2%80%9CTawpShelf%E2%80%9D%20Baber%20-%20ems9KHrB_4x.glb";
-const CUB_CHIPS_URL = "/bear/cub/Chips%20by%20CreativeTrio%20-%20uF1dGn3HXi.glb";
-const CUB_COOKIE_URL = "/bear/cub/Cookie%20by%20Poly%20by%20Google%20-%208Xmx93RrgDT.glb";
-const CUB_DONUT_URL = "/bear/cub/Donut%20by%20Quaternius%20-%20UQRRrsP3wj.glb";
-const CUB_FRIES_URL = "/bear/cub/French%20fries%20by%20Poly%20by%20Google%20-%20eLvKtdMFaXF.glb";
-const CUB_MARSHMALLOWS_URL = "/bear/cub/Marshmallows%20by%20Jarlan%20Perez%20-%201KaEvyPT4BG.glb";
-const CUB_OPEN_BACKPACK_URL = "/bear/cub/Open%20Backpack%20by%20Emmett%20%E2%80%9CTawpShelf%E2%80%9D%20Baber%20-%2026m92LMKK4e.glb";
-const CUB_PICNIC_BASKET_URL = "/bear/cub/Picnic%20Basket%20by%20Poly%20by%20Google%20-%20aWBGhxXig8y.glb";
-const CUB_PICNIC_TABLE_URL = "/bear/cub/Picnic%20Table%20by%20J-Toastie%20-%20GQieALI2C4.glb";
-const CUB_PRETZEL_URL = "/bear/cub/Pretzal%20by%20Jarlan%20Perez%20-%208G1Z7FGHWt-.glb";
-const CUB_SMORE_URL = "/bear/cub/S%27more%20-%20toasted%20by%20sirkitree%20-%204Er9zaRIQj-.glb";
-const CUB_SANDWICH_COOKIE_URL = "/bear/cub/Sandwich%20Cookie%20by%20Poly%20by%20Google%20-%201_1zbKquoYZ.glb";
-const CUB_MATCHBOX_URL = "/bear/cub/matchbox%20open%20by%20Justin%20Randall%20-%201Jv2TQvqA_5.glb";
-const CUB_TRASH_BAG_URL = "/bear/cub/trah%20bag%20grey%20by%20Jens%20Kull%20-%20axTuG36RXnN.glb";
+const CUB_BACKPACK_URL = "/bear/2/Backpack%20by%20Emmett%20%E2%80%9CTawpShelf%E2%80%9D%20Baber%20-%20ems9KHrB_4x.glb";
+const CUB_CHIPS_URL = "/bear/2/Chips%20by%20CreativeTrio%20-%20uF1dGn3HXi.glb";
+const CUB_COOKIE_URL = "/bear/2/Cookie%20by%20Poly%20by%20Google%20-%208Xmx93RrgDT.glb";
+const CUB_DONUT_URL = "/bear/2/Donut%20by%20Quaternius%20-%20UQRRrsP3wj.glb";
+const CUB_FRIES_URL = "/bear/2/French%20fries%20by%20Poly%20by%20Google%20-%20eLvKtdMFaXF.glb";
+const CUB_MARSHMALLOWS_URL = "/bear/2/Marshmallows%20by%20Jarlan%20Perez%20-%201KaEvyPT4BG.glb";
+const CUB_OPEN_BACKPACK_URL = "/bear/2/Open%20Backpack%20by%20Emmett%20%E2%80%9CTawpShelf%E2%80%9D%20Baber%20-%2026m92LMKK4e.glb";
+const CUB_PICNIC_BASKET_URL = "/bear/2/Picnic%20Basket%20by%20Poly%20by%20Google%20-%20aWBGhxXig8y.glb";
+const CUB_PICNIC_TABLE_URL = "/bear/2/Picnic%20Table%20by%20J-Toastie%20-%20GQieALI2C4.glb";
+const CUB_PRETZEL_URL = "/bear/2/Pretzal%20by%20Jarlan%20Perez%20-%208G1Z7FGHWt-.glb";
+const CUB_SMORE_URL = "/bear/2/S%27more%20-%20toasted%20by%20sirkitree%20-%204Er9zaRIQj-.glb";
+const CUB_SANDWICH_COOKIE_URL = "/bear/2/Sandwich%20Cookie%20by%20Poly%20by%20Google%20-%201_1zbKquoYZ.glb";
+const CUB_MATCHBOX_URL = "/bear/2/matchbox%20open%20by%20Justin%20Randall%20-%201Jv2TQvqA_5.glb";
+const CUB_TRASH_BAG_URL = "/bear/2/trah%20bag%20grey%20by%20Jens%20Kull%20-%20axTuG36RXnN.glb";
 
 type ArcadeCubProp = {
   name: string;
@@ -309,8 +500,12 @@ const WIRE_RADIUS = 0.0042;
  * screen, not a decorator's guess.
  */
 const ARCADE_SCREENS: CrtScreen[] = [
-  { content: "/gifs/twilio.gif",    tint: "#ff5f5f", glow: 1.0 },
-  { content: "/gifs/summit.gif",    tint: "#8bd0ff", glow: 0.95 },
+  // Right CRT. Tint sampled off the artwork itself: melee.png averages a
+  // warm tan once the near-black letterbox pixels are ignored, scaled up
+  // to something a lit tube would actually throw.
+  { content: "/bear/2/melee.png", tint: "#e6cd8f", glow: 1.0 },
+  // Left CRT: a real video rather than a GIF, so it actually moves.
+  { content: "/bear/2/summit.mp4", tint: "#8bd0ff", glow: 0.95 },
   { content: "/gifs/darktower.gif", tint: "#ffb46f", glow: 0.9 },
   { content: "/gifs/regions.gif",   tint: "#8affc0", glow: 0.95 },
 ];
@@ -572,6 +767,10 @@ interface AnimalPlacement {
   animationOffset?: number;
   /** playback rate; keep these mutually non-integer so instances never re-sync */
   animationSpeed?: number;
+  /** hold the clip at a single frame - bones are static, no cycling. Used by
+   *  the fish-holder bears so the lab-authored pose reads clean instead of
+   *  the sit_log arms swinging through their delta every second. */
+  animationHoldFrame?: number;
   /** derive Y from the bench top instead of using position[1] */
   sitOnBench?: boolean;
   /** which of the three benches it's sitting on - picks the right seat height when
@@ -604,7 +803,7 @@ const ANIMALS: AnimalPlacement[] = [
   { url: DOE_URL, position: [1.6, 0, 2.4], rotationY: Math.PI, scale: 1.45, label: "doe next to front log", flatShading: true },
   { url: RACCOON_URL, position: [-0.2, 0.55, 2.4], rotationY: Math.PI, scale: 0.35, label: "raccoon on front log", animation: "idle" },
   {
-    url: BEAR_URL, position: [0.4, 0, 2.4], bench: 0, rotationY: Math.PI, scale: 0.5,
+    url: BEAR_URL_FRONT_LOG, position: [0.4, 0, 2.4], bench: 0, rotationY: Math.PI, scale: 0.5,
     label: "bear on front log", animation: "sit_log", sitOnBench: true,
     animationOffset: 0, animationSpeed: 1, bearId: "front_log",
     prop: {
@@ -643,7 +842,7 @@ const ANIMALS: AnimalPlacement[] = [
     accessories: ["glasses"],
   },
   {
-    url: BEAR_URL, position: [2.078, 0, -1.2], bench: 2, rotationY: -Math.PI / 3, scale: 0.5,
+    url: BEAR_URL_BACK_RIGHT_LOG, position: [2.078, 0, -1.2], bench: 2, rotationY: -Math.PI / 3, scale: 0.5,
     label: "bear on back-right log", animation: "sit_log", sitOnBench: true,
     animationOffset: 4.3, animationSpeed: 1.07, bearId: "back_right_log",
     prop: {
@@ -1095,16 +1294,31 @@ function ObjectDragLayer({
 }) {
   const dragPlane = useMemo(() => new THREE.Plane(), []);
   const intersection = useMemo(() => new THREE.Vector3(), []);
-  // Absolute cap on how far a single drag can push the object from its start
-  // position, in the parent's local frame. Prevents grazing-camera teleports
-  // without oscillating: we always compute `localPoint - startLocalPoint`
-  // (delta from drag start) and clamp that to +/- MAX_DRAG_DISTANCE per axis.
-  // The earlier attempt marched a lastLocalPoint reference by the capped step
-  // each pointer event, which caused a sign-flip bug: a jittery grazing-angle
-  // intersection could make the step's sign alternate frame-to-frame, so the
-  // object drifted the WRONG direction while the pointer moved consistently
-  // the other way. Sticking to a start-anchored delta eliminates that.
-  const MAX_DRAG_DISTANCE = 20;
+  // --- why objects used to shoot off across the map -------------------------
+  //
+  // The xz drag plane is horizontal (normal 0,1,0) and this camera looks along
+  // it at a shallow angle: it sits at locationCameraHeight ~4.55 aiming at
+  // ~0.9, from ~16 back, so the view is only about 13 degrees below level. As
+  // the pointer approaches the horizon the ray becomes parallel to the plane
+  // and the intersection races off toward infinity - a couple of pixels of
+  // mouse movement becoming tens of world units. Above the horizon it flips
+  // sign and lands BEHIND the camera.
+  //
+  // The old code only had MAX_DRAG_DISTANCE = 20 to lean on, which didn't stop
+  // the teleport so much as decide how far it went - and 20 units is wider
+  // than the entire camp, which is how the cabin ended up 26 units out.
+  //
+  // Fixed at the source instead: an intersection is only accepted when the ray
+  // meets the plane at a usable angle and lands somewhere plausible. Drag past
+  // that and the object simply stops following rather than flinging itself.
+  //
+  /** sin of the ray/plane angle below which the hit point is unusable (~4.6 deg). */
+  const MIN_PLANE_INCIDENCE = 0.08;
+  /** hits further than this from the camera are the runaway, not a real target. */
+  const MAX_PICK_DISTANCE = 80;
+  /** Cap on total displacement from where the drag began, per axis. Generous
+   *  enough for any real placement; release and re-drag to go further. */
+  const MAX_DRAG_DISTANCE = 8;
   const dragRef = useRef<{
     name: string;
     parent: THREE.Object3D;
@@ -1124,7 +1338,13 @@ function ObjectDragLayer({
   };
 
   const intersectDragPlane = (event: ThreeEvent<PointerEvent>) => {
-    return event.ray.intersectPlane(dragPlane, intersection) ? intersection.clone() : null;
+    // Reject grazing rays before trusting the intersection at all: near the
+    // horizon the hit point is numerically meaningless and jumps enormously
+    // for sub-pixel pointer movement.
+    if (Math.abs(event.ray.direction.dot(dragPlane.normal)) < MIN_PLANE_INCIDENCE) return null;
+    if (!event.ray.intersectPlane(dragPlane, intersection)) return null;
+    if (intersection.distanceTo(event.ray.origin) > MAX_PICK_DISTANCE) return null;
+    return intersection.clone();
   };
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
@@ -1684,13 +1904,18 @@ function CampfireSceneModel({
       rotation={[0, config.sceneRotationY, 0]}
       scale={config.sceneScale}
       onClick={(e: THREE.Event & { object: THREE.Object3D; stopPropagation: () => void }) => {
-        e.stopPropagation();
+        // stopPropagation ONLY once we've actually resolved a name. It used to
+        // fire unconditionally at the top, which meant a click landing on any
+        // mesh in this GLB that doesn't walk up to a named node was swallowed:
+        // nothing got selected, AND nothing behind it ever saw the click. From
+        // the outside that reads as "clicking this tree does nothing".
         let node: THREE.Object3D | null = e.object;
         while (node) {
           // Duplicate clones carry their id as the top-level name; check that
           // first so a click on a duplicate selects the duplicate itself and
           // not the underlying source it was cloned from.
           if (node.name.startsWith(DUPLICATE_PREFIX)) {
+            e.stopPropagation();
             onSelect(node.name);
             return;
           }
@@ -1699,6 +1924,7 @@ function CampfireSceneModel({
             // (log + flame + sparks + glow) so it can be selected and dragged
             // as one thing. The individual bonfire override still handles
             // scale/rotation independently.
+            e.stopPropagation();
             onSelect(node.name === "bonfire" ? "campfire" : node.name);
             return;
           }
@@ -1857,17 +2083,28 @@ function CampfireFlame({
   );
 }
 
-function createGlowTexture() {
+/**
+ * Radial falloff for the ground glow, painted WHITE so the disc can be tinted
+ * from config instead of having one orange baked in.
+ *
+ * `falloff` is the exponent on (1 - t): higher pulls the light into a tighter
+ * hot core, lower spreads it into a broad wash. 1.4 reproduces the original
+ * hand-picked stops almost exactly (it hit 0.55 alpha at t=0.35 and 0.18 at
+ * t=0.7; this curve gives 0.55 and 0.19), so the default look is unchanged.
+ */
+function createGlowTexture(falloff: number) {
   const size = 256;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d")!;
   const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  gradient.addColorStop(0, "rgba(255,140,50,1)");
-  gradient.addColorStop(0.35, "rgba(255,110,30,0.55)");
-  gradient.addColorStop(0.7, "rgba(255,90,20,0.18)");
-  gradient.addColorStop(1, "rgba(255,80,15,0)");
+  const p = Math.max(0.05, falloff);
+  const STEPS = 12;
+  for (let i = 0; i <= STEPS; i++) {
+    const t = i / STEPS;
+    gradient.addColorStop(t, `rgba(255,255,255,${Math.pow(1 - t, p).toFixed(4)})`);
+  }
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, size, size);
   const texture = new THREE.CanvasTexture(canvas);
@@ -1875,30 +2112,79 @@ function createGlowTexture() {
   return texture;
 }
 
-function FireGlowDisc({ opacity, x, y, z, scale }: { opacity: number; x: number; y: number; z: number; scale: number }) {
+interface FireGlowDiscProps {
+  opacity: number; x: number; y: number; z: number; scale: number;
+  colorR: number; colorG: number; colorB: number;
+  width: number; length: number; rotY: number; falloff: number;
+  flicker: number; breathe: number; offsetX: number; offsetZ: number;
+  /**
+   * Scale already baked into this disc's ancestors, divided back out so Width
+   * and Length always mean the same thing in world units.
+   *
+   * The campfire's disc has no scaled ancestor, so it leaves this at 1. The
+   * arcade's does: its whole fire is a Selectable carrying arcadeCampfireScale
+   * AND an object override currently sitting at 0.22, so a Width of 8 was
+   * landing as 8 x 0.49 x 0.22 = 0.86 world units - a sub-metre smudge on a
+   * 39-unit ground, which is why the arcade sliders looked like they did
+   * nothing. Shrinking the log pile should not shrink the pool of light it
+   * throws, so the disc opts out of that scale.
+   */
+  worldScale?: number;
+}
+
+/**
+ * The pool of firelight on the ground. Width and length are separate so the
+ * pool can be stretched along the camp rather than forced circular; flicker and
+ * breathe are multipliers on the two animations (0 = hold perfectly still).
+ */
+function FireGlowDisc(p: FireGlowDiscProps) {
   const meshRef = useRef<THREE.Mesh>(null);
-  const texture = useMemo(() => createGlowTexture(), []);
-  const paramsRef = useRef({ opacity, scale });
-  paramsRef.current = { opacity, scale };
+  // Only repaints when the falloff changes - not on every drag of the others.
+  const texture = useMemo(() => createGlowTexture(p.falloff), [p.falloff]);
+  useEffect(() => () => texture.dispose(), [texture]);
+  const color = useMemo(
+    () => new THREE.Color().setRGB(p.colorR, p.colorG, p.colorB),
+    [p.colorR, p.colorG, p.colorB]
+  );
+  const paramsRef = useRef(p);
+  paramsRef.current = p;
 
   useFrame(({ clock }) => {
     if (!meshRef.current) return;
     const material = meshRef.current.material as THREE.MeshBasicMaterial;
-    const { opacity: op, scale: sc } = paramsRef.current;
-    const flicker = 0.9 + Math.sin(clock.elapsedTime * 7.4) * 0.15 + Math.sin(clock.elapsedTime * 14.2) * 0.075;
-    material.opacity = op * flicker;
-    const breathe = 1 + Math.sin(clock.elapsedTime * 3.1) * 0.04;
-    meshRef.current.scale.set(9 * sc * breathe, 6.3 * sc * breathe, 1);
+    const c = paramsRef.current;
+    const t = clock.elapsedTime;
+    const flicker = 1 + c.flicker * (
+      Math.sin(t * 7.4) * 0.15 + Math.sin(t * 14.2) * 0.075 - 0.1);
+    material.opacity = c.opacity * flicker;
+    const breathe = 1 + c.breathe * Math.sin(t * 3.1) * 0.04;
+    // NB: coalesce BEFORE using it. Testing `Math.abs(c.worldScale ?? 1)` but
+    // then returning `c.worldScale` handed back undefined for any caller that
+    // omits the prop (the campfire does), and width / undefined is NaN - which
+    // set the mesh scale to NaN and made the whole disc disappear.
+    const ws = typeof c.worldScale === "number" && Math.abs(c.worldScale) > 1e-4
+      ? c.worldScale
+      : 1;
+    meshRef.current.scale.set(
+      (c.width * c.scale * breathe) / ws,
+      (c.length * c.scale * breathe) / ws,
+      1
+    );
   });
 
   return (
-    <mesh ref={meshRef} position={[x, y, z]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={2}>
+    <mesh
+      ref={meshRef}
+      position={[p.x + p.offsetX, p.y, p.z + p.offsetZ]}
+      rotation={[-Math.PI / 2, 0, p.rotY]}
+      renderOrder={2}
+    >
       <planeGeometry args={[1, 1]} />
       <meshBasicMaterial
         map={texture}
-        color="#ff7a1f"
+        color={color}
         transparent
-        opacity={opacity}
+        opacity={p.opacity}
         blending={THREE.AdditiveBlending}
         depthWrite={false}
       />
@@ -1915,48 +2201,26 @@ function FireGlowDisc({ opacity, x, y, z, scale }: { opacity: number; x: number;
  *  and re-running `updateProjectionMatrix()` after any frustum edit. */
 function WorldLights({ config }: { config: CampfireSceneConfig }) {
   const { gl } = useThree();
-  const moon = useRef<THREE.DirectionalLight>(null);
+
   // Master enable: flips gl.shadowMap.enabled so a slow client can drop shadow
-  // renders entirely without unmounting the lights.
+  // renders entirely without unmounting the lights. The fire is the scene's
+  // only shadow caster now - see CampfireLights.
   useEffect(() => {
     gl.shadowMap.enabled = config.shadowsEnabled >= 0.5;
   }, [gl, config.shadowsEnabled]);
-  // Frustum edits need updateProjectionMatrix or the depth camera keeps its
-  // old bounds. Runs after r3f has applied the shadow-camera-* prop updates.
-  useEffect(() => {
-    moon.current?.shadow.camera.updateProjectionMatrix();
-  }, [
-    config.moonShadowFrustum,
-    config.moonShadowNear,
-    config.moonShadowFar,
-  ]);
-  const moonCasts = config.moonCastShadow >= 0.5 && config.shadowsEnabled >= 0.5;
-  const mapSize = Math.max(64, Math.round(config.moonShadowMapSize));
+
   return (
     <>
       <ambientLight intensity={config.ambientIntensity} color="#1b2944" />
       <hemisphereLight intensity={config.ambientIntensity * 2.6} color="#49688f" groundColor="#160b10" />
+      {/* Moon is a plain fill light: something to see by while developing, and
+          a cool counterpoint to the fire. It deliberately casts NO shadow - a
+          directional shadow map can't usefully cover a ring of locations
+          15 units out, and the sliders for it were dead weight. */}
       <directionalLight
-        ref={moon}
-        // key remount when mapSize changes so three allocates a fresh shadow
-        // render target at the new resolution (mapSize doesn't hot-swap).
-        key={`moon-${mapSize}`}
         position={[config.moonX, config.moonY, config.moonZ]}
         intensity={config.moonIntensity}
         color="#82aaff"
-        castShadow={moonCasts}
-        shadow-mapSize-width={mapSize}
-        shadow-mapSize-height={mapSize}
-        shadow-bias={config.moonShadowBias}
-        shadow-normalBias={config.moonShadowNormalBias}
-        shadow-radius={config.moonShadowRadius}
-        shadow-intensity={config.moonShadowIntensity}
-        shadow-camera-left={-config.moonShadowFrustum}
-        shadow-camera-right={config.moonShadowFrustum}
-        shadow-camera-top={config.moonShadowFrustum}
-        shadow-camera-bottom={-config.moonShadowFrustum}
-        shadow-camera-near={config.moonShadowNear}
-        shadow-camera-far={config.moonShadowFar}
       />
     </>
   );
@@ -1971,6 +2235,16 @@ function CampfireLights({ config }: { config: CampfireSceneConfig }) {
   const fireLight = useRef<THREE.PointLight>(null);
   const farGlow = useRef<THREE.PointLight>(null);
   const warmSpot = useRef<THREE.SpotLight>(null);
+  const warmTarget = useRef<THREE.Object3D>(null);
+  // Every light here is placed RELATIVE TO THE FLAME (flameX/Y/Z), and the whole
+  // rig now lives inside the "campfire" group, so dragging the campfire carries
+  // the light, the glow and the shadows with it. Before this the lights were a
+  // sibling of that group with absolute location-0 coordinates, so a drag moved
+  // the log and the flame but left the light - and every shadow it threw -
+  // behind at the old spot.
+  const fx = config.flameX;
+  const fy = config.flameY;
+  const fz = config.flameZ;
   // The fire is the primary in-scene light source, so it's the natural
   // shadow caster. A point light does six cubemap renders per frame, so keep
   // the map modest (1024) and near/far tight (matched to fireLightReach).
@@ -1979,6 +2253,19 @@ function CampfireLights({ config }: { config: CampfireSceneConfig }) {
   useEffect(() => {
     fireLight.current?.shadow.camera.updateProjectionMatrix();
   }, [config.fireLightReach]);
+
+  // A three.js SpotLight aims at `light.target`, which defaults to a bare
+  // Object3D that is never added to the scene graph - so its world matrix stays
+  // identity and the light points at WORLD origin. The location ring puts the
+  // campfire at locationRadius (~15 units) away from world origin, so the shadow
+  // light was firing almost horizontally past the camp toward the middle of the
+  // ring, which is why its shadows pointed nowhere near the fire. Aim it at the
+  // flame explicitly; the target sits in the campfire group so it tracks drags.
+  useEffect(() => {
+    if (!warmSpot.current || !warmTarget.current) return;
+    warmSpot.current.target = warmTarget.current;
+    warmSpot.current.target.updateMatrixWorld();
+  }, []);
 
   useFrame(({ clock }) => {
     const time = clock.elapsedTime;
@@ -1991,9 +2278,9 @@ function CampfireLights({ config }: { config: CampfireSceneConfig }) {
       fireLight.current.intensity = config.fireIntensity * flicker;
       fireLight.current.decay = config.fireDecay;
       fireLight.current.distance = config.fireLightReach;
-      fireLight.current.position.x = config.fireLightX + Math.sin(time * 3.3) * 0.05 * config.flickerAmount;
-      fireLight.current.position.y = config.fireLightY;
-      fireLight.current.position.z = config.fireLightZ + Math.cos(time * 2.7) * 0.05 * config.flickerAmount;
+      fireLight.current.position.x = fx + config.fireLightX + Math.sin(time * 3.3) * 0.05 * config.flickerAmount;
+      fireLight.current.position.y = fy + config.fireLightY;
+      fireLight.current.position.z = fz + config.fireLightZ + Math.cos(time * 2.7) * 0.05 * config.flickerAmount;
     }
 
     if (farGlow.current) {
@@ -2001,7 +2288,7 @@ function CampfireLights({ config }: { config: CampfireSceneConfig }) {
       farGlow.current.intensity = config.farGlowIntensity * slowFlicker;
       farGlow.current.decay = config.farGlowDecay;
       farGlow.current.distance = config.farGlowReach;
-      farGlow.current.position.set(config.fireLightX, config.fireLightY, config.fireLightZ);
+      farGlow.current.position.set(fx + config.fireLightX, fy + config.fireLightY, fz + config.fireLightZ);
     }
 
     if (warmSpot.current) {
@@ -2016,7 +2303,7 @@ function CampfireLights({ config }: { config: CampfireSceneConfig }) {
         // Remount when the shadow map size changes so three re-allocates
         // the cubemap render target at the new resolution.
         key={`fire-${fireMapSize}`}
-        position={[config.fireLightX, config.fireLightY, config.fireLightZ]}
+        position={[fx + config.fireLightX, fy + config.fireLightY, fz + config.fireLightZ]}
         color="#ff781f"
         intensity={config.fireIntensity}
         distance={config.fireLightReach}
@@ -2032,15 +2319,17 @@ function CampfireLights({ config }: { config: CampfireSceneConfig }) {
       />
       <pointLight
         ref={farGlow}
-        position={[config.fireLightX, config.fireLightY, config.fireLightZ]}
+        position={[fx + config.fireLightX, fy + config.fireLightY, fz + config.fireLightZ]}
         color="#ff9a45"
         intensity={config.farGlowIntensity}
         distance={config.farGlowReach}
         decay={config.farGlowDecay}
       />
+      {/* What the shadow light aims at: the flame itself. */}
+      <object3D ref={warmTarget} position={[fx, fy, fz]} />
       <spotLight
         ref={warmSpot}
-        position={[config.warmLightX, config.warmLightY, config.warmLightZ]}
+        position={[fx + config.warmLightX, fy + config.warmLightY, fz + config.warmLightZ]}
         color="#ff8a2a"
         intensity={config.fireIntensity * 0.68}
         distance={config.warmLightReach}
@@ -2406,6 +2695,135 @@ function GLBModel({ url }: { url: string }) {
  * because the effective triangle winding is inverted vs what the culling
  * expects, and pointer events go through the model instead of selecting it.
  */
+/**
+ * The arcade's wooden cabin, with its lantern actually lit.
+ *
+ * The GLB already ships a "lattern-light" material carrying an emissiveFactor,
+ * but at default intensity and with tone mapping applied it just reads as pale
+ * yellow paint. Boosting emissiveIntensity and opting out of tone mapping is
+ * what makes the glass read as a lamp that is ON; the point light beside it is
+ * what makes the cabin wall around it agree.
+ *
+ * Lamp coordinates are in the GLB's OWN space (its cabin spans ~140 units), so
+ * the numbers are large - they are divided down by the Selectable's 0.1 base
+ * scale and the object override on top. Measured off the model: the lantern
+ * bulb sits at (16.05, 33.04, 47.62).
+ */
+function LitWoodenCabin({ config }: { config: CampfireSceneConfig }) {
+  const gltf = useGLTF(WOODEN_CABIN_URL) as unknown as { scene: THREE.Group };
+  const model = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
+
+  useEffect(() => {
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.castShadow = true;
+      m.receiveShadow = true;
+      // DoubleSide for the same reason MirroredGLBModel does it: the parent
+      // group has a negative X scale, which flips triangle winding, and
+      // FrontSide culling would make the raycaster miss the cabin entirely.
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      const swapped = mats.map((mat) => {
+        if (!mat) return mat;
+        const std = mat as THREE.MeshStandardMaterial;
+        // The bulb AND the glass around it. Cloned first - Object3D.clone()
+        // shares materials, so editing in place would leak the glow into any
+        // other user of this GLB.
+        if (std.name === "lattern-light" || std.name === "glass") {
+          const lit = std.clone();
+          lit.side = THREE.DoubleSide;
+          lit.toneMapped = false;
+          if (lit.name === "glass") {
+            // The bulb is a 1.3-unit cylinder buried inside the lantern, mostly
+            // hidden behind the frame's bars - lighting it alone leaves the
+            // lamp reading as a dark box with a bright wall behind it. Making
+            // the GLASS carry the glow is what sells "on", because the glass is
+            // the surface you can actually see from outside.
+            lit.transparent = true;
+            lit.opacity = 0.55;
+            // Its baked baseColorTexture is a dim grey that drags the glow
+            // down; drop it so the emissive is what reads.
+            lit.map = null;
+            // Transparent + depthWrite would let the near pane hide the far
+            // one and the bulb between them.
+            lit.depthWrite = false;
+          }
+          lit.needsUpdate = true;
+          return lit;
+        }
+        std.side = THREE.DoubleSide;
+        std.needsUpdate = true;
+        return std;
+      });
+      m.material = Array.isArray(m.material) ? swapped : swapped[0]!;
+    });
+  }, [model]);
+
+  // Glass colour AND strength are live, so the lab sliders work without a
+  // reload. The colour is set explicitly rather than left at the GLB's baked
+  // emissiveFactor - that ships a muddy yellow-green, which reads as painted-on
+  // rather than lit. One colour drives both the glass and the light it throws,
+  // so a lamp can't end up glowing one colour and lighting the wall another.
+  useEffect(() => {
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      for (const mat of (Array.isArray(m.material) ? m.material : [m.material])) {
+        const std = mat as THREE.MeshStandardMaterial;
+        const isBulb = std?.name === "lattern-light";
+        const isGlass = std?.name === "glass";
+        if (!isBulb && !isGlass) continue;
+        std.emissive.setRGB(
+          config.arcadeCabinLampColorR,
+          config.arcadeCabinLampColorG,
+          config.arcadeCabinLampColorB
+        );
+        // Glass sits a little under the bulb so there's still a visible hot
+        // core behind it rather than one flat slab of colour.
+        std.emissiveIntensity = config.arcadeCabinLampEmissive * (isGlass ? 0.55 : 1);
+        if (isBulb) {
+          // Base colour was a neutral grey, which muddied the tint.
+          std.color.setRGB(
+            config.arcadeCabinLampColorR,
+            config.arcadeCabinLampColorG,
+            config.arcadeCabinLampColorB
+          );
+        }
+        std.needsUpdate = true;
+      }
+    });
+  }, [
+    model,
+    config.arcadeCabinLampEmissive,
+    config.arcadeCabinLampColorR,
+    config.arcadeCabinLampColorG,
+    config.arcadeCabinLampColorB,
+  ]);
+
+  const lampColor = useMemo(
+    () => new THREE.Color().setRGB(
+      config.arcadeCabinLampColorR, config.arcadeCabinLampColorG, config.arcadeCabinLampColorB),
+    [config.arcadeCabinLampColorR, config.arcadeCabinLampColorG, config.arcadeCabinLampColorB]
+  );
+
+  return (
+    <>
+      <primitive object={model} />
+      {/* Sits in the model's frame so it tracks the lantern through the mirror
+          and every scale above it. `distance` stays in WORLD units - three does
+          not scale light falloff by the parent transform. */}
+      <pointLight
+        position={[config.arcadeCabinLampX, config.arcadeCabinLampY, config.arcadeCabinLampZ]}
+        color={lampColor}
+        intensity={config.arcadeCabinLampIntensity}
+        distance={config.arcadeCabinLampDistance}
+        decay={config.arcadeCabinLampDecay}
+        castShadow={false}
+      />
+    </>
+  );
+}
+
 function MirroredGLBModel({ url }: { url: string }) {
   const gltf = useGLTF(url) as unknown as { scene: THREE.Group };
   const model = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
@@ -2688,6 +3106,336 @@ function RawGLB({ url }: { url: string }) {
  *  into its local so a Selectable at basePosition=[0,0,0] renders it in the
  *  right place, and gets a stable name (`camping_tree_<parentNodeName>`) so
  *  the dx/dy/dz/scale/hide overrides persist through save/load. */
+/**
+ * The real light fixtures inside camping.glb, keyed by MESH NAME.
+ *
+ * A fixture can own MORE THAN ONE mesh, and the camper van is exactly why:
+ * Object_335 and Object_337 are its left and right headlights - two meshes,
+ * 1.64 apart at the same height, each with its own grey housing below it and
+ * the van's bumper (Object_433, 2.47 wide) spanning both. They are one lamp
+ * with two bulbs, so they share one set of config keys. Giving them a block
+ * each meant "the headlights config" only ever moved one of them.
+ *
+ * Measured out of the file - world positions in the GLB's own space:
+ *   Object_335  (-2.28, 2.60,  4.41)  van headlight, left
+ *   Object_337  (-0.64, 2.60,  4.16)  van headlight, right
+ *   Object_133  ( 6.98, 1.47, -0.40)  small lamp, near the fire pit
+ *   Object_131  (10.94, 1.58,  5.57)  small lamp, far side of camp
+ *   Object_455  (-3.99, 3.92,  6.85)  hooded lantern on the signpost
+ *
+ * Material name cannot be used to pick these out: the van's headlights share
+ * the bare "Lamp" material with all 26 string bulbs. The `id` is what the
+ * config keys are built from - `deskLamp<id>Intensity` and friends - so
+ * renaming an id orphans its saved values.
+ */
+type DeskCampLamp = {
+  id: string;
+  /** The emissive glass. Gets a point light and the Emissive slider. */
+  meshes: readonly string[];
+  /** Housing, shade, bracket - no light of its own, but it has to travel with
+   *  the glass or moving a fixture leaves its body behind. Found by taking
+   *  every mesh whose centre is within 0.45 of the glass. */
+  body?: readonly string[];
+  label: string;
+};
+const DESK_CAMP_LAMPS: readonly DeskCampLamp[] = [
+  { id: "VanHeads", meshes: ["Object_335", "Object_337"],
+    body: ["Object_399", "Object_401"], label: "Camper van headlights (both)" },
+  { id: "SmallA", meshes: ["Object_133"],
+    body: ["Object_446", "Object_447", "Object_448", "Object_449"], label: "Small lamp · near the fire pit" },
+  { id: "SmallB", meshes: ["Object_131"],
+    body: ["Object_460", "Object_461", "Object_462", "Object_463"], label: "Lantern · on the dock" },
+  { id: "Hood", meshes: ["Object_455"],
+    body: ["Object_36", "Object_456"], label: "Hooded lantern · on the signpost" },
+];
+const DESK_CAMP_LAMP_MESHES = new Set(DESK_CAMP_LAMPS.flatMap((l) => l.meshes));
+/** Every mesh that moves with a fixture -> which fixture it belongs to. */
+const DESK_CAMP_LAMP_PARTS = new Map<string, string>(
+  DESK_CAMP_LAMPS.flatMap((l) => [...l.meshes, ...(l.body ?? [])].map((m) => [m, l.id] as const))
+);
+
+const WATER_MATERIALS = new Set(["Material.057"]);
+
+/**
+ * One long skinny light hanging over the camp's string-light run.
+ *
+ * A RectAreaLight rather than a point or spot, because the thing being
+ * imitated is a 6.8-unit line of 26 bulbs, and a point light at its centre
+ * reads as a single hot spot instead of an even wash along the run.
+ *
+ * Defaults are fitted to the actual bulbs, not eyeballed. Their centroid is
+ * (1.520, 3.366, -1.171) in camp space, they top out at y 4.05, and the
+ * principal axis through them in the XZ plane runs at 44.9 degrees - hence
+ * rotY 0.783. The run is 6.81 camp units end to end (it snakes, with 1.68 of
+ * sideways spread), which is 1.41 WORLD units at the diorama's current scale.
+ *
+ * Two things about RectAreaLight worth knowing before touching this:
+ *
+ *  - width/height are WORLD units. three builds the light's extent from
+ *    `matrix42.extractRotation(matrix4)` (WebGLLights.js:524), and
+ *    extractRotation normalises the basis, so the parent's 0.207 scale is
+ *    thrown away. Same trap as pointLight.distance. The visible proxy below
+ *    therefore has to divide the camp scale back OUT to match the light.
+ *  - it emits along local -Z. Object3D.lookAt on a light builds z = position
+ *    - target, so -Z is the aimed axis; rotX -PI/2 stands +Z up and points
+ *    the emitting face at the ground.
+ *
+ * RectAreaLight also needs RectAreaLightUniformsLib.init() before any material
+ * that receives it compiles, and it only lights MeshStandard/MeshPhysical -
+ * which is what the whole GLB imports as.
+ */
+/**
+ * The fish shoals. Each is an independent group with its own centre, path
+ * shape and population - which is what stops the whole thing reading as one
+ * carousel. Ids build the config keys (`deskFish<id><field>`), so renaming an
+ * id orphans its saved values.
+ */
+type DeskFishGroup = { id: string; label: string };
+const DESK_FISH_GROUPS: readonly DeskFishGroup[] = [
+  { id: "A", label: "Shoal · milling under the dock" },
+  { id: "B", label: "Loop · long lap past the lantern" },
+  { id: "C", label: "Spare shoal (off by default)" },
+];
+
+type FishParams = {
+  count: number; x: number; y: number; z: number;
+  rx: number; rz: number; rot: number; twist: number; scatter: number;
+  speed: number; scale: number; bob: number;
+  eight: number; wander: number; depthSpread: number; bank: number; yaw: number;
+};
+function readFishParams(config: CampfireSceneConfig, id: string): FishParams {
+  const c = config as unknown as Record<string, number>;
+  const v = (f: string, d: number) => c[`deskFish${id}${f}`] ?? d;
+  return {
+    count: v("On", 0) < 0.5 ? 0 : Math.max(0, Math.min(40, Math.round(v("Count", 0)))),
+    x: v("X", 0), y: v("Y", 0), z: v("Z", 0),
+    rx: v("RadiusX", 1), rz: v("RadiusZ", 1),
+    rot: v("Rotate", 0), twist: v("Twist", 1), scatter: v("Scatter", 0),
+    speed: v("Speed", 0.5), scale: v("Scale", 0.09), bob: v("Bob", 0.04),
+    eight: v("Eight", 0), wander: v("Wander", 0), depthSpread: v("DepthSpread", 0),
+    bank: v("Bank", 0.5), yaw: v("YawOffset", 0),
+  };
+}
+
+const PHI = 0.6180339887;
+const PLASTIC = 0.7548776662;
+
+/**
+ * Where fish `i` of `n` is at time `t`, in camp units.
+ *
+ * The first version of this was one shared circle and it showed - from a
+ * fixed camera a ring of concentric paths, all with their long axis on X,
+ * reads as fish shuttling back and forth rather than swimming. Four things
+ * break that up, and the last two are what actually fixed it:
+ *
+ *  - Half the shoal traces a figure-eight rather than a loop (z advances at
+ *    twice the rate of x - Lissajous 1:2). `g` is a golden-ratio sequence, so
+ *    which half a fish is in is fixed but scattered.
+ *  - Every other fish swims the opposite way round, so they meet and pass.
+ *  - `twist` rotates EACH fish's path by its own angle, from a second
+ *    low-discrepancy sequence (the plastic number, independent of the golden
+ *    one). Without this every eight lay on the same axis, which is the
+ *    back-and-forth.
+ *  - `scatter` moves each fish's path CENTRE off the group's, so the paths
+ *    interleave instead of sitting concentric.
+ *
+ * `rot` then turns the whole group as one - group B uses it to lay its long
+ * ellipse along the shoreline, which runs diagonally here.
+ *
+ * Pure in t on purpose: the caller samples either side of now and gets
+ * heading and turn rate by finite difference, which works whatever shape the
+ * knobs produce. An analytic tangent would need rederiving every time.
+ */
+function fishPathAt(i: number, n: number, t: number, P: FishParams): [number, number, number] {
+  const p = (2 * Math.PI * i) / n;
+  const g = (i * PHI) % 1;
+  const h = (i * PLASTIC) % 1;
+  const dir = i % 2 ? -1 : 1;
+  const jitter = 0.72 + 0.56 * g;
+  const eightMul = 1 + (g >= 0.5 ? P.eight : 0);
+  const theta = P.rot + 2 * Math.PI * ((g + h) % 1) * P.twist;
+  const tt = t * (0.85 + 0.3 * g) + p;
+
+  const bx = Math.cos(tt * dir) * P.rx * jitter;
+  const bz = Math.sin(tt * dir * eightMul) * P.rz * jitter;
+  const ct = Math.cos(theta), st = Math.sin(theta);
+
+  // The per-fish centre offset turns with the GROUP (rot) but not with the
+  // fish's own twist - otherwise twisting a path would also fling its centre.
+  const ox = P.scatter * P.rx * Math.cos(2 * Math.PI * h) * (0.4 + 0.6 * g);
+  const oz = P.scatter * P.rz * Math.sin(2 * Math.PI * h) * (0.4 + 0.6 * g);
+  const cr = Math.cos(P.rot), sr = Math.sin(P.rot);
+
+  return [
+    P.x + (ox * cr - oz * sr) + bx * ct - bz * st
+      + P.wander * P.rx * 0.45 * Math.sin(tt * 0.41 + p * 1.7),
+    P.y + P.depthSpread * (g - 0.5) + P.bob * Math.sin(tt * 2.1 + p),
+    P.z + (ox * sr + oz * cr) + bx * st + bz * ct
+      + P.wander * P.rz * 0.33 * Math.sin(tt * 0.33 + p * 2.3),
+  ];
+}
+
+/**
+ * One fish. fish.glb ships its own skeletal clip - "Armature|Swim" - so the
+ * tail motion is the model's; only the path is procedural.
+ *
+ * skeletonClone, NOT scene.clone(true): a plain clone of a SkinnedMesh keeps a
+ * reference to the SOURCE skeleton, so every copy would bend to whichever
+ * mixer ran last and the whole shoal would flex in lockstep. SkeletonUtils
+ * rebuilds the bone hierarchy per copy and rebinds the skin to it.
+ *
+ * The model's long axis is Z (1.15 x 2.67 x 7.98), so yawing to the travel
+ * direction points it along its own length. Which END is the nose is the
+ * model's business - that is what YawOffset is for.
+ */
+function SwimFish({ index, count, params }: { index: number; count: number; params: FishParams }) {
+  const gltf = useGLTF(FISH_URL) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
+  const scene = useMemo(() => skeletonClone(gltf.scene), [gltf.scene]);
+  const { actions } = useAnimations(gltf.animations, scene);
+  const grp = useRef<THREE.Group>(null);
+
+  useEffect(() => {
+    const action = actions["Armature|Swim"] ?? Object.values(actions)[0];
+    if (!action) return;
+    action.reset();
+    // Stagger the tail beat so the shoal doesn't pulse as one animal.
+    action.time = (index / Math.max(1, count)) * (action.getClip().duration || 1);
+    action.timeScale = 0.85 + 0.3 * ((index * PHI) % 1);
+    action.setEffectiveWeight(1);
+    action.play();
+    return () => { action.stop(); };
+  }, [actions, index, count]);
+
+  useFrame(({ clock }) => {
+    const g = grp.current;
+    if (!g) return;
+    const t = clock.elapsedTime * params.speed;
+    // Sample either side of now: the middle point is where the fish IS, the
+    // forward pair gives heading, and the spread of the two headings gives
+    // how hard it is turning - which is what it banks into.
+    const dt = 0.08;
+    const [xb, , zb] = fishPathAt(index, count, t - dt, params);
+    const [x, y, z] = fishPathAt(index, count, t, params);
+    const [xf, , zf] = fishPathAt(index, count, t + dt, params);
+    g.position.set(x, y, z);
+    const yaw = Math.atan2(xf - x, zf - z) + params.yaw;
+    const yawBack = Math.atan2(x - xb, z - zb) + params.yaw;
+    // Wrap before differencing, or the roll snaps whenever heading crosses +-PI.
+    let turn = yaw - yawBack;
+    while (turn > Math.PI) turn -= Math.PI * 2;
+    while (turn < -Math.PI) turn += Math.PI * 2;
+    const roll = Math.max(-0.7, Math.min(0.7, (turn / dt) * 0.12 * params.bank));
+    g.rotation.set(0, yaw, -roll);
+  });
+
+  return (
+    <group ref={grp} scale={params.scale}>
+      <primitive object={scene} />
+    </group>
+  );
+}
+
+/** One shoal. Count remounts its fish, which is fine - it is a lab knob. */
+function DeskFishShoal({ config, id }: { config: CampfireSceneConfig; id: string }) {
+  const params = readFishParams(config, id);
+  return (
+    <>
+      {Array.from({ length: params.count }, (_, i) => (
+        <SwimFish key={i} index={i} count={params.count} params={params} />
+      ))}
+    </>
+  );
+}
+
+function DeskWaterFish({ config }: { config: CampfireSceneConfig }) {
+  return (
+    <>
+      {DESK_FISH_GROUPS.map((g) => (
+        <DeskFishShoal key={g.id} config={config} id={g.id} />
+      ))}
+    </>
+  );
+}
+
+let rectAreaLightReady = false;
+function DeskStringLight({ config, campScale }: { config: CampfireSceneConfig; campScale: number }) {
+  if (!rectAreaLightReady) {
+    RectAreaLightUniformsLib.init();
+    rectAreaLightReady = true;
+  }
+  const color = useMemo(
+    () => new THREE.Color().setRGB(
+      config.deskStringLightColorR, config.deskStringLightColorG, config.deskStringLightColorB),
+    [config.deskStringLightColorR, config.deskStringLightColorG, config.deskStringLightColorB]
+  );
+  if (config.deskStringLightOn < 0.5) return null;
+  const ws = Math.abs(campScale) > 1e-6 ? campScale : 1;
+  const rot: [number, number, number] = [
+    config.deskStringLightRotX, config.deskStringLightRotY, config.deskStringLightRotZ,
+  ];
+  const pos: [number, number, number] = [
+    config.deskStringLightX, config.deskStringLightY, config.deskStringLightZ,
+  ];
+  return (
+    <group position={pos} rotation={rot}>
+      <rectAreaLight
+        width={config.deskStringLightWidth}
+        height={config.deskStringLightHeight}
+        color={color}
+        intensity={config.deskStringLightIntensity}
+      />
+      {/* Positioning aid, not scenery - flip "Show the bar" off when placed.
+          Unlit and untoneMapped so it reads as the light itself, and pushed a
+          hair along -Z so it never z-fights the light plane. The geometry is
+          divided by the camp scale so the bar you drag is exactly the size of
+          the light you get. */}
+      {config.deskStringLightShow >= 0.5 && (
+        <mesh position={[0, 0, -0.001]} renderOrder={3}>
+          <planeGeometry args={[config.deskStringLightWidth / ws, config.deskStringLightHeight / ws]} />
+          <meshBasicMaterial color={color} toneMapped={false} side={THREE.DoubleSide} transparent opacity={0.65} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+/** One camp lamp's point light. Split into its own component so each lamp
+ *  reads only its own config keys - a scrub of one lamp's slider re-renders
+ *  that light, not all five. */
+function DeskCampLampLight({
+  lamp,
+  position,
+  config,
+}: {
+  lamp: DeskCampLamp;
+  position: THREE.Vector3;
+  config: CampfireSceneConfig;
+}) {
+  const c = config as unknown as Record<string, number>;
+  const on = c[`deskLamp${lamp.id}On`] ?? 1;
+  // Same offset the meshes get, so the light stays inside its own lamp.
+  const off: [number, number, number] = [
+    c[`deskLamp${lamp.id}OffX`] ?? 0,
+    c[`deskLamp${lamp.id}OffY`] ?? 0,
+    c[`deskLamp${lamp.id}OffZ`] ?? 0,
+  ];
+  const r = c[`deskLamp${lamp.id}R`] ?? 1;
+  const g = c[`deskLamp${lamp.id}G`] ?? 0.72;
+  const b = c[`deskLamp${lamp.id}B`] ?? 0.35;
+  const color = useMemo(() => new THREE.Color().setRGB(r, g, b), [r, g, b]);
+  if (on < 0.5) return null;
+  return (
+    <pointLight
+      position={[position.x + off[0], position.y + off[1], position.z + off[2]]}
+      color={color}
+      intensity={c[`deskLamp${lamp.id}Intensity`] ?? 0.2}
+      distance={c[`deskLamp${lamp.id}Reach`] ?? 4.5}
+      decay={c[`deskLamp${lamp.id}Decay`] ?? 2}
+      castShadow={false}
+    />
+  );
+}
+
 function CampingWithSelectableTrees({
   url,
   config,
@@ -2698,21 +3446,32 @@ function CampingWithSelectableTrees({
   onSelect: (name: string) => void;
 }) {
   const gltf = useGLTF(url) as unknown as { scene: THREE.Group };
-  const { base, trees } = useMemo(() => {
+  const { base, trees, lampAnchors, lampParts, waterMeshes } = useMemo(() => {
     const cloned = gltf.scene.clone(true);
     const treeParentPattern = /^(Cylinder|Icosphere)\.\d+_\d+$/;
 
-    /** Loose "leans green" test — anything where g clearly beats both r and b
-     *  and green is at least mid-tone. Deliberately wider than the earlier
-     *  strict bounds since a few tree tops use brighter greens that were
-     *  falling outside `g < 0.6`, so the whole tree was skipped. */
+    /** "Leans green" test — g has to clearly beat both r and b. What matters is
+     *  the MARGIN, not the brightness: the brightness floor is only there to
+     *  stop near-black neutrals sneaking through.
+     *
+     *  Measured against camping.glb rather than guessed. The floor used to be
+     *  0.12, which silently dropped four trees whose foliage is Material.086,
+     *  linear (0.051, 0.114, 0.035) — an obvious forest green with a +0.063
+     *  margin, rejected purely for being dark. Each of those four is a brown
+     *  Material.044 trunk under dark green foliage, i.e. unmistakably a tree.
+     *
+     *  0.05 recovers exactly those four and nothing else: the next-nearest
+     *  candidates are the grey/mauve rocks (Material.058 at -0.032 and
+     *  Material.077 at -0.016) and the near-neutral Material.061 (+0.002), all
+     *  of which fail on margin no matter how low the floor goes. Dropping to
+     *  0.03 or 0.01 adds nothing further, so 0.05 sits safely below the cliff. */
     const isGreenish = (m: THREE.Material | THREE.Material[] | undefined) => {
       const mats = Array.isArray(m) ? m : m ? [m] : [];
       for (const mat of mats) {
         const std = mat as THREE.MeshStandardMaterial;
         const c = std?.color;
         if (!c) continue;
-        if (c.g > c.r && c.g > c.b && c.g > 0.12 && c.g - Math.max(c.r, c.b) > 0.03) return true;
+        if (c.g > c.r && c.g > c.b && c.g > 0.05 && c.g - Math.max(c.r, c.b) > 0.03) return true;
       }
       return false;
     };
@@ -2769,12 +3528,231 @@ function CampingWithSelectableTrees({
       trees.push({ name: `camping_tree_${tp.name.replace(/[^A-Za-z0-9_]/g, "_")}`, group: tp });
     }
 
-    return { base: cloned, trees };
-  }, [gltf.scene]);
+    // --- flatten the landscape above a ceiling -------------------------------
+    //
+    // The mountains are GONE FROM THE MODEL now, not hidden at runtime. The
+    // shipped camping.glb was opened in Blender and edited there: the 12 tree
+    // groups and 4 bushes were deleted outright, the two big Material.077 /
+    // Material.058 boulders behind the caravan (Object_139, top z 7.6, and
+    // Object_163, 5.3) went with them, and every remaining landscape vertex
+    // above z 2.0 was compressed to 15% of its height. The peaks that used to
+    // reach 11.3 now top out at 3.4, so the horizon behind the van is clear.
+    // art-backup/camping_original.glb is the pre-edit file.
+    //
+    // This pass survives as a trim: any landscape vertex above the ceiling is
+    // pulled DOWN to it. At the default 4.0 it is a no-op against the cleaned
+    // model (max 3.4) - drop the slider to shave the remaining rises flat.
+    //
+    // Geometry MUST be cloned first: Object3D.clone() shares geometry with the
+    // cached GLTF, so clamping in place would corrupt the model for every other
+    // consumer and survive a remount.
+    const LANDSCAPE_MATERIALS = new Set(["Material.108", "Material.077"]);
+    const ceiling = config.deskCampGroundMaxY;
+    cloned.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      const ms = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      if (!ms.some((m) => LANDSCAPE_MATERIALS.has((m as { name?: string })?.name ?? ""))) return;
+      const src = mesh.geometry.getAttribute("position");
+      if (!src) return;
+      let touched = false;
+      const geom = mesh.geometry.clone();
+      const pos = geom.getAttribute("position") as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        if (pos.getY(i) > ceiling) { pos.setY(i, ceiling); touched = true; }
+      }
+      if (!touched) { geom.dispose(); return; }
+      pos.needsUpdate = true;
+      geom.computeVertexNormals();
+      geom.computeBoundingBox();
+      geom.computeBoundingSphere();
+      mesh.geometry = geom;
+    });
+
+    // --- which Lamp meshes get a real light ---------------------------------
+    //
+    // 31 meshes in this GLB use a Lamp* material and only FIVE of them are
+    // real fixtures. The other 26 are the string-light run - bare-"Lamp"
+    // bulbs plus Lamp.005-.012, every one of them 0.127 across and strung at
+    // y 3.0-4.05. Those stay emissive-only: a light each was measured at
+    // about 4x the fragment cost, and a strung bulb throwing its own pool of
+    // light would look wrong anyway.
+    //
+    // Matching is by MESH NAME, not material, and that is deliberate. The two
+    // bollard posts in front of the van (Object_335/337) carry the SAME bare
+    // "Lamp" material as the string bulbs, so the old material-based filter
+    // could not tell them apart and simply left them dark. Mesh names are
+    // stable across the Blender round-trips this GLB has been through.
+    // See DESK_CAMP_LAMPS for the table and where each one sits.
+    cloned.updateMatrixWorld(true);
+    const byMesh = new Map<string, { position: THREE.Vector3; glass: THREE.Material[] }>();
+    cloned.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || !DESK_CAMP_LAMP_MESHES.has(mesh.name)) return;
+      // Each fixture gets its OWN copy of its head material. Two reasons:
+      // clone(true) copies material references, so writing emissiveIntensity
+      // straight on would leak into drei's cache; and the bare "Lamp"
+      // material is shared with all 26 string bulbs, so brightening a bollard
+      // would brighten the whole string run with it. Lamp.001 is likewise
+      // shared between the two small lamps.
+      const glass = (Array.isArray(mesh.material) ? mesh.material : [mesh.material])
+        .map((m) => (m as THREE.Material).clone());
+      mesh.material = Array.isArray(mesh.material) ? glass : glass[0];
+      // cloned sits at identity here, so its world position IS the local
+      // position the pointLight needs alongside <primitive object={base} />.
+      byMesh.set(mesh.name, { position: mesh.getWorldPosition(new THREE.Vector3()), glass });
+    });
+    // One anchor per BULB, but the lamp (and therefore the config block) is
+    // shared - so the van's two headlights get a light each off one set of
+    // sliders.
+    // Everything that travels when a fixture is nudged: glass AND housing.
+    // Offsets are authored in CAMP units but written to mesh.position, which
+    // is in the mesh's own scaled parent - so the parent's world scale is
+    // captured here to divide back out. Same correction the river needs.
+    const lampParts: { id: string; mesh: THREE.Object3D; base: THREE.Vector3; pscale: THREE.Vector3 }[] = [];
+    cloned.traverse((o) => {
+      const id = DESK_CAMP_LAMP_PARTS.get(o.name);
+      if (!id) return;
+      lampParts.push({
+        id,
+        mesh: o,
+        base: o.position.clone(),
+        pscale: o.parent ? o.parent.getWorldScale(new THREE.Vector3()) : new THREE.Vector3(1, 1, 1),
+      });
+    });
+
+    const lampAnchors = DESK_CAMP_LAMPS
+      .flatMap((lamp) => lamp.meshes.map((mesh) => ({ lamp, mesh, ...(byMesh.get(mesh) ?? {}) })))
+      .filter((a): a is { lamp: DeskCampLamp; mesh: string; position: THREE.Vector3; glass: THREE.Material[] } => !!a.position);
+
+    // --- the river ----------------------------------------------------------
+    //
+    // One mesh, "Object_119" under the River_35 node, material "Material.057"
+    // (a deep blue 0.01/0.05/0.47). It is a solid slab, not a plane: y -1.63
+    // to 0.56, so raising it lifts the whole body of water and its surface
+    // together. Nothing else in the GLB uses that material.
+    //
+    // Materials MUST be cloned here. clone(true) copies material REFERENCES,
+    // so writing opacity straight onto them would turn the water transparent
+    // in drei's cached GLTF - i.e. for every other consumer of this file, and
+    // it would survive a remount.
+    //
+    // The offset ALSO has to be divided by the scale stacked above the mesh,
+    // or the slider is wildly over-sensitive. Object_119 has no transform of
+    // its own; it hangs under "River_35" at scale 12.569, itself under
+    // "Sketchfab_model" at 1.178 - so one unit of mesh.position.y is 14.8
+    // units of camp space. (The two +-90 degree X rotations in that chain
+    // cancel, so River_35's local +Y really is camp +Y - otherwise this would
+    // need the full basis, not just the scale.) `cloned` sits at identity in
+    // this memo, so the parent's world scale IS that accumulated factor.
+    const waterMeshes: { mesh: THREE.Mesh; baseY: number; scaleY: number }[] = [];
+    const wsv = new THREE.Vector3();
+    cloned.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const ms = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      if (!ms.some((m) => WATER_MATERIALS.has((m as { name?: string })?.name ?? ""))) return;
+      mesh.material = Array.isArray(mesh.material)
+        ? mesh.material.map((m) => m.clone())
+        : (mesh.material as THREE.Material).clone();
+      const parentScaleY = mesh.parent ? mesh.parent.getWorldScale(wsv).y : 1;
+      waterMeshes.push({
+        mesh,
+        baseY: mesh.position.y,
+        scaleY: Math.abs(parentScaleY) > 1e-6 ? parentScaleY : 1,
+      });
+    });
+
+    return { base: cloned, trees, lampAnchors, lampParts, waterMeshes };
+  }, [gltf.scene, config.deskCampGroundMaxY]);
+
+  // Height and opacity are applied OUTSIDE that memo on purpose. Putting them
+  // in its dependency list would re-clone all 198 meshes and re-clamp the
+  // landscape geometry on every frame of a slider drag; this just writes two
+  // numbers onto one mesh.
+  // The glow ON the lamp itself, separate from the light it throws. camping.glb
+  // authors these unevenly - KHR_materials_emissive_strength is 4.01 on the
+  // bollards and 3.80 on the small lamps, but only 1.94 on the lamppost's
+  // hood, so the post read as unlit next to everything else even before its
+  // point light was turned up.
+  const cfgRec = config as unknown as Record<string, number>;
+  const offsetSignature = DESK_CAMP_LAMPS
+    .map((l) => `${cfgRec[`deskLamp${l.id}OffX`] ?? 0},${cfgRec[`deskLamp${l.id}OffY`] ?? 0},${cfgRec[`deskLamp${l.id}OffZ`] ?? 0}`)
+    .join("|");
+  useEffect(() => {
+    for (const { id, mesh, base, pscale } of lampParts) {
+      const sx = Math.abs(pscale.x) > 1e-6 ? pscale.x : 1;
+      const sy = Math.abs(pscale.y) > 1e-6 ? pscale.y : 1;
+      const sz = Math.abs(pscale.z) > 1e-6 ? pscale.z : 1;
+      mesh.position.set(
+        base.x + (cfgRec[`deskLamp${id}OffX`] ?? 0) / sx,
+        base.y + (cfgRec[`deskLamp${id}OffY`] ?? 0) / sy,
+        base.z + (cfgRec[`deskLamp${id}OffZ`] ?? 0) / sz
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lampParts, offsetSignature]);
+
+  const emissiveSignature = DESK_CAMP_LAMPS
+    .map((l) => cfgRec[`deskLamp${l.id}Emissive`] ?? 4)
+    .join(",");
+  useEffect(() => {
+    for (const { lamp, glass } of lampAnchors) {
+      const e = cfgRec[`deskLamp${lamp.id}Emissive`] ?? 4;
+      for (const m of glass) {
+        const std = m as THREE.MeshStandardMaterial;
+        if (std.emissive) std.emissiveIntensity = e;
+      }
+    }
+    // Keys are read dynamically, so the dep is a joined signature of the five
+    // values rather than a spread - a spread would make the dep array change
+    // length if the table ever did, which React forbids.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lampAnchors, emissiveSignature]);
+
+  useEffect(() => {
+    for (const { mesh, baseY, scaleY } of waterMeshes) {
+      // deskWaterHeight is in CAMP units; mesh.position is in its scaled
+      // parent's units, so divide the scale back out.
+      mesh.position.y = baseY + config.deskWaterHeight / scaleY;
+      const ms = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of ms) {
+        const mat = m as THREE.Material;
+        // Below 1 the slab joins the transparent pass, which is drawn after
+        // all opaque geometry - so the riverbed underneath is already in the
+        // buffer to blend against. depthWrite has to come off with it, or the
+        // water still occludes anything transparent behind it (the campfire's
+        // glow disc and sparks) even while you can see through it.
+        const seeThrough = config.deskWaterOpacity < 0.999;
+        mat.transparent = seeThrough;
+        mat.opacity = config.deskWaterOpacity;
+        mat.depthWrite = !seeThrough;
+        mat.needsUpdate = true;
+      }
+    }
+  }, [waterMeshes, config.deskWaterHeight, config.deskWaterOpacity]);
 
   return (
     <>
       <primitive object={base} />
+      {config.deskCampLampEnabled >= 0.5 && lampAnchors.map(({ lamp, mesh, position }) => (
+        <DeskCampLampLight key={`${lamp.id}-${mesh}`} lamp={lamp} position={position} config={config} />
+      ))}
+      {/* Sits in the camp's own frame alongside the lamps, so it tracks the
+          diorama when that is dragged, spun or resized. baseScale on the
+          camping Selectable is 1, so the accumulated scale IS its override. */}
+      <DeskStringLight
+        config={config}
+        campScale={config.objectOverrides?.["old_bear_camping"]?.scale ?? 1}
+      />
+      {/* Fish under the river surface. Camp-local like the lamps, so they
+          stay in the water when the diorama is moved. They swim BELOW y
+          0.561 (the surface), so they only read once deskWaterOpacity is
+          under 1 - and they sit in the open-water pocket NEAR the lamppost
+          rather than at it, because the post stands on the bank and terrain
+          covers the river directly under it. See the deskFish block in
+          sceneConfig.ts. */}
+      <DeskWaterFish config={config} />
       {trees.map((t) => (
         <Selectable
           key={t.name}
@@ -2968,13 +3946,27 @@ function HollowCaravan({ url, config }: { url: string; config: CampfireSceneConf
 }
 
 /**
- * The pickup truck, but with the arcade lit up: front headlights burn hot white
- * and the brake-light bar burns red, both driven by cloned emissive copies of
- * the model's own "Headlights"/"BrakeLight" materials so nothing else on the
- * truck goes glowy. A handful of tiny point/spot lights ride along in the
- * truck's local frame so the glow actually reaches nearby geometry - the
- * headlights throw a cone forward, the tail lights bleed a red wash back into
- * the open bed where the TVs sit.
+ * The pickup truck, lit for the arcade.
+ *
+ * IMPORTANT: this model has NO headlight geometry of its own. The shipped
+ * pickup_truck.glb carries six materials - Black, Bumpers, License, Main,
+ * Metal, Window - and that is all. The "Headlights" and "BrakeLight"
+ * materials this component used to clone into emissive copies live only in
+ * _pickup_truck_ORIGINAL.glb / _pickup_truck_MODIFIED.glb / pickup_truck_lit
+ * .glb, none of which are loaded any more, so those two branches matched
+ * nothing and have been deleted rather than left looking load-bearing.
+ *
+ * Every lamp you can see is therefore procedural, built in TruckLamps:
+ *   front pair  <LampPair> off truckHeadLamp*  (lens shape/placement)
+ *   rear pair   <LampPair> off truckTailLamp*
+ * and each LampPair draws BOTH sides, mirroring across the model's x=0 -
+ * which is the truck's real centreline, measured: its bounding box runs
+ * x -0.955..0.955.
+ *
+ * The light those lamps appear to cast is separate again: two spotLights off
+ * truckHeadLight* (positioned at +-truckHeadLightX) and one pointLight off
+ * truckTailLight*. So "the headlights" are three config groups, not one -
+ * lens shape, lens colour/glow, and the beam.
  *
  * Local coordinates (untransformed model space):
  *   front bumper strip     ~ (0, 0.96, +2.54)
@@ -3061,52 +4053,152 @@ function BedWallExtension({
   );
 }
 
+/**
+ * Body colour for the pickup, in LINEAR space (three's working space, which is
+ * what Color.setRGB writes into by default - same convention the bed-wall
+ * colour sliders already use).
+ *
+ * The GLB ships "Main" at linear (0.82, 0.12, 0.12) = sRGB #ea6161, a pale
+ * salmon. Its green channel is the problem: sRGB 0x61 is a lot of green, and
+ * under the campfire's orange key light (#ff781f) that lifts the whole body
+ * into orange. Dropping green and blue hard is what actually makes it read red
+ * at night rather than just darker.
+ */
+const TRUCK_BODY_COLOR_LINEAR: [number, number, number] = [0.55, 0.025, 0.02];
+
+/** What goes on the pickup's plates. */
+const TRUCK_PLATE_TEXT = "TWLO";
+
+/**
+ * The two plate slabs inside pickup_truck.glb's "License_Plate-material" mesh,
+ * measured off the file. Both slabs live in that one mesh, so there is no node
+ * per plate to hang a transform on - these are their centres in the mesh's own
+ * local space. That space is Z-up (the Sketchfab root carries the -90deg X
+ * conversion), so the plates face along local Y and local +Z is world up.
+ * Each slab is 0.2836 wide x 0.1423 tall x 0.0061 thick.
+ */
+const TRUCK_PLATE_W = 0.2836;
+const TRUCK_PLATE_H = 0.1423;
+const TRUCK_PLATE_T = 0.0061;
+const TRUCK_PLATES: { centre: [number, number, number]; outward: [number, number, number] }[] = [
+  { centre: [0, -2.1628, 0.3019], outward: [0, -1, 0] },
+  { centre: [-0.0004, 2.5455, 0.578], outward: [0, 1, 0] },
+];
+
+/** First descendant with this exact name, or null. The cast is what keeps
+ *  TS from narrowing the closure-assigned local to `never`. */
+function findByName(root: THREE.Object3D, name: string): THREE.Object3D | null {
+  let hit: THREE.Object3D | null = null;
+  root.traverse((o) => { if (!hit && o.name === name) hit = o; });
+  return hit as THREE.Object3D | null;
+}
+
+/** Paints a plate face: pale ground, dark border, evenly spaced glyphs. */
+function makePlateTexture(text: string) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;               // 2:1, matching the slab's 0.2836 x 0.1423
+  const g = canvas.getContext("2d");
+  if (!g) return null;
+  g.fillStyle = "#e6e4dc";
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  g.strokeStyle = "#16325c";
+  g.lineWidth = 12;
+  g.strokeRect(16, 16, canvas.width - 32, canvas.height - 32);
+  g.fillStyle = "#16325c";
+  g.font = "bold 132px Arial, Helvetica, sans-serif";
+  g.textBaseline = "middle";
+  // Glyph by glyph: ctx.letterSpacing isn't supported across all browsers we
+  // ship to, and a plate with no gaps between characters reads wrong.
+  const gap = 16;
+  const chars = [...text];
+  const widths = chars.map((ch) => g.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0) + gap * (chars.length - 1);
+  let x = (canvas.width - total) / 2;
+  chars.forEach((ch, i) => {
+    g.fillText(ch, x, canvas.height / 2 + 4);
+    x += widths[i] + gap;
+  });
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
 function LitPickupTruck({ config, onSelect }: { config: CampfireSceneConfig; onSelect: (name: string) => void }) {
   const gltf = useGLTF(PICKUP_TRUCK_URL) as unknown as { scene: THREE.Group };
   const model = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
   const cfgRef = useRef(config);
   cfgRef.current = config;
 
-  // Find the "Tailgate" node inside the cloned truck so a frame-loop can nudge
-  // its local transform from config. The GLB has both "Tailgate" (top-level
-  // node) and "Tailgate.002" (mesh) inside; we want the top-level node so
-  // transforms cascade properly.
-  const tailgate = useMemo(() => {
-    let found: THREE.Object3D | null = null;
-    model.traverse((o) => {
-      if (found) return;
-      if (o.name === "Tailgate" || o.name === "Tailgate.002") found = o;
-    });
-    return found;
+  // The GLB ships the tailgate already dropped open - a flat panel lying
+  // horizontally off the back at body height - which at this truck's pose read
+  // as a slab hanging under the tray. Detached from the clone outright rather
+  // than hidden, so it is not rendered, raycast or traversed at all. The GLB on
+  // disk is untouched, so /scene-lab/truck-editor still sees the node.
+  useEffect(() => {
+    const tg = findByName(model, "Tailgate") ?? findByName(model, "Tailgate.002");
+    tg?.parent?.remove(tg);
   }, [model]);
-  const tailgateBase = useMemo(() => {
-    if (!tailgate) return null;
-    return {
-      pos: (tailgate as THREE.Object3D).position.clone(),
-      rot: (tailgate as THREE.Object3D).rotation.clone(),
-      scl: (tailgate as THREE.Object3D).scale.clone(),
-    };
-  }, [tailgate]);
 
+  // Built once by the effect below, then resized every frame from config so the
+  // lab's plate sliders respond live instead of rebuilding the geometry.
+  const plateQuads = useRef<THREE.Mesh[]>([]);
+
+  // Stamp TRUCK_PLATE_TEXT onto both plates. The GLB's "License" material is a
+  // flat colour with no texture, and one mesh carries both slabs, so instead of
+  // fighting its UVs we lay a thin textured quad just proud of each face.
+  useEffect(() => {
+    if (typeof document === "undefined") return;       // never runs under SSR
+    const plate = findByName(model, "License_Plate-material");
+    if (!plate) return;
+    const tex = makePlateTexture(TRUCK_PLATE_TEXT);
+    if (!tex) return;
+
+    const up = new THREE.Vector3(0, 0, 1);   // local +Z is up in this mesh
+    const added: THREE.Mesh[] = [];
+    plateQuads.current = added;
+    for (const spec of TRUCK_PLATES) {
+      const outward = new THREE.Vector3(...spec.outward);
+      // right = up x outward keeps the basis right-handed, which is what makes
+      // the text read the correct way round when viewed from OUTSIDE each end -
+      // the front and rear plates face opposite ways, so a fixed rotation would
+      // have mirrored one of them.
+      const right = new THREE.Vector3().crossVectors(up, outward);
+      const quad = new THREE.Mesh(
+        new THREE.PlaneGeometry(TRUCK_PLATE_W * 0.84, TRUCK_PLATE_H * 0.78),
+        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0 })
+      );
+      quad.name = "truck_plate_text";
+      quad.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(right, up, outward)
+      );
+      quad.position
+        .set(...spec.centre)
+        .addScaledVector(outward, TRUCK_PLATE_T / 2 + 0.002);
+      quad.castShadow = false;
+      quad.receiveShadow = true;
+      plate.add(quad);
+      added.push(quad);
+    }
+    return () => {
+      plateQuads.current = [];
+      for (const q of added) {
+        plate.remove(q);
+        q.geometry.dispose();
+        (q.material as THREE.Material).dispose();
+      }
+      tex.dispose();
+    };
+  }, [model]);
+
+  // Separate from the tailgate loop below, which bails early when the model has
+  // no Tailgate node - the plates should still resize in that case.
   useFrame(() => {
-    if (!tailgate || !tailgateBase) return;
     const c = cfgRef.current;
-    const tg = tailgate as THREE.Object3D;
-    tg.position.set(
-      tailgateBase.pos.x + c.truckTailgateX,
-      tailgateBase.pos.y + c.truckTailgateY,
-      tailgateBase.pos.z + c.truckTailgateZ,
-    );
-    tg.rotation.set(
-      tailgateBase.rot.x + c.truckTailgateRotX,
-      tailgateBase.rot.y + c.truckTailgateRotY,
-      tailgateBase.rot.z + c.truckTailgateRotZ,
-    );
-    tg.scale.set(
-      tailgateBase.scl.x * c.truckTailgateScaleX,
-      tailgateBase.scl.y * c.truckTailgateScaleY,
-      tailgateBase.scl.z * c.truckTailgateScaleZ,
-    );
+    for (const q of plateQuads.current) {
+      q.scale.set(c.truckPlateScaleX, c.truckPlateScaleY, 1);
+    }
   });
 
   useEffect(() => {
@@ -3119,24 +4211,16 @@ function LitPickupTruck({ config, onSelect }: { config: CampfireSceneConfig; onS
       const swapped = mats.map((m) => {
         const mat = m as THREE.MeshStandardMaterial;
         if (!mat) return mat;
-        if (mat.name === "Headlights") {
-          // Hot white-yellow, bright enough to read as "on" against night grass.
-          const bright = mat.clone();
-          bright.emissive = new THREE.Color("#fff2c0");
-          bright.emissiveIntensity = 4.0;
-          bright.toneMapped = false;
-          bright.side = THREE.DoubleSide;
-          bright.needsUpdate = true;
-          return bright;
-        }
-        if (mat.name === "BrakeLight") {
-          const bright = mat.clone();
-          bright.emissive = new THREE.Color("#ff2b1f");
-          bright.emissiveIntensity = 3.4;
-          bright.toneMapped = false;
-          bright.side = THREE.DoubleSide;
-          bright.needsUpdate = true;
-          return bright;
+        if (mat.name === "Main") {
+          // The body panels - and Tailgate_mesh.001, which shares this
+          // material. Deliberately the ONLY material recoloured: Black,
+          // Bumpers, Metal, Window and License stay exactly as authored.
+          // Keeps DoubleSide for the same reason as the fallback below.
+          const body = mat.clone();
+          body.color.setRGB(...TRUCK_BODY_COLOR_LINEAR);
+          body.side = THREE.DoubleSide;
+          body.needsUpdate = true;
+          return body;
         }
         // Force every truck material to render both sides. The tail
         // housing (and other shells on this model) has ~150 boundary
@@ -3164,6 +4248,17 @@ function LitPickupTruck({ config, onSelect }: { config: CampfireSceneConfig; onS
   const headlightRTarget = useRef<THREE.Object3D>(null);
   const brake = useRef<THREE.PointLight>(null);
 
+  const headLightColor = useMemo(
+    () => new THREE.Color().setRGB(
+      config.truckHeadLightColorR, config.truckHeadLightColorG, config.truckHeadLightColorB),
+    [config.truckHeadLightColorR, config.truckHeadLightColorG, config.truckHeadLightColorB]
+  );
+  const tailLightColor = useMemo(
+    () => new THREE.Color().setRGB(
+      config.truckTailLightColorR, config.truckTailLightColorG, config.truckTailLightColorB),
+    [config.truckTailLightColorR, config.truckTailLightColorG, config.truckTailLightColorB]
+  );
+
   // Wire each spot's target to a real Object3D in the group. Without this,
   // three defaults `light.target` to a bare Object3D with no scene parent —
   // three then reads target.matrixWorld = target.matrix, which treats
@@ -3183,55 +4278,76 @@ function LitPickupTruck({ config, onSelect }: { config: CampfireSceneConfig; onS
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;
-    const jitter = 0.9 + Math.sin(t * 13.1) * 0.05 + Math.sin(t * 27.3) * 0.03;
-    if (headlightL.current) headlightL.current.intensity = 5.2 * jitter;
-    if (headlightR.current) headlightR.current.intensity = 5.2 * jitter;
-    if (brake.current) brake.current.intensity = 2.8 + Math.sin(t * 2.7) * 0.15;
+    const c = cfgRef.current;
+    const f = c.truckHeadLightFlicker;
+    const jitter = 1 + f * (Math.sin(t * 13.1) * 0.05 + Math.sin(t * 27.3) * 0.03 - 0.1);
+    if (headlightL.current) headlightL.current.intensity = c.truckHeadLightIntensity * jitter;
+    if (headlightR.current) headlightR.current.intensity = c.truckHeadLightIntensity * jitter;
+    if (brake.current) {
+      brake.current.intensity = c.truckTailLightIntensity + Math.sin(t * 2.7) * 0.15;
+    }
   });
 
   return (
     <group>
       <primitive object={model} />
 
-      {/* Headlights — two forward-facing spots at the front bumper strip.
-          After glTF Y-up conversion the truck body's forward is local +Z,
-          so we place lamps near the front bumper (Z≈+2.6, source & target)
-          and put each target further along +Z with the SAME X and Y as its
-          source. That guarantees parallel beams, road-flat, no splay. */}
+      {/* Headlights — two forward-facing spots. Forward is local +Z after the
+          glTF Y-up conversion. Each target is placed at the light's OWN x/y
+          plus the aim offset, so leaving aim X/Y at 0 keeps the two beams
+          parallel and road-flat instead of splayed toward a shared point. */}
       <spotLight
         ref={headlightL}
-        position={[0.62, 0.96, 2.60]}
-        color="#fff6d2"
-        intensity={5.2}
-        distance={12}
-        decay={1.6}
-        angle={0.6}
-        penumbra={0.55}
+        position={[config.truckHeadLightX, config.truckHeadLightY, config.truckHeadLightZ]}
+        color={headLightColor}
+        intensity={config.truckHeadLightIntensity}
+        distance={config.truckHeadLightDistance}
+        decay={config.truckHeadLightDecay}
+        angle={config.truckHeadLightAngle}
+        penumbra={config.truckHeadLightPenumbra}
         castShadow={false}
       />
-      <object3D ref={headlightLTarget} position={[0.62, 0.96, 10]} />
+      <object3D
+        ref={headlightLTarget}
+        position={[
+          config.truckHeadLightX + config.truckHeadLightAimX,
+          config.truckHeadLightY + config.truckHeadLightAimY,
+          config.truckHeadLightZ + config.truckHeadLightAimZ,
+        ]}
+      />
       <spotLight
         ref={headlightR}
-        position={[-0.62, 0.96, 2.60]}
-        color="#fff6d2"
-        intensity={5.2}
-        distance={12}
-        decay={1.6}
-        angle={0.6}
-        penumbra={0.55}
+        position={[-config.truckHeadLightX, config.truckHeadLightY, config.truckHeadLightZ]}
+        color={headLightColor}
+        intensity={config.truckHeadLightIntensity}
+        distance={config.truckHeadLightDistance}
+        decay={config.truckHeadLightDecay}
+        angle={config.truckHeadLightAngle}
+        penumbra={config.truckHeadLightPenumbra}
         castShadow={false}
       />
-      <object3D ref={headlightRTarget} position={[-0.62, 0.96, 10]} />
+      <object3D
+        ref={headlightRTarget}
+        position={[
+          -config.truckHeadLightX - config.truckHeadLightAimX,
+          config.truckHeadLightY + config.truckHeadLightAimY,
+          config.truckHeadLightZ + config.truckHeadLightAimZ,
+        ]}
+      />
 
       {/* Tail-light glow — red wash that spills back into the open bed. */}
       <pointLight
         ref={brake}
-        position={[0, 1.0, -2.55]}
-        color="#ff2a1c"
-        intensity={2.8}
-        distance={4.2}
-        decay={1.8}
+        position={[config.truckTailLightX, config.truckTailLightY, config.truckTailLightZ]}
+        color={tailLightColor}
+        intensity={config.truckTailLightIntensity}
+        distance={config.truckTailLightDistance}
+        decay={config.truckTailLightDecay}
       />
+
+      {/* The lamps themselves — extruded from config so the lens shape is
+          adjustable in the lab rather than baked into the GLB. */}
+      <TruckLamps config={config} />
 
       {/* Optional wall extension raising the inside bed walls above the top
           rail. Driven entirely by config so no GLB edit is needed to try
@@ -3311,10 +4427,7 @@ function Tent({
       const mesh = obj as THREE.Mesh;
       if (!mesh.isMesh || !mesh.material) return;
       mesh.castShadow = true;
-      // Tent fabric is a low-poly slanted plane. Received shadows on it come out
-      // as jagged staircase artifacts from the directional light's shadow map,
-      // so paint the tent as a flat lit surface instead.
-      mesh.receiveShadow = false;
+      mesh.receiveShadow = true;
       (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach((m) => {
         if (m.transparent) { m.transparent = false; m.needsUpdate = true; }
         if (!m.depthWrite) { m.depthWrite = true; m.needsUpdate = true; }
@@ -3600,7 +4713,6 @@ function GameCubeConsole({
   const groupRef = useRef<THREE.Group>(null);
   const cfg = useRef(config);
   cfg.current = config;
-  const tmp = useMemo(() => new THREE.Vector3(), []);
 
   useEffect(() => {
     model.traverse((o) => {
@@ -3923,59 +5035,24 @@ function Animal({
   const banjoFoodQuat = useRef<THREE.Quaternion | null>(null);
   const banjoFoodScale = useRef<THREE.Vector3 | null>(null);
 
-  // Per-bear bone overrides authored in /scene-lab/bear-pose. On the site each
-  // bear runs sit_log unpaused, so we compose `rest * delta` after the mixer
-  // to keep the lab's static pose visible on top of whatever the clip wrote.
-  const bearPoseBonesRef = useRef<Record<string, THREE.Object3D>>({});
-  const bearPoseRestQRef = useRef<Record<string, THREE.Quaternion>>({});
-  const bearPoseRestPRef = useRef<Record<string, THREE.Vector3>>({});
-
-  // Runtime overlay for bearPoses.json. Static imports get baked into the
-  // bundle at build time - Turbopack's HMR for JSON is unreliable in dev, so
-  // even after the lab saves, the compiled module sometimes serves stale
-  // data. On mount we refetch from the bear-pose API (which reads the JSON
-  // fresh from disk) and use that everywhere below. In production the API
-  // refuses and we fall through to the static import.
-  const [bearPosesLive, setBearPosesLive] = useState<Record<string, BearPoseEntry>>(BEAR_POSES);
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/dev/bear-pose")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (cancelled || !data || typeof data !== "object") return;
-        setBearPosesLive(data as Record<string, BearPoseEntry>);
-      })
-      .catch(() => { /* keep static import as fallback */ });
-    return () => { cancelled = true; };
-  }, []);
-
-  // Stringified list of bone names authored for this bear in the JSON. Used as
-  // a useEffect dep so bone discovery re-runs on HMR when bearPoses.json gains
-  // a new bone (e.g. hand_L for hand curl). Recomputed every render rather than
-  // memoized on bearId, because HMR replaces BEAR_POSES with a new object whose
-  // bones set may differ even though the bearId is unchanged.
-  const bearPoseBoneKeys = Object.keys(
-    (placement.bearId ? bearPosesLive[placement.bearId] : undefined)?.bones ?? {},
-  ).sort().join("|");
-
-  useEffect(() => {
-    bearPoseBonesRef.current = {};
-    bearPoseRestQRef.current = {};
-    bearPoseRestPRef.current = {};
-    const entry = placement.bearId ? bearPosesLive[placement.bearId] : undefined;
-    const bones = entry?.bones;
-    if (!bones) return;
-    const wanted = new Set(Object.keys(bones));
-    if (wanted.size === 0) return;
-    model.traverse((o) => {
-      if (!wanted.has(o.name)) return;
-      const b = o as THREE.Bone;
-      if (!b.isBone) return;
-      bearPoseBonesRef.current[o.name] = b;
-      bearPoseRestQRef.current[o.name] = b.quaternion.clone();
-      bearPoseRestPRef.current[o.name] = b.position.clone();
-    });
-  }, [model, placement.bearId, bearPoseBoneKeys, bearPosesLive]);
+  // Per-bear pose is now baked directly into per-bear GLBs by
+  // /api/dev/bake-bear-pose (invoked when the lab saves). Site loads the
+  // baked GLB via placement.url and the mixer plays sit_log; the baked
+  // bones sit at `rest * delta` for every frame thanks to constant
+  // fcurves in the clip. No runtime overlay needed - see BEAR_URL_FRONT_LOG.
+  // BEAR_POSES is still consumed below for the socket-prop transform merge.
+  //
+  // Food-rotation damping: when foodRotationScale < 1 the socket bone is
+  // slerped back toward rest each frame so the fish doesn't swing with the
+  // paw. Populated once per model swap and read in useFrame below.
+  const foodBoneRef = useRef<THREE.Object3D | null>(null);
+  const foodRestQRef = useRef<THREE.Quaternion | null>(null);
+  // Same trick for both wrists - handRotationScale in the pose config slerps
+  // hand_L / hand_R back toward rest.
+  const handLRef = useRef<THREE.Object3D | null>(null);
+  const handLRestQRef = useRef<THREE.Quaternion | null>(null);
+  const handRRef = useRef<THREE.Object3D | null>(null);
+  const handRRestQRef = useRef<THREE.Quaternion | null>(null);
 
   useEffect(() => {
     // Banjo-bear arm bone discovery. Cheap, fires once per model swap.
@@ -3985,6 +5062,34 @@ function Animal({
     banjoFoodPos.current = null;
     banjoFoodQuat.current = null;
     banjoFoodScale.current = null;
+    foodBoneRef.current = null;
+    foodRestQRef.current = null;
+    handLRef.current = null;
+    handLRestQRef.current = null;
+    handRRef.current = null;
+    handRRestQRef.current = null;
+
+    // Cache Food socket + hand_L/hand_R + their rest quaternions for the
+    // fish-holder path. Skipped for banjo bears - banjo hard-overrides both
+    // wrists and pins Food to a sampled frame every tick, so the damping
+    // would fight it.
+    if (placement.bearId && !placement.banjoPlayer) {
+      model.traverse((o) => {
+        if (!foodBoneRef.current && (o.name === "Food" || o.name === "food")) {
+          foodBoneRef.current = o;
+          foodRestQRef.current = (o as THREE.Bone).quaternion.clone();
+        }
+        if (!handLRef.current && o.name === "hand_L") {
+          handLRef.current = o;
+          handLRestQRef.current = (o as THREE.Bone).quaternion.clone();
+        }
+        if (!handRRef.current && o.name === "hand_R") {
+          handRRef.current = o;
+          handRRestQRef.current = (o as THREE.Bone).quaternion.clone();
+        }
+      });
+    }
+
     if (placement.banjoPlayer) {
       const armNames = new Set([
         "shoulder_L", "upperarm_L", "arm_L", "hand_L",
@@ -4159,15 +5264,36 @@ function Animal({
     if (previous && previous !== action) previous.stop();
 
     action.reset();
-    action.time = placement.animationOffset ?? 0;
-    action.timeScale = placement.animationSpeed ?? 1;
-    action.setEffectiveWeight(1);
-    action.play();
+    // Whether a bear holds one frame is the LAB's call, not the placement's.
+    // /scene-lab/bear-pose stores `paused` + `frame` per bear and previews the
+    // pose at exactly that frame (mixer.setTime(frame / 24)). The site was
+    // ignoring both and free-running the clip, so a pose authored against a
+    // held frame looked nothing like the lab once sit_log swung the arms on.
+    // animationHoldFrame stays as an explicit override for non-bear animals.
+    const bearPose = placement.bearId ? BEAR_POSES[placement.bearId] : undefined;
+    const holdFrame =
+      placement.animationHoldFrame ?? (bearPose?.paused ? bearPose.frame ?? 0 : null);
+    if (holdFrame != null) {
+      // Freeze on a single frame - assume 24 fps like the lab, evaluate the
+      // clip once, then park timeScale at 0 so the mixer keeps writing but
+      // never advances. That's cheaper than stop() + setTime dance and
+      // survives HMR without falling back to bind pose.
+      action.time = holdFrame / 24;
+      action.timeScale = 0;
+      action.setEffectiveWeight(1);
+      action.play();
+      action.paused = true;
+    } else {
+      action.time = placement.animationOffset ?? 0;
+      action.timeScale = placement.animationSpeed ?? 1;
+      action.setEffectiveWeight(1);
+      action.play();
+    }
     currentActionRef.current = action;
     // No cleanup fadeOut - if this effect re-fires with the same action it
     // will hit the "already running" fast path above and leave state alone.
     // The mixer/action are owned by useAnimations and torn down on unmount.
-  }, [actions, actionNames, placement.animation, placement.animationOffset, placement.animationSpeed]);
+  }, [actions, actionNames, placement.animation, placement.animationOffset, placement.animationSpeed, placement.animationHoldFrame, placement.bearId]);
 
   // Publish this animal's clips + chosen clip to the duplicate registry so a
   // clone of this bear can keep animating instead of freezing on snapshot.
@@ -4222,28 +5348,47 @@ function Animal({
       twitch(cubEarRRef.current, cubEarRRestQ.current, 2.1);
     }
 
-    // Per-bear pose deltas from /scene-lab/bear-pose. Applied before the banjo
-    // arm override so banjo bones (if any overlap) still win — the banjo pose
-    // is generated procedurally and shouldn't be user-editable via this path.
-    if (placement.bearId) {
-      const entry = bearPosesLive[placement.bearId];
-      const bones = entry?.bones;
-      if (bones) {
-        // Layer the lab-authored delta ON TOP of what sit_log just wrote for
-        // this frame, so overridden bones keep breathing/drifting instead of
-        // freezing at bind + delta (which reads as a T-pose on legs and spine).
-        const eul = new THREE.Euler();
-        const dq = new THREE.Quaternion();
-        for (const [name, adj] of Object.entries(bones)) {
-          const b = bearPoseBonesRef.current[name];
-          if (!b) continue;
-          eul.set(adj.rx, adj.ry, adj.rz, "XYZ");
-          dq.setFromEuler(eul);
-          b.quaternion.multiply(dq);
-          b.position.x += adj.px;
-          b.position.y += adj.py;
-          b.position.z += adj.pz;
-        }
+    // Bear pose no longer applied at runtime - baked into per-bear GLBs
+    // by /api/dev/bake-bear-pose. The mixer plays sit_log; posed bones sit
+    // at their rest*delta value for every frame thanks to constant fcurves.
+
+    // Food socket damping - fish-holder bears can dial down how much the
+    // socket rotates with sit_log's paw wag. The prop is parented to Food,
+    // so slerping Food's quaternion back toward rest steadies the fish
+    // without touching the rest of the bear's animation.
+    if (placement.bearId && !placement.banjoPlayer) {
+      const prop = BEAR_POSES[placement.bearId]?.prop;
+      const foodScale = prop?.foodRotationScale;
+      if (foodScale != null && foodScale !== 1 && foodBoneRef.current && foodRestQRef.current) {
+        const s = Math.max(0, Math.min(1, foodScale));
+        (foodBoneRef.current as THREE.Bone).quaternion.slerp(foodRestQRef.current, 1 - s);
+      }
+      // Damp the wrists toward their AUTHORED pose (rest * delta), not toward
+      // raw bind. bake_bear_pose.py layers each hand_L / hand_R delta into
+      // every sit_log keyframe, so slerping to bind here pulled
+      // (1 - handRotationScale) of that angle back out and the wrist could
+      // never hold a pose unless the slider sat at exactly 1. Mirrors the same
+      // fix in BearPoseLab so the lab preview and the site agree.
+      const handScale = prop?.handRotationScale;
+      if (handScale != null && handScale !== 1) {
+        const t = 1 - Math.max(0, Math.min(1, handScale));
+        const poseBones = BEAR_POSES[placement.bearId]?.bones;
+        const dampWrist = (
+          bone: THREE.Object3D | null,
+          rest: THREE.Quaternion | null,
+          name: string
+        ) => {
+          if (!bone || !rest) return;
+          HAND_TARGET_Q.copy(rest);
+          const adj = poseBones?.[name];
+          if (adj) {
+            HAND_DELTA_E.set(adj.rx, adj.ry, adj.rz, "XYZ");
+            HAND_TARGET_Q.multiply(HAND_DELTA_Q.setFromEuler(HAND_DELTA_E));
+          }
+          (bone as THREE.Bone).quaternion.slerp(HAND_TARGET_Q, t);
+        };
+        dampWrist(handLRef.current, handLRestQRef.current, "hand_L");
+        dampWrist(handRRef.current, handRRestQRef.current, "hand_R");
       }
     }
 
@@ -4364,7 +5509,7 @@ function Animal({
       {placement.prop ? (
         <SocketProp
           root={groupRef}
-          prop={mergeBearPoseProp(placement.prop, placement.bearId ? bearPosesLive[placement.bearId]?.prop : undefined)}
+          prop={mergeBearPoseProp(placement.prop, placement.bearId ? BEAR_POSES[placement.bearId]?.prop : undefined)}
           ready={model}
           config={config}
         />
@@ -4508,6 +5653,9 @@ function FloppingFish({
   // Reusable scratch quaternion so we don't allocate 4 per frame.
   const scratchQ = useMemo(() => new THREE.Quaternion(), []);
 
+  /** Seconds the fish takes to slump flat once a flop burst ends. */
+  const FISH_SETTLE_TIME = 0.45;
+
   // Alternating flop / rest phases. Durations picked to feel like the fish is
   // gathering itself between attempts. Kept mutually irrational so the pattern
   // doesn't lock into a beat.
@@ -4590,6 +5738,18 @@ function FloppingFish({
         * Math.sin(Math.min(1, (1 - norm) * 6.5) * Math.PI / 2)  // fast decay
       : 0;
 
+    // Between flops, RELAX the spine back to its bind pose instead of freezing
+    // it wherever the clip happened to stop.
+    //
+    // The rest phase parks the mixer at timeScale 0, which held the tail cocked
+    // at whatever angle the frame it stopped on had - so the fish lay still
+    // with its tail up in the air, and the fire threw a bent, floating shadow
+    // that didn't match a fish lying on the dirt. Easing the delta to zero puts
+    // the tail flat on the ground between attempts, and the shadow settles with
+    // it. Smoothstep so it slumps rather than snapping straight.
+    const settleT = Math.min(1, phaseT / FISH_SETTLE_TIME);
+    const settle = current.flopping ? 1 : 1 - settleT * settleT * (3 - 2 * settleT);
+
     for (const b of bones) {
       // delta from bind to current (post-mixer).
       scratchQ.copy(b.bind).invert().multiply(b.obj.quaternion);
@@ -4603,8 +5763,9 @@ function FloppingFish({
       const ax = scratchQ.x * inv;
       const ay = scratchQ.y * inv;
       const az = scratchQ.z * inv;
-      // Multiplier: 1 at rest, up to b.mul at peak flop.
-      const factor = 1 + (b.mul - 1) * envelope;
+      // Multiplier: up to b.mul at peak flop, easing to 0 (= bind pose, tail
+      // flat) once the fish gives up and rests.
+      const factor = current.flopping ? 1 + (b.mul - 1) * envelope : settle;
       const newAngle = angle * factor;
       const half = newAngle * 0.5;
       const s = Math.sin(half);
@@ -4652,6 +5813,42 @@ function CampfireAnimals({
   // Live head positions, written and read by the bears each frame, so they can find
   // each other wherever the config sliders have put them.
   const heads = useRef<HeadRegistry>(new Map());
+
+  // Cache-bust versions for the baked pose GLBs. Poll /api/dev/bake-bear-pose
+  // so that when the pose lab triggers a rebake, useGLTF sees a new URL
+  // (?v={mtime}) and reloads the model automatically. In prod the endpoint
+  // 403s and versions stay {}.
+  const [bakeVersions, setBakeVersions] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let cancelled = false;
+    let last = "";
+    const refresh = () => {
+      if (cancelled || (typeof document !== "undefined" && document.hidden)) return;
+      fetch("/api/dev/bake-bear-pose")
+        .then((r) => (r.ok ? r.text() : null))
+        .then((text) => {
+          if (cancelled || !text || text === last) return;
+          last = text;
+          try {
+            const data = JSON.parse(text);
+            if (data && typeof data.versions === "object") {
+              setBakeVersions(data.versions as Record<string, number>);
+            }
+          } catch { /* keep last good */ }
+        })
+        .catch(() => { /* keep last good */ });
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 1500);
+    const onVis = () => { if (!document.hidden) refresh(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+
   return (
     <>
       {ANIMALS.map((a, i) => {
@@ -4659,11 +5856,19 @@ function CampfireAnimals({
         // Unmounting also tears down its AnimationMixer and useFrame work, which
         // visible=false left running every frame.
         if ((config.objectOverrides?.[name]?.hide ?? 0) >= 0.5) return null;
+        const version = a.bearId ? bakeVersions[a.bearId] : undefined;
+        // For baked bears append ?v={mtime} so useGLTF re-fetches after every
+        // rebake. Non-baked bears (banjo/table) keep their raw url.
+        const placement = version ? { ...a, url: `${a.url}?v=${version}` } : a;
+        // Include version in the key so Animal remounts when the URL changes.
+        // Without this, useAnimations keeps its mixer bound to the OLD model's
+        // bones after useGLTF swaps in the new GLB - three.js sees dead bone
+        // references, doesn't drive them, and the bear renders in T-pose.
         return (
           <Animal
-            key={`animal-${i}`}
+            key={`animal-${i}-${version ?? 0}`}
             name={name}
-            placement={a}
+            placement={placement}
             config={config}
             onSelect={onSelect}
             heads={heads}
@@ -4768,6 +5973,15 @@ function ArcadeCampfire({ config }: { config: CampfireSceneConfig }) {
         y={config.arcadeGlowY}
         z={config.arcadeFlameZ}
         scale={config.arcadeGlowScale}
+        colorR={config.arcadeGlowColorR} colorG={config.arcadeGlowColorG} colorB={config.arcadeGlowColorB}
+        width={config.arcadeGlowWidth} length={config.arcadeGlowLength}
+        rotY={config.arcadeGlowRotY} falloff={config.arcadeGlowFalloff}
+        flicker={config.arcadeGlowFlicker} breathe={config.arcadeGlowBreathe}
+        offsetX={config.arcadeGlowOffsetX} offsetZ={config.arcadeGlowOffsetZ}
+        worldScale={
+          config.arcadeCampfireScale *
+          (config.objectOverrides?.["arcade_campfire"]?.scale ?? 1)
+        }
       />
       <Sparks
         key={`arcade-sparks-${Math.max(1, Math.round(config.arcadeSparkCount))}`}
@@ -4796,6 +6010,146 @@ function ArcadeCampfire({ config }: { config: CampfireSceneConfig }) {
         intensity={config.arcadeFarGlowIntensity}
         distance={config.arcadeFarGlowReach}
         decay={config.arcadeFarGlowDecay}
+      />
+    </group>
+  );
+}
+
+/**
+ * The desk sector's campfire - the third and last copy of the same fire.
+ *
+ * camping.glb shipped its own: `Object_121`, a 484-vertex blob using the
+ * flat orange material "Lamp.004", sitting on a small log (`Object_353`,
+ * material "Material.075") inside a ring of 15 stone icospheres. It did not
+ * animate, it did not flicker, and it did not cast light - the only reason
+ * that corner of the diorama glowed at all was that "Lamp.004" was in
+ * LIT_LAMP_MATERIALS, so CampingWithSelectableTrees hung a pointLight off it.
+ *
+ * All 17 of those objects were deleted from the GLB in Blender (the pre-edit
+ * file is art-backup/camping_original.glb) and replaced by this component,
+ * which is the arcade fire's structure exactly: the "bonfire" rocks-and-logs
+ * node cloned out of CAMPFIRE_SCENE_URL, the three-cone CampfireFlame stack,
+ * a FireGlowDisc on the ground, Sparks, and two point lights - a tight
+ * flickering one for the pit and a slow wide one for the surroundings.
+ *
+ * The difference from ArcadeCampfire is that this fire does NOT borrow the
+ * primary campfire's flame/glow/spark numbers. The diorama is authored at a
+ * much larger unit scale than the two hero campsites, so every knob here is
+ * its own `desk*` config key - see the block in sceneConfig.ts.
+ */
+function DeskCampfire({ config }: { config: CampfireSceneConfig }) {
+  const gltf = useGLTF(CAMPFIRE_SCENE_URL) as unknown as { scene: THREE.Group };
+  const bonfire = useMemo(() => {
+    let found: THREE.Object3D | null = null;
+    gltf.scene.traverse((obj) => {
+      if (!found && (obj.name || "").toLowerCase() === "bonfire") found = obj;
+    });
+    if (!found) return null;
+    const clone = (found as THREE.Object3D).clone(true);
+    // Drop the source node's own placement inside campfire_scene.glb so the
+    // pile lands on this fire's local origin instead of the hero campsite's.
+    clone.position.set(0, 0, 0);
+    clone.rotation.set(0, 0, 0);
+    // clone() SHARES materials with the cached GLTF, so they must be cloned
+    // before anything here touches them - otherwise the primary campfire's
+    // pile changes too, and the change survives a remount.
+    clone.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+        if (Array.isArray(m.material)) m.material = m.material.map((mat) => mat.clone());
+        else if (m.material) m.material = (m.material as THREE.Material).clone();
+      }
+    });
+    return clone;
+  }, [gltf.scene]);
+
+  // Refs rather than props so scrubbing a slider updates the lights in place
+  // instead of unmounting and remounting them every frame.
+  const deskFire = useRef<THREE.PointLight>(null);
+  const deskFarGlow = useRef<THREE.PointLight>(null);
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime;
+    const flicker = 1 + config.deskFlickerAmount * (
+      Math.sin(t * 8.1) * 0.12 + Math.sin(t * 15.7) * 0.08 + Math.sin(t * 23.3) * 0.035
+    );
+    if (deskFire.current) {
+      deskFire.current.intensity = config.deskFireIntensity * flicker;
+      deskFire.current.decay = config.deskFireDecay;
+      deskFire.current.distance = config.deskFireLightReach;
+      deskFire.current.position.set(config.deskFireLightX, config.deskFireLightY, config.deskFireLightZ);
+      deskFire.current.color.setRGB(config.deskFireLightColorR, config.deskFireLightColorG, config.deskFireLightColorB);
+    }
+    if (deskFarGlow.current) {
+      const slow = 1 + config.deskFlickerAmount * (Math.sin(t * 2.3) * 0.06 + Math.sin(t * 4.1) * 0.03);
+      deskFarGlow.current.intensity = config.deskFarGlowIntensity * slow;
+      deskFarGlow.current.decay = config.deskFarGlowDecay;
+      deskFarGlow.current.distance = config.deskFarGlowReach;
+      deskFarGlow.current.position.set(config.deskFireLightX, config.deskFireLightY, config.deskFireLightZ);
+    }
+  });
+
+  return (
+    <group>
+      {bonfire && config.deskCampfirePileVisible >= 0.5 && <primitive object={bonfire} />}
+      <CampfireFlame
+        x={config.deskFlameX} y={config.deskFlameY} z={config.deskFlameZ}
+        scale={config.deskFlameScale}
+        outerScale={config.deskFlameOuterScale}
+        innerScale={config.deskFlameInnerScale}
+        haloScale={config.deskFlameHaloScale}
+      />
+      <FireGlowDisc
+        opacity={config.deskGlowOpacity}
+        x={config.deskFlameX}
+        y={config.deskGlowY}
+        z={config.deskFlameZ}
+        scale={config.deskGlowScale}
+        colorR={config.deskGlowColorR} colorG={config.deskGlowColorG} colorB={config.deskGlowColorB}
+        width={config.deskGlowWidth} length={config.deskGlowLength}
+        rotY={config.deskGlowRotY} falloff={config.deskGlowFalloff}
+        flicker={config.deskGlowFlicker} breathe={config.deskGlowBreathe}
+        offsetX={config.deskGlowOffsetX} offsetZ={config.deskGlowOffsetZ}
+        // The disc sizes itself in WORLD units, so it has to be told about
+        // EVERY scale sitting above it: the camping diorama's own override
+        // (0.207 today), this fire's config scale, and this fire's override.
+        // Miss any one of them and Glow width stops meaning world units -
+        // at 0.207 alone a width of 9 lands as 1.9, which is the shape the
+        // arcade bug took before.
+        worldScale={
+          (config.objectOverrides?.["old_bear_camping"]?.scale ?? 1) *
+          config.deskCampfireScale *
+          (config.objectOverrides?.["desk_campfire"]?.scale ?? 1)
+        }
+      />
+      <Sparks
+        key={`desk-sparks-${Math.max(1, Math.round(config.deskSparkCount))}`}
+        opacity={config.deskSparkOpacity}
+        x={config.deskFlameX}
+        z={config.deskFlameZ}
+        count={config.deskSparkCount}
+        spread={config.deskSparkSpread}
+        maxHeight={config.deskSparkMaxHeight}
+        speed={config.deskSparkSpeed}
+        sway={config.deskSparkSway}
+        burstChance={config.deskSparkBurstChance}
+        size={config.deskSparkSize}
+        lifetime={config.deskSparkLifetime}
+      />
+      <pointLight ref={deskFire}
+        position={[config.deskFireLightX, config.deskFireLightY, config.deskFireLightZ]}
+        color={new THREE.Color(config.deskFireLightColorR, config.deskFireLightColorG, config.deskFireLightColorB)}
+        intensity={config.deskFireIntensity}
+        distance={config.deskFireLightReach}
+        decay={config.deskFireDecay}
+      />
+      <pointLight ref={deskFarGlow}
+        position={[config.deskFireLightX, config.deskFireLightY, config.deskFireLightZ]}
+        color="#ff9a45"
+        intensity={config.deskFarGlowIntensity}
+        distance={config.deskFarGlowReach}
+        decay={config.deskFarGlowDecay}
       />
     </group>
   );
@@ -4922,7 +6276,7 @@ function ArcadeSector({ config, onSelect }: { config: CampfireSceneConfig; onSel
             through instead of selecting it. */}
         <group scale={[-1, 1, 1]}>
           <SafeAsset label="wooden cabin">
-            <MirroredGLBModel url={WOODEN_CABIN_URL} />
+            <LitWoodenCabin config={config} />
           </SafeAsset>
         </group>
       </Selectable>
@@ -5023,7 +6377,7 @@ function ArcadeSector({ config, onSelect }: { config: CampfireSceneConfig; onSel
         <ArcadeCampfire config={config} />
       </Selectable>
 
-      {/* Every non-console GLB from /public/bear/cub/. Rendered as one
+      {/* Every non-console GLB from /public/bear/2/. Rendered as one
           Selectable each so the object drawer surfaces them and the user can
           drag/scale each into place; default positions are a rough grid
           behind the cubs. Hide unused ones via objectOverrides.*.hide. */}
@@ -5042,6 +6396,65 @@ function ArcadeSector({ config, onSelect }: { config: CampfireSceneConfig; onSel
           </SafeAsset>
         </Selectable>
       ))}
+      {/* Two lanterns, moved over from the desk scene. Each carries its own
+          warm pointLight so it acts as a real light source. The source GLB is
+          authored at about 1.3M units tall (Poly by Google), so a normalization
+          group re-centers X/Z and drops it onto y=0, then scales it to ~0.5m.
+          They still read the deskLantern* config keys - the objects moved
+          scenes, the knobs kept their historical names. */}
+      <Selectable name="old_bear_lantern" onSelect={onSelect} config={config} basePosition={[1.35, 0, 1.15]} baseRotationY={0}>
+        <group scale={3.7e-7}>
+          <group position={[-1090023.625, 1442.25, -159882.85]}>
+            <SafeAsset label="old-bear lantern">
+              <GLBModel url={OLD_BEAR_LANTERN_URL} />
+            </SafeAsset>
+          </group>
+        </group>
+        {/* Tiny candle flame inside the lantern body. Position and size come
+            from config (Desk lights section) so it can be nudged onto the
+            actual candle. Color follows the lantern's warm tint. */}
+        <CandleFlame
+          position={[config.deskLanternFlameX, config.deskLanternFlameY, config.deskLanternFlameZ]}
+          scale={config.deskLanternFlameScale}
+          color={new THREE.Color(config.deskLanternFlameColorR, config.deskLanternFlameColorG, config.deskLanternFlameColorB)}
+          speed={config.deskLanternFlameSpeed}
+          sway={config.deskLanternFlameSway}
+          pulse={config.deskLanternFlamePulse}
+          brightness={config.deskLanternFlameBrightness}
+        />
+        <pointLight
+          position={[config.deskLanternLightX, config.deskLanternLightY, config.deskLanternLightZ]}
+          color={new THREE.Color(config.deskLanternColorR, config.deskLanternColorG, config.deskLanternColorB)}
+          intensity={config.deskLanternIntensity}
+          distance={config.deskLanternDistance}
+          decay={2}
+        />
+      </Selectable>
+      <Selectable name="old_bear_lantern_2" onSelect={onSelect} config={config} basePosition={[-1.75, 0, 1.35]} baseRotationY={0.6}>
+        <group scale={3.7e-7}>
+          <group position={[-1090023.625, 1442.25, -159882.85]}>
+            <SafeAsset label="old-bear lantern 2">
+              <GLBModel url={OLD_BEAR_LANTERN_URL} />
+            </SafeAsset>
+          </group>
+        </group>
+        <CandleFlame
+          position={[config.deskLanternFlameX, config.deskLanternFlameY, config.deskLanternFlameZ]}
+          scale={config.deskLanternFlameScale}
+          color={new THREE.Color(config.deskLanternFlameColorR, config.deskLanternFlameColorG, config.deskLanternFlameColorB)}
+          speed={config.deskLanternFlameSpeed}
+          sway={config.deskLanternFlameSway}
+          pulse={config.deskLanternFlamePulse}
+          brightness={config.deskLanternFlameBrightness}
+        />
+        <pointLight
+          position={[config.deskLanternLightX, config.deskLanternLightY, config.deskLanternLightZ]}
+          color={new THREE.Color(config.deskLanternColorR, config.deskLanternColorG, config.deskLanternColorB)}
+          intensity={config.deskLanternIntensity}
+          distance={config.deskLanternDistance}
+          decay={2}
+        />
+      </Selectable>
     </group>
   );
 }
@@ -5132,64 +6545,6 @@ function ContactSector({ config, onSelect }: { config: CampfireSceneConfig; onSe
           <GLBModel url={OLD_BEAR_DEBRIS_URL} />
         </SafeAsset>
       </Selectable>
-      {/* Two lanterns on the desk - each carries its own warm pointLight so
-          it acts as an actual light source. The source GLB is authored at
-          about 1.3M units tall (Poly by Google), so a normalization group
-          re-centers X/Z and drops the model onto y=0, then scales it down to
-          ~0.5m. The Selectable's scale multiplier stacks on top of that. */}
-      <Selectable name="old_bear_lantern" onSelect={onSelect} config={config} basePosition={[0.45, TABLE_TOP_Y, 0.3]} baseRotationY={0}>
-        <group scale={3.7e-7}>
-          <group position={[-1090023.625, 1442.25, -159882.85]}>
-            <SafeAsset label="old-bear lantern">
-              <GLBModel url={OLD_BEAR_LANTERN_URL} />
-            </SafeAsset>
-          </group>
-        </group>
-        {/* Tiny candle flame inside the lantern body. Position and size come
-            from config (Desk lights section) so it can be nudged onto the
-            actual candle. Color follows the lantern's warm tint. */}
-        <CandleFlame
-          position={[config.deskLanternFlameX, config.deskLanternFlameY, config.deskLanternFlameZ]}
-          scale={config.deskLanternFlameScale}
-          color={new THREE.Color(config.deskLanternFlameColorR, config.deskLanternFlameColorG, config.deskLanternFlameColorB)}
-          speed={config.deskLanternFlameSpeed}
-          sway={config.deskLanternFlameSway}
-          pulse={config.deskLanternFlamePulse}
-          brightness={config.deskLanternFlameBrightness}
-        />
-        <pointLight
-          position={[config.deskLanternLightX, config.deskLanternLightY, config.deskLanternLightZ]}
-          color={new THREE.Color(config.deskLanternColorR, config.deskLanternColorG, config.deskLanternColorB)}
-          intensity={config.deskLanternIntensity}
-          distance={config.deskLanternDistance}
-          decay={2}
-        />
-      </Selectable>
-      <Selectable name="old_bear_lantern_2" onSelect={onSelect} config={config} basePosition={[-0.55, TABLE_TOP_Y, -0.3]} baseRotationY={0.6}>
-        <group scale={3.7e-7}>
-          <group position={[-1090023.625, 1442.25, -159882.85]}>
-            <SafeAsset label="old-bear lantern 2">
-              <GLBModel url={OLD_BEAR_LANTERN_URL} />
-            </SafeAsset>
-          </group>
-        </group>
-        <CandleFlame
-          position={[config.deskLanternFlameX, config.deskLanternFlameY, config.deskLanternFlameZ]}
-          scale={config.deskLanternFlameScale}
-          color={new THREE.Color(config.deskLanternFlameColorR, config.deskLanternFlameColorG, config.deskLanternFlameColorB)}
-          speed={config.deskLanternFlameSpeed}
-          sway={config.deskLanternFlameSway}
-          pulse={config.deskLanternFlamePulse}
-          brightness={config.deskLanternFlameBrightness}
-        />
-        <pointLight
-          position={[config.deskLanternLightX, config.deskLanternLightY, config.deskLanternLightZ]}
-          color={new THREE.Color(config.deskLanternColorR, config.deskLanternColorG, config.deskLanternColorB)}
-          intensity={config.deskLanternIntensity}
-          distance={config.deskLanternDistance}
-          decay={2}
-        />
-      </Selectable>
 
       {/* Floor props next to the desk. */}
       <Selectable name="old_bear_boxes" onSelect={onSelect} config={config} basePosition={[1.2, 0, -0.4]} baseRotationY={-0.2}>
@@ -5253,6 +6608,49 @@ function ContactSector({ config, onSelect }: { config: CampfireSceneConfig; onSe
           <CampingWithSelectableTrees url={OLD_BEAR_CAMPING_URL} config={config} onSelect={onSelect} />
         </SafeAsset>
       </Selectable>
+      {/* The diorama's own fire was deleted from camping.glb; this is the
+          same procedural fire the campfire and arcade sectors run.
+
+          It is parented to an ANCHOR that mirrors the camping Selectable's
+          resolved transform, so the fire lives in camping.glb's own
+          coordinate system rather than the sector's. That matters because
+          the diorama is not sitting at identity - right now it carries a
+          0.207 scale and a -2.71 rad heading from its override row. Placed
+          as a plain sibling, deskCampfireY 1.3 put the fire more than a
+          metre above a camp whose ground had been scaled down to y ~0.5, so
+          the ground-glow disc hung in mid-air with nothing under it to light
+          - which is exactly what "I can't control the glow" looks like.
+
+          Anchored, deskCampfireX/Y/Z are measured straight off the GLB (the
+          old fire pit is at 4.25, 1.30, -0.07 in camping.glb) and STAY right
+          when the camp is dragged, spun or resized. The Selectable is still
+          nested inside, so the fire keeps its own override row and can be
+          nudged off the pit; ObjectDragLayer resolves drags through
+          `parent.worldToLocal`, so those nudges land in camp-local units and
+          the anchor is transparent to it. */}
+      {(config.objectOverrides?.["desk_campfire"]?.hide ?? 0) < 0.5 && (() => {
+        const camp = config.objectOverrides?.["old_bear_camping"] ?? EMPTY_OVERRIDE;
+        return (
+          <group
+            position={[0 + camp.dx, 0 + camp.dy, -6 + camp.dz]}
+            rotation={new THREE.Euler(camp.rotX, camp.rotY, camp.rotZ, "XZY")}
+            scale={camp.scale}
+          >
+            <Selectable
+              name="desk_campfire"
+              onSelect={onSelect}
+              config={config}
+              basePosition={[config.deskCampfireX, config.deskCampfireY, config.deskCampfireZ]}
+              baseRotationY={config.deskCampfireRotationY}
+              baseScale={config.deskCampfireScale}
+            >
+              <SafeAsset label="desk campfire">
+                <DeskCampfire config={config} />
+              </SafeAsset>
+            </Selectable>
+          </group>
+        );
+      })()}
       {/* Poly-by-Google caravan added to the old-bear folder. Source is ~80
           units long, so a normalization group centers X/Z and sinks the min
           Y to zero, then scales to ~2 m long. Drag/scale via its Selectable. */}
@@ -5402,7 +6800,6 @@ function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onS
     // multi-mesh pine still anchors as a whole rather than each part
     // independently.
     const union = new THREE.Box3();
-    const tmp = new THREE.Box3();
     for (const mesh of meshes) {
       const g = mesh.geometry.clone();
       g.applyMatrix4(mesh.matrixWorld);
@@ -5417,6 +6814,11 @@ function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onS
       const geom = mesh.geometry.clone();
       geom.applyMatrix4(mesh.matrixWorld);
       geom.translate(offsetX, offsetY, offsetZ);
+      // applyMatrix4/translate leave the cached bounds stale. Mesh.raycast uses
+      // the bounding sphere as its broad phase, so a stale one can reject hits
+      // on trees that are really there.
+      geom.computeBoundingBox();
+      geom.computeBoundingSphere();
       out.push({ geometry: geom, material: mesh.material });
     }
     return out;
@@ -5526,17 +6928,177 @@ function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onS
   );
 }
 
+/** Deterministic PRNG. The patch outlines have to be identical on every
+ *  reload - Math.random() would reshuffle them each refresh. */
+function mulberry32(seed: number) {
+  let a = seed;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * One irregular ground patch: a flat polygon lying in XZ, triangulated as a
+ * fan from its centre.
+ *
+ * This is how the desk diorama does it, and it is worth writing down because
+ * the first two attempts at this feature painted a canvas gradient instead
+ * and it never read. In camping.glb the camp's dirt is NOT a texture on the
+ * terrain - it is "Object_222", its own 300-triangle mesh in a separate
+ * material (Material.045, 0.227/0.133/0.063) laid over the tan ground
+ * (Material.108, 0.316/0.197/0.076). Raycasting anywhere near that camp hits
+ * Object_222 first and the terrain 3.5 units below. Its outline is 844 short
+ * straight segments, median 0.95 units long across a patch ~27 units wide -
+ * so the edge is hard, angular and jagged, never a fade.
+ *
+ * `jag` pulls each boundary vertex in by a random fraction of the radius.
+ * Because it is per-vertex and uncorrelated, neighbouring vertices differ a
+ * lot and the silhouette comes out spiky rather than a wobbly circle.
+ *
+ * Normals are written explicitly as +Y instead of computed: the fan's winding
+ * decides which way computeVertexNormals points them, and a patch lit from
+ * below is invisible. DoubleSide then covers the winding for the raster side.
+ */
+function makeGroundPatch(
+  sides: number, radius: number, jag: number, spin: number, round: number, seed: number,
+) {
+  const rnd = mulberry32(seed >>> 0);
+  const n = Math.max(3, Math.round(sides));
+
+  // Two ways to vary the radius, blended by `round`:
+  //
+  //  spiky  - an independent random per vertex. Neighbours are uncorrelated,
+  //           so the outline jumps in and out and reads as torn.
+  //  smooth - three low harmonics around the circle. sin(k*a) is exactly
+  //           periodic in a, so vertex 0 and vertex n-1 still meet cleanly,
+  //           and because it is low frequency the radius drifts across many
+  //           vertices instead of per vertex - broad lobes, a rounded
+  //           silhouette, still made of straight segments.
+  //
+  // The harmonics are drawn BEFORE the per-vertex values and always in the
+  // same quantity, so turning Round up and down reshapes the same outline
+  // rather than reshuffling it.
+  const harm: { a: number; phi: number }[] = [];
+  for (let k = 0; k < 3; k++) harm.push({ a: 0.4 + rnd() * 0.6, phi: rnd() * Math.PI * 2 });
+  const ampSum = harm.reduce((t, h) => t + h.a, 0) || 1;
+
+  const pos: number[] = [0, 0, 0];
+  const nor: number[] = [0, 1, 0];
+  for (let i = 0; i < n; i++) {
+    const a = spin + (i / n) * Math.PI * 2;
+    let h = 0;
+    for (let k = 0; k < 3; k++) h += harm[k].a * Math.sin((k + 2) * a + harm[k].phi);
+    const smooth = (h / ampSum + 1) / 2;               // 0..1, low frequency
+    const spiky = rnd();                                // 0..1, per vertex
+    const mix = spiky + (smooth - spiky) * Math.max(0, Math.min(1, round));
+    const r = radius * (1 - jag * mix);
+    pos.push(Math.cos(a) * r, 0, Math.sin(a) * r);
+    nor.push(0, 1, 0);
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < n; i++) idx.push(0, 1 + i, 1 + ((i + 1) % n));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  g.setIndex(idx);
+  g.computeBoundingBox();
+  g.computeBoundingSphere();
+  return g;
+}
+
+/**
+ * The two trodden-ground patches around the campfire: a broader mid patch and
+ * a smaller, lighter core, stacked on the ground disc the way the diorama
+ * stacks its dirt on its terrain.
+ *
+ * Both sit at the CAMPFIRE camp, which is location 0 on the ring at world
+ * (sin a, cos a) * locationRadius - about (0.18, -15.20) - NOT at the world
+ * origin, which is the ring's hub 15 units away.
+ *
+ * Radii have to stay small. The ground reads only where the fire lights it,
+ * and the fire's point light reaches about 8.9 units; anything authored
+ * beyond that is drawn in the dark.
+ */
+function GroundPatches({ config, centreX, centreZ }: { config: CampfireSceneConfig; centreX: number; centreZ: number }) {
+  const layers = useMemo(() => {
+    // A PRNG each, seeded from the shared seed plus the layer index. Sharing
+    // one stream meant the vertex count of one patch shifted the sequence the
+    // other drew from, so nudging the inner Sides silently reshuffled the
+    // outer outline underneath it.
+    const seed = Math.max(1, Math.round(config.groundPatchSeed));
+    const outer = makeGroundPatch(config.groundPatchOuterSides, config.groundPatchOuterRadius,
+                                  config.groundPatchOuterJag, config.groundPatchOuterSpin,
+                                  config.groundPatchOuterRound, seed * 2654435761);
+    const inner = makeGroundPatch(config.groundPatchInnerSides, config.groundPatchInnerRadius,
+                                  config.groundPatchInnerJag, config.groundPatchInnerSpin,
+                                  config.groundPatchInnerRound, seed * 40503 + 917);
+    return { outer, inner };
+  }, [config.groundPatchSeed,
+      config.groundPatchOuterSides, config.groundPatchOuterRadius, config.groundPatchOuterJag,
+      config.groundPatchOuterSpin, config.groundPatchOuterRound,
+      config.groundPatchInnerSides, config.groundPatchInnerRadius, config.groundPatchInnerJag,
+      config.groundPatchInnerSpin, config.groundPatchInnerRound]);
+  useEffect(() => () => { layers.outer.dispose(); layers.inner.dispose(); }, [layers]);
+
+  const outerColor = useMemo(() => new THREE.Color(
+    config.groundPatchOuterR, config.groundPatchOuterG, config.groundPatchOuterB),
+    [config.groundPatchOuterR, config.groundPatchOuterG, config.groundPatchOuterB]);
+  const innerColor = useMemo(() => new THREE.Color(
+    config.groundPatchInnerR, config.groundPatchInnerG, config.groundPatchInnerB),
+    [config.groundPatchInnerR, config.groundPatchInnerG, config.groundPatchInnerB]);
+
+  if (config.groundPatchOn < 0.5) return null;
+  return (
+    <group position={[centreX, 0, centreZ]}>
+      {/* renderOrder is explicit because these two are near coplanar. Three
+          sorts the transparent pass back-to-front by distance, and at a few
+          millimetres apart that ordering can flip as the camera swings -
+          which would show as the inner patch blinking behind the outer one.
+          depthWrite comes off with transparency for the same reason it does
+          on the fire's glow disc: a see-through decal that still writes depth
+          occludes whatever is meant to show through it. */}
+      <mesh geometry={layers.outer} position={[0, -0.02 + config.groundPatchOuterY, 0]} renderOrder={1} receiveShadow>
+        <meshStandardMaterial
+          color={outerColor} roughness={0.97} metalness={0} flatShading side={THREE.DoubleSide}
+          transparent={config.groundPatchOuterOpacity < 0.999}
+          opacity={config.groundPatchOuterOpacity}
+          depthWrite={config.groundPatchOuterOpacity >= 0.999}
+        />
+      </mesh>
+      <mesh geometry={layers.inner} position={[0, -0.02 + config.groundPatchInnerY, 0]} renderOrder={2} receiveShadow>
+        <meshStandardMaterial
+          color={innerColor} roughness={0.97} metalness={0} flatShading side={THREE.DoubleSide}
+          transparent={config.groundPatchInnerOpacity < 0.999}
+          opacity={config.groundPatchInnerOpacity}
+          depthWrite={config.groundPatchInnerOpacity >= 0.999}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 function CampfireGround({ config }: { config: CampfireSceneConfig }) {
   const radius = Math.max(30, config.locationRadius + 24);
+  // Location 0 IS the campfire camp. Same placement ringMatrix uses, so the
+  // patches track the camp if the ring is rotated or resized.
+  const centreA = LOCATION_AZIMUTH(0, config);
+  const centreX = Math.sin(centreA) * config.locationRadius + config.groundPatchOffsetX;
+  const centreZ = Math.cos(centreA) * config.locationRadius + config.groundPatchOffsetZ;
   const color = useMemo(
     () => new THREE.Color(config.groundColorR, config.groundColorG, config.groundColorB),
     [config.groundColorR, config.groundColorG, config.groundColorB],
   );
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]} receiveShadow>
-      <circleGeometry args={[radius, 96]} />
-      <meshStandardMaterial color={color} roughness={0.96} metalness={0} />
-    </mesh>
+    <>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]} receiveShadow>
+        <circleGeometry args={[radius, 96]} />
+        <meshStandardMaterial color={color} roughness={0.96} metalness={0} />
+      </mesh>
+      <GroundPatches config={config} centreX={centreX} centreZ={centreZ} />
+    </>
   );
 }
 
@@ -5708,7 +7270,6 @@ function CampfireWorld({
       <Stars radius={55} depth={20} count={Math.round(config.starCount)} factor={config.starBrightness} saturation={0} fade speed={0.12} />
 
       <CampfireGround config={config} />
-      <ForestAndPaths config={config} onSelect={onSelect} />
       {/* Non-visual: nulls out raycasting for any name listed in
           config.lockedObjects. Lets clicks pass through locked props. */}
       <LockLayer config={config} />
@@ -5726,6 +7287,12 @@ function CampfireWorld({
         config={config}
         onTranslate={onObjectTranslate}
       >
+        {/* The forest lives INSIDE the drag layer. It used to sit outside it,
+            next to CampfireGround, which meant its 320 instanced pines could be
+            selected but never dragged - ObjectDragLayer only sees pointer
+            events from its own descendants. Both wrapper groups are transform
+            free, so moving it in here changes nothing about where trees land. */}
+        <ForestAndPaths config={config} onSelect={onSelect} />
         {/* Duplicate clones live under the drag layer so their bubbled pointer
             events reach the drag handlers - moving DuplicatesLayer outside made
             duplicates selectable but not draggable. */}
@@ -5734,7 +7301,6 @@ function CampfireWorld({
             origin with the camera off at +Z, so it moves onto the ring untouched and
             keeps every slider meaning exactly what it did. */}
         <Location index={0} config={config}>
-          <CampfireLights config={config} />
           <CampfireSceneModel config={config} onSelect={onSelect} />
           {(config.objectOverrides?.["camper"]?.hide ?? 0) < 0.5 && (
             <SafeAsset label="camper"><Camper config={config} onSelect={onSelect} /></SafeAsset>
@@ -5783,6 +7349,25 @@ function CampfireWorld({
             <group position={[-0.013, 0.075, 0.008]}>
               <SafeAsset label="log & axe">
                 <GLBModel url={LOG_AXE_URL} />
+              </SafeAsset>
+            </group>
+          </Selectable>
+          {/* Second tent, across the fire from the low-poly one. Placed out at
+              x 4.6 / z -4.2 so it clears the wood pile (2.6, 1.2) and sits well
+              inside the camper at z -6; baseRotationY turns its opening back
+              toward the fire. Anchor is in SOURCE units - it's inside the
+              Selectable, so baseScale applies to it too. */}
+          <Selectable
+            name="campfire_tent"
+            onSelect={onSelect}
+            config={config}
+            basePosition={[4.6, 0, -4.2]}
+            baseRotationY={-0.83}
+            baseScale={0.16}
+          >
+            <group position={[0, 0.176, 0]}>
+              <SafeAsset label="a-frame tent">
+                <GLBModel url={TENT_AFRAME_URL} />
               </SafeAsset>
             </group>
           </Selectable>
@@ -6035,7 +7620,18 @@ function CampfireWorld({
             ]}
             onClick={(e) => { e.stopPropagation(); onSelect("campfire"); }}
           >
-            <FireGlowDisc opacity={config.glowOpacity} x={config.flameX} y={config.glowY} z={config.flameZ} scale={config.glowScale} />
+            {/* Inside the campfire group so the fire light and the shadow light
+                ride along with the log, flame, sparks and glow on every drag. */}
+            <CampfireLights config={config} />
+            <FireGlowDisc
+              opacity={config.glowOpacity} x={config.flameX} y={config.glowY} z={config.flameZ}
+              scale={config.glowScale}
+              colorR={config.glowColorR} colorG={config.glowColorG} colorB={config.glowColorB}
+              width={config.glowWidth} length={config.glowLength}
+              rotY={config.glowRotY} falloff={config.glowFalloff}
+              flicker={config.glowFlicker} breathe={config.glowBreathe}
+              offsetX={config.glowOffsetX} offsetZ={config.glowOffsetZ}
+            />
             <CampfireFlame
               x={config.flameX} y={config.flameY} z={config.flameZ}
               scale={config.flameScale}
@@ -6156,6 +7752,7 @@ export default function CampfireScene({
       gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
       onPointerMissed={() => selectHandler("")}
     >
+      <Matte />
       <CampfireWorld
         config={config}
         onCameraChange={cameraChangeHandler}
@@ -6189,6 +7786,8 @@ useGLTF.preload(DEER_URL);
 useGLTF.preload(DOE_URL);
 useGLTF.preload(RACCOON_URL);
 useGLTF.preload(BEAR_URL);
+useGLTF.preload(BEAR_URL_FRONT_LOG);
+useGLTF.preload(BEAR_URL_BACK_RIGHT_LOG);
 useGLTF.preload(FISH_URL);
 useGLTF.preload(FISH_STICK_URL);
 useGLTF.preload(PICKUP_TRUCK_URL);
@@ -6238,3 +7837,15 @@ useGLTF.preload(CARAVAN_HOLLOW_URL);
 for (const prop of ARCADE_CUB_PROPS) {
   useGLTF.preload(prop.url);
 }
+
+// Retained scene components that aren't mounted right now but that we want
+// to keep on hand for the next iteration (gamecube setup, extra lighting
+// helpers, camping variant). Referencing them here silences the eslint
+// no-unused-vars rule without deleting working code.
+void RawGLB;
+void CampingWithLamps;
+void UnlitGLB;
+void MirroredGLBModel;
+void GameCubeConsole;
+void ControllerWire;
+void BackgroundGlow;

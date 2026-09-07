@@ -6,12 +6,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 
+import Matte from "@/components/Matte";
 const BEAR_URL = "/wildpoly/bear_sit_fixed.glb";
 // The fish-on-stick uses the byte-identical copy so it doesn't share materials
 // with the flopping fish in the main scene - hover/highlight logic there would
 // otherwise leak into whatever the pose lab is previewing.
 const FISH_URL = "/animals/fish_stick.glb";
-const BANJO_URL = "/bear/campfire/banjo_clean.glb";
+const BANJO_URL = "/bear/1/banjo_clean.glb";
 useGLTF.preload(BEAR_URL);
 useGLTF.preload(FISH_URL);
 useGLTF.preload(BANJO_URL);
@@ -41,6 +42,14 @@ type PropAdj = {
   // slide/tilt independently of the fish (or whichever prop is on it).
   stickPx: number; stickPy: number; stickPz: number;
   stickRx: number; stickRy: number; stickRz: number;
+  // 1.0 = fish/prop follows the socket bone rotation fully (as sit_log wags
+  // the bear's paw the fish spins). 0.0 = socket rotation is frozen at rest
+  // and the fish holds steady. Between = linear slerp back toward rest.
+  foodRotationScale: number;
+  // Same idea for the hand bones themselves - 0 = wrists stop twisting with
+  // sit_log, 1 = full sit_log motion. Slerps hand_L / hand_R local quaternion
+  // toward their rest pose each frame.
+  handRotationScale: number;
 };
 
 const FISH_DEFAULT: PropAdj = {
@@ -53,6 +62,8 @@ const FISH_DEFAULT: PropAdj = {
   stickRadius: 0.02,
   stickPx: 0, stickPy: 0, stickPz: 0,
   stickRx: 0, stickRy: 0, stickRz: 0,
+  foodRotationScale: 1.0,
+  handRotationScale: 1.0,
 };
 
 const BANJO_DEFAULT: PropAdj = {
@@ -63,6 +74,8 @@ const BANJO_DEFAULT: PropAdj = {
   stickRadius: 0,
   stickPx: 0, stickPy: 0, stickPz: 0,
   stickRx: 0, stickRy: 0, stickRz: 0,
+  foodRotationScale: 1.0,
+  handRotationScale: 1.0,
 };
 
 const BEARS = [
@@ -114,7 +127,12 @@ const GROUPS: { title: string; test: (n: string) => boolean }[] = [
   { title: "Prop socket",  test: (n) => /^food$/i.test(n) },
 ];
 
-const TRANSLATABLE = /^(root|center|pelvis|chest|spine)$/i;
+// Bones that get pos X/Y/Z sliders open by default. Arm-chain bones are here
+// so the user can slide the whole arm outward (shoulder/upperarm translation)
+// rather than only rotating around the joint - that's what "extend the arm"
+// wants when the sit_log clip has the paws tucked. Any bone not listed can
+// still be translated via the "show position sliders" checkbox on the row.
+const TRANSLATABLE = /^(root|center|pelvis|chest|spine|shoulder_L|shoulder_R|upperarm_L|upperarm_R|arm_L|arm_R|hand_L|hand_R)$/i;
 
 // -- Bear rig ----------------------------------------------------------------
 
@@ -197,28 +215,64 @@ function BearRig({
       mixer.update(delta);
     }
 
-    // Authored bones: hard-override AFTER the mixer runs. Each authored bone
-    // is set to `rest * userDelta` every frame, completely decoupled from the
-    // clip. This is what "don't animate the arm while I'm moving it" needs:
-    // the previous version left the mixer's contribution on the bone and then
-    // multiplied by the delta each frame, which either compounded (paused,
-    // mixer not re-writing) or fought the animation (playing). Now the bone
-    // sits at exactly the value the sliders describe, deterministically, and
-    // non-authored bones keep the sit_log animation.
+    // Layer the delta ON TOP of whatever the mixer just wrote for this frame,
+    // so sliders at 0 leave the bone exactly where sit_log put it (paused at
+    // frame 30 for the fish-holder bears). Doesn't compound frame to frame
+    // because the mixer overwrites bone.quaternion each tick before we
+    // multiply. Site does the same thing after the bake (see bake_bear_pose.py:
+    // multiplies every clip keyframe by dq).
     const eul = new THREE.Euler();
     const dq = new THREE.Quaternion();
     for (const [name, adj] of Object.entries(pose.bones)) {
       const b = boneRef.current[name];
-      const restQ = restQRef.current[name];
-      const restP = restPRef.current[name];
-      if (!b || !restQ || !restP) continue;
+      if (!b) continue;
       eul.set(adj.rx, adj.ry, adj.rz, "XYZ");
       dq.setFromEuler(eul);
-      b.quaternion.copy(restQ).multiply(dq);
-      b.position.copy(restP);
+      b.quaternion.multiply(dq);
       b.position.x += adj.px;
       b.position.y += adj.py;
       b.position.z += adj.pz;
+    }
+
+    // Dampen the Food socket bone's animation-driven rotation. sit_log wags
+    // the bear's paw so the fish spins with it - the user can dial this back
+    // (0 = fish held rock steady, 1 = full paw swing) via the prop's
+    // foodRotationScale slider.
+    const foodScale = pose.prop?.foodRotationScale;
+    if (foodScale != null && foodScale !== 1) {
+      const food = boneRef.current["Food"] ?? boneRef.current["food"];
+      const foodRest = restQRef.current["Food"] ?? restQRef.current["food"];
+      if (food && foodRest) {
+        food.quaternion.slerp(foodRest, 1 - Math.max(0, Math.min(1, foodScale)));
+      }
+    }
+
+    // Same treatment for the wrist bones. sit_log flicks hand_L / hand_R over
+    // the loop; users authoring a still pose can damp that without losing the
+    // rest of the bear's motion.
+    //
+    // The damp target is the AUTHORED wrist pose (rest * delta), NOT raw bind.
+    // Slerping to bind made this slider fight the hand_L / hand_R entries in
+    // `bones`: the loop above multiplies the delta in, then this pulled
+    // (1 - handRotationScale) of it straight back out, so a wrist angle could
+    // never hold unless the slider sat exactly at 1. Now the two compose -
+    // `bones` sets the angle, this sets how much sit_log wag plays on top.
+    const handScale = pose.prop?.handRotationScale;
+    if (handScale != null && handScale !== 1) {
+      const t = 1 - Math.max(0, Math.min(1, handScale));
+      const handTarget = new THREE.Quaternion();
+      for (const name of ["hand_L", "hand_R"]) {
+        const b = boneRef.current[name];
+        const rest = restQRef.current[name];
+        if (!b || !rest) continue;
+        handTarget.copy(rest);
+        const adj = pose.bones[name];
+        if (adj) {
+          eul.set(adj.rx, adj.ry, adj.rz, "XYZ");
+          handTarget.multiply(dq.setFromEuler(eul));
+        }
+        b.quaternion.slerp(handTarget, t);
+      }
     }
   });
 
@@ -499,8 +553,27 @@ export default function BearPoseLab() {
         setSaveMsg(`error ${res.status}`);
         return;
       }
-      setSaveMsg("saved → src/config/bearPoses.json ✓");
-      setTimeout(() => setSaveMsg(""), 3000);
+      setSaveMsg("saved. baking GLB…");
+      // Kick off a Blender bake so the site picks up the new pose. This
+      // shells out to Blender in background mode and rewrites the per-bear
+      // GLBs at public/wildpoly/bear_sit_<id>.glb. Takes ~5-10s.
+      try {
+        const bakeRes = await fetch("/api/dev/bake-bear-pose", { method: "POST" });
+        if (!bakeRes.ok) {
+          const body = await bakeRes.json().catch(() => ({}));
+          setSaveMsg(`saved but bake failed: ${body.error ?? bakeRes.status}`);
+          return;
+        }
+        const data = (await bakeRes.json()) as {
+          baked?: { bear_id: string; applied: string[]; skipped: string[] }[];
+        };
+        const count = data.baked?.length ?? 0;
+        setSaveMsg(`saved + baked ${count} bear${count === 1 ? "" : "s"} ✓`);
+      } catch (e) {
+        setSaveMsg(`saved but bake threw: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      setTimeout(() => setSaveMsg(""), 4000);
     } catch (e) {
       setSaveMsg(`error: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -529,9 +602,13 @@ export default function BearPoseLab() {
     <div style={{ display: "flex", height: "100vh", background: "#111", color: "#eee", fontFamily: "monospace" }}>
       <div style={{ flex: 1, position: "relative" }}>
         <Canvas camera={{ position: [2.2, 1.3, 2.4], fov: 40 }}>
-          <ambientLight intensity={0.7} />
-          <directionalLight position={[3, 5, 3]} intensity={1.2} />
-          <directionalLight position={[-2, 3, -2]} intensity={0.4} />
+          <Matte />
+          {/* Bright and even so it's easy to spot pose issues. Pulled up from
+              the previous 0.7/1.2/0.4 which read as evening light. */}
+          <ambientLight intensity={1.8} />
+          <directionalLight position={[3, 5, 3]} intensity={2.4} />
+          <directionalLight position={[-2, 3, -2]} intensity={1.4} />
+          <directionalLight position={[0, 3, -5]} intensity={0.8} />
           <gridHelper args={[8, 32, "#333", "#222"]} />
           <BearRig
             key={bearId}
@@ -635,22 +712,41 @@ export default function BearPoseLab() {
             <div style={{ fontSize: 10, opacity: 0.6, marginBottom: 2 }}>scale</div>
             <Slider label="scale" min={0.005} max={1.0} step={0.001} value={activePose.prop.scale} setValue={(v) => updateProp({ scale: v })} />
             <div style={{ fontSize: 10, opacity: 0.6, margin: "6px 0 2px" }}>position</div>
-            <Slider label="pos X" min={-1.5} max={1.5} step={0.001} value={activePose.prop.px} setValue={(v) => updateProp({ px: v })} />
-            <Slider label="pos Y" min={-1.5} max={1.5} step={0.001} value={activePose.prop.py} setValue={(v) => updateProp({ py: v })} />
-            <Slider label="pos Z" min={-1.5} max={1.5} step={0.001} value={activePose.prop.pz} setValue={(v) => updateProp({ pz: v })} />
+            <Slider label="pos X" min={-4} max={4} step={0.001} value={activePose.prop.px} setValue={(v) => updateProp({ px: v })} />
+            <Slider label="pos Y" min={-4} max={4} step={0.001} value={activePose.prop.py} setValue={(v) => updateProp({ py: v })} />
+            <Slider label="pos Z" min={-4} max={4} step={0.001} value={activePose.prop.pz} setValue={(v) => updateProp({ pz: v })} />
             <div style={{ fontSize: 10, opacity: 0.6, margin: "6px 0 2px" }}>rotation</div>
             <Slider label="rot X" min={-Math.PI} max={Math.PI} step={0.005} value={activePose.prop.rx} setValue={(v) => updateProp({ rx: v })} fmt={deg} />
             <Slider label="rot Y" min={-Math.PI} max={Math.PI} step={0.005} value={activePose.prop.ry} setValue={(v) => updateProp({ ry: v })} fmt={deg} />
             <Slider label="rot Z" min={-Math.PI} max={Math.PI} step={0.005} value={activePose.prop.rz} setValue={(v) => updateProp({ rz: v })} fmt={deg} />
+            <div style={{ fontSize: 10, opacity: 0.6, margin: "6px 0 2px" }}>
+              how much the bear turns the fish (socket rotation follow)
+            </div>
+            <Slider
+              label="food rot scale (0=held steady, 1=full swing)"
+              min={0}
+              max={1}
+              step={0.01}
+              value={activePose.prop.foodRotationScale ?? 1}
+              setValue={(v) => updateProp({ foodRotationScale: v })}
+            />
+            <Slider
+              label="hand rot scale (0=wrists locked, 1=full swing)"
+              min={0}
+              max={1}
+              step={0.01}
+              value={activePose.prop.handRotationScale ?? 1}
+              setValue={(v) => updateProp({ handRotationScale: v })}
+            />
             {propSpec.hasStick && (
               <>
                 <div style={{ fontSize: 10, opacity: 0.6, margin: "6px 0 2px" }}>roasting stick (0 length = off)</div>
                 <Slider label="length" min={0} max={2.5} step={0.01} value={activePose.prop.stickLength} setValue={(v) => updateProp({ stickLength: v })} />
                 <Slider label="radius" min={0.005} max={0.1} step={0.001} value={activePose.prop.stickRadius} setValue={(v) => updateProp({ stickRadius: v })} />
                 <div style={{ fontSize: 10, opacity: 0.6, margin: "6px 0 2px" }}>stick offset (independent of fish)</div>
-                <Slider label="stick pos X" min={-1.5} max={1.5} step={0.001} value={activePose.prop.stickPx} setValue={(v) => updateProp({ stickPx: v })} />
-                <Slider label="stick pos Y" min={-1.5} max={1.5} step={0.001} value={activePose.prop.stickPy} setValue={(v) => updateProp({ stickPy: v })} />
-                <Slider label="stick pos Z" min={-1.5} max={1.5} step={0.001} value={activePose.prop.stickPz} setValue={(v) => updateProp({ stickPz: v })} />
+                <Slider label="stick pos X" min={-4} max={4} step={0.001} value={activePose.prop.stickPx} setValue={(v) => updateProp({ stickPx: v })} />
+                <Slider label="stick pos Y" min={-4} max={4} step={0.001} value={activePose.prop.stickPy} setValue={(v) => updateProp({ stickPy: v })} />
+                <Slider label="stick pos Z" min={-4} max={4} step={0.001} value={activePose.prop.stickPz} setValue={(v) => updateProp({ stickPz: v })} />
                 <Slider label="stick rot X (+PI/2 baseline)" min={-Math.PI} max={Math.PI} step={0.005} value={activePose.prop.stickRx} setValue={(v) => updateProp({ stickRx: v })} fmt={deg} />
                 <Slider label="stick rot Y" min={-Math.PI} max={Math.PI} step={0.005} value={activePose.prop.stickRy} setValue={(v) => updateProp({ stickRy: v })} fmt={deg} />
                 <Slider label="stick rot Z" min={-Math.PI} max={Math.PI} step={0.005} value={activePose.prop.stickRz} setValue={(v) => updateProp({ stickRz: v })} fmt={deg} />

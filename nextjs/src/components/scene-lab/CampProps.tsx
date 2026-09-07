@@ -410,7 +410,22 @@ const SCREEN_SIZE: [number, number] = [0.24, 0.20];
  * `drawImage` captures the frame currently on screen — the same trick used by
  * three.js texture demos.
  */
-function useGifTexture(url: string | undefined, width = 256, height = 192) {
+const SCREEN_VIDEO_RE = /\.(mp4|webm|ogv|mov)(\?|#|$)/i;
+
+/**
+ * Paints whatever `url` points at into a canvas texture, one frame per render.
+ *
+ * GIFs and videos both go through the SAME canvas so the CRT treatment is
+ * identical either way: nearest-neighbour so it stays pixelly, and `contain`
+ * letterboxing so nothing is stretched out of proportion.
+ *
+ * A GIF is an <img> parked off-screen rather than display:none - browsers only
+ * advance a GIF's frames while the element counts as visible. A video is a
+ * muted, looping, inline <video>: muted is what earns it autoplay without a
+ * click, and the one-shot pointerdown retry covers the browsers that refuse
+ * until the page has been interacted with.
+ */
+function useScreenTexture(url: string | undefined, width = 256, height = 192) {
   const canvas = useMemo(() => {
     const c = document.createElement("canvas");
     c.width = width;
@@ -427,9 +442,33 @@ function useGifTexture(url: string | undefined, width = 256, height = 192) {
   }, [canvas]);
 
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const vidRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     if (!url) return;
+
+    if (SCREEN_VIDEO_RE.test(url)) {
+      const vid = document.createElement("video");
+      vid.src = url;
+      vid.loop = true;
+      vid.muted = true;
+      vid.defaultMuted = true;
+      vid.playsInline = true;
+      vid.crossOrigin = "anonymous";
+      vid.preload = "auto";
+      const play = () => { void vid.play().catch(() => {}); };
+      play();
+      window.addEventListener("pointerdown", play, { once: true });
+      vidRef.current = vid;
+      return () => {
+        window.removeEventListener("pointerdown", play);
+        vid.pause();
+        vid.removeAttribute("src");
+        vid.load();
+        vidRef.current = null;
+      };
+    }
+
     const img = document.createElement("img");
     img.crossOrigin = "anonymous";
     img.decoding = "async";
@@ -451,16 +490,27 @@ function useGifTexture(url: string | undefined, width = 256, height = 192) {
   }, [url]);
 
   useFrame(() => {
-    const img = imgRef.current;
     const ctx = canvas.getContext("2d");
-    if (!ctx || !img || !img.complete || !img.naturalWidth) return;
+    if (!ctx) return;
+    const vid = vidRef.current;
+    const img = imgRef.current;
+    let src: CanvasImageSource | null = null;
+    let sw = 0;
+    let sh = 0;
+    // readyState >= 2 is HAVE_CURRENT_DATA: there is a frame to draw.
+    if (vid && vid.readyState >= 2 && vid.videoWidth) {
+      src = vid; sw = vid.videoWidth; sh = vid.videoHeight;
+    } else if (img && img.complete && img.naturalWidth) {
+      src = img; sw = img.naturalWidth; sh = img.naturalHeight;
+    }
+    if (!src) return;
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const k = Math.min(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
-    const w = img.naturalWidth * k;
-    const h = img.naturalHeight * k;
+    const k = Math.min(canvas.width / sw, canvas.height / sh);
+    const w = sw * k;
+    const h = sh * k;
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+    ctx.drawImage(src, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
     texture.needsUpdate = true;
   });
 
@@ -529,7 +579,7 @@ export function RetroCrtTv({
     return cloned;
   }, [gltfScene]);
 
-  const gifTex = useGifTexture(screen.content);
+  const gifTex = useScreenTexture(screen.content);
   const scanlines = useScanlines();
 
   // Light shape: forward-firing spot (not a point). A point light lit

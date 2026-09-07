@@ -6,6 +6,7 @@ import { Canvas } from "@react-three/fiber";
 import { Environment } from "@react-three/drei";
 import DoeGLB from "./DoeGLB";
 
+import Matte from "@/components/Matte";
 export default function DoeScene({
   className = "",
   style,
@@ -24,6 +25,7 @@ export default function DoeScene({
         camera={{ position: [0, 0.45, 5], fov: 34 }}
         gl={{ alpha: true, antialias: true }}
       >
+        <Matte />
         <Environment preset="forest" environmentIntensity={0.55} />
         <ambientLight intensity={0.3} />
         <directionalLight position={[3, 4, 5]} intensity={1.9} color="#fff2cf" />

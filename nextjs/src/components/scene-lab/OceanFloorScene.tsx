@@ -7,6 +7,7 @@ import { ContactShadows, useAnimations, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { OceanFloorSceneConfig } from "@/components/scene-lab/sceneConfig";
 
+import Matte from "@/components/Matte";
 // The untouched pack file, not bear_sit_fixed.glb. No added clip, no prop.
 const BEAR_URL = "/wildpoly/bear.glb";
 
@@ -489,6 +490,7 @@ export default function OceanFloorScene({
       camera={{ position: [config.cameraX, config.cameraY, config.cameraZ], fov: config.fov, near: 0.05, far: 12 }}
       gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
     >
+      <Matte />
       <OceanFloorWorld config={config} flying={flying} onIntroDone={() => setFlying(false)} />
     </Canvas>
   );

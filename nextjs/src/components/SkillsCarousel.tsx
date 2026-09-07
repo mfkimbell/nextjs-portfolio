@@ -7,6 +7,7 @@ import { useAnimations, useGLTF } from "@react-three/drei";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import * as THREE from "three";
 
+import Matte from "@/components/Matte";
 // =========== CONFIG ===========
 // A left-to-right drifting row. Each skill's icon GLB sits on a straight
 // horizontal track at a constant height, with its assigned bird perched on
@@ -423,6 +424,7 @@ export default function SkillsCarousel() {
           }}
           gl={{ alpha: true, antialias: true }}
         >
+          <Matte />
           <ambientLight intensity={1.35} />
           <directionalLight position={[3, 4, 5]} intensity={2.0} color="#fff2cf" />
           <directionalLight position={[-3, 1, 2]} intensity={0.6} color="#b9d4f0" />

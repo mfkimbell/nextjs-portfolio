@@ -5,6 +5,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 
+import Matte from "@/components/Matte";
 /**
  * Alphabet is composed from GLB letter meshes exported per-glyph from
  * simple_alphabet.glb (see nextjs/public/letters/*.glb).
@@ -606,6 +607,7 @@ export default function CampsiteTitleIntro({
           camera={{ position: [0, 0, 17], fov: 50 }}
           gl={{ antialias: true, alpha: true }}
         >
+          <Matte />
           <ambientLight intensity={0.6} />
           <directionalLight position={[3, 4, 6]} intensity={1.2} />
           <directionalLight position={[-4, -2, 3]} intensity={0.35} color="#ffd28a" />
