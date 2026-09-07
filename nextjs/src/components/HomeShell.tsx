@@ -132,6 +132,19 @@ export default function HomeShell({ initialGallery }: HomeShellProps) {
     <SWRConfig value={{ fallback: { [GALLERY_ENDPOINT]: initialGallery } }}>
       <div className="relative overflow-x-clip overflow-y-clip">
         <div
+          className="rotate-prompt bg-gradient-to-b from-[#8AD1FC] via-[#78C2F3] to-[#5CA7DF]"
+          aria-hidden="true"
+        >
+          <div className="rotate-prompt__inner">
+            <div className="rotate-prompt__icon" aria-hidden="true">📱↻</div>
+            <div className="rotate-prompt__title">Please rotate your phone</div>
+            <div className="rotate-prompt__body">
+              This site is best viewed in landscape.
+            </div>
+          </div>
+        </div>
+
+        <div
           className={`
             fixed inset-0 z-[2000]
             bg-gradient-to-b from-[#8AD1FC] via-[#78C2F3] to-[#5CA7DF]
@@ -241,6 +254,48 @@ export default function HomeShell({ initialGallery }: HomeShellProps) {
             50%      { transform: translateY(-6px); }
           }
 
+          .rotate-prompt {
+            display: none;
+          }
+          @media (orientation: portrait) and (max-width: 900px) {
+            .rotate-prompt {
+              position: fixed;
+              inset: 0;
+              z-index: 3000;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              color: white;
+              text-align: center;
+              padding: 24px;
+            }
+            .rotate-prompt__inner {
+              max-width: 320px;
+            }
+            .rotate-prompt__icon {
+              font-size: 64px;
+              margin-bottom: 16px;
+              animation: rotateHint 2s ease-in-out infinite;
+            }
+            .rotate-prompt__title {
+              font-size: 22px;
+              font-weight: 700;
+              margin-bottom: 8px;
+            }
+            .rotate-prompt__body {
+              font-size: 15px;
+              opacity: 0.9;
+              line-height: 1.4;
+            }
+            /* Lock scroll while overlay is visible */
+            html, body {
+              overflow: hidden !important;
+            }
+          }
+          @keyframes rotateHint {
+            0%, 100% { transform: rotate(0deg); }
+            50%      { transform: rotate(90deg); }
+          }
         `}</style>
       </div>
     </SWRConfig>
