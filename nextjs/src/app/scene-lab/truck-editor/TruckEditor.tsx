@@ -183,10 +183,11 @@ function TruckModel({
       if (o.name === "Tailgate" || o.name === "Tailgate.002") tailgate = o;
     });
     if (!tailgate) return;
-    const tg = tailgate as THREE.Object3D;
     // Reset to zero-offset before applying - we don't know the "base" here,
     // so we treat the GLB's authored transform as the base and offset from it.
-    // Grab it once per model load.
+    // Grab it once per model load. (Body of this effect is handled by the
+    // matching useMemo below; this effect exists purely for the model-swap
+    // rebind side effect.)
   }, [model]);
 
   const tailgateBase = useMemo(() => {

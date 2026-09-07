@@ -543,7 +543,6 @@ export default function CampsiteTitleIntro({
     };
     // Intentionally empty deps: mount-once. Callbacks read from onEnterRef so
     // parent re-renders (e.g. slider drags) don't tear down the RAF loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const activate = () => {

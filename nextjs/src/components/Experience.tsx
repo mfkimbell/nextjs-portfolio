@@ -45,6 +45,7 @@ export default function Experience() {
                   className="absolute top-4 right-4 z-10 block select-none pointer-events-none lg:hidden"
                   style={{ animationDelay: `${idx * -BOB_STAGGER_MS}ms` }}
                 >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={role.logo}
                     alt={`${role.company} badge`}
@@ -58,6 +59,7 @@ export default function Experience() {
                   className="absolute left-0 top-1/2 z-10 hidden -translate-x-full -translate-y-1/2 select-none pointer-events-none lg:block"
                   style={{ animationDelay: `${idx * -BOB_STAGGER_MS}ms` }}
                 >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={role.logo}
                     alt={`${role.company} badge`}

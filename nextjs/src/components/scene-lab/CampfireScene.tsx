@@ -4664,11 +4664,16 @@ function PawProp({
 
     parent.add(obj);
     objRef.current = obj;
+    // Snapshot cords.current NOW - by the time this cleanup runs, the ref's
+    // .current may have swapped to a different map (or be null), and cleaning
+    // the wrong one silently leaks the entry. This is what the react-hooks
+    // rule warns about.
+    const cordsAtMount = cords?.current;
     return () => {
       parent.remove(obj);
       objRef.current = null;
       cordRef.current = null;
-      cords?.current?.delete(name);
+      cordsAtMount?.delete(name);
     };
   }, [gltf.scene, spec, root, ready, name, cords]);
 
@@ -4713,6 +4718,7 @@ function GameCubeConsole({
   const groupRef = useRef<THREE.Group>(null);
   const cfg = useRef(config);
   cfg.current = config;
+  const tmp = useMemo(() => new THREE.Vector3(), []);
 
   useEffect(() => {
     model.traverse((o) => {
@@ -5159,7 +5165,7 @@ function Animal({
         cubEarRRestQ.current = b.quaternion.clone();
       }
     });
-  }, [model, placement.url, seed]);
+  }, [model, placement.url, placement.bearId, placement.banjoPlayer, gltf.animations, seed]);
 
   const { actions, names: actionNames } = useAnimations(gltf.animations || [], groupRef);
 

@@ -168,6 +168,7 @@ export default function HomeShell({ initialGallery }: HomeShellProps) {
               overflow: "hidden",
             }}
           >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/fauna/left_tree.png"
               alt=""
@@ -195,6 +196,7 @@ export default function HomeShell({ initialGallery }: HomeShellProps) {
               overflow: "hidden",
             }}
           >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/fauna/right_tree.png?v=6"
               alt=""

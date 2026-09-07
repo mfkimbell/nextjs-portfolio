@@ -247,22 +247,22 @@ function TrackItem({
     // ---- Find the head bone (procedural yaw/pitch is applied here so
     // the feet don't rotate with the whole group). Fall back to null; if
     // no head is found, procedural rotation is silently skipped.
-    let foundHead: THREE.Object3D | null = null;
+    // TypeScript's control flow narrows a `let` assigned inside a callback
+    // to `never` at reads that follow the traverse - work around it by
+    // treating the accumulator as a Ref cell so the outer scope keeps the
+    // widened type.
+    const found: { bone: THREE.Object3D | null } = { bone: null };
     const hints = CONFIG.HEAD_BONE_HINTS.map((h) => h.toLowerCase());
     bird.traverse((node) => {
-      if (foundHead) return;
+      if (found.bone) return;
       const n = node.name.toLowerCase();
-      if (hints.some((h) => n.includes(h))) foundHead = node;
+      if (hints.some((h) => n.includes(h))) found.bone = node;
     });
     // Capture the head bone's rest rotation so we ADD our procedural
     // motion on top of it (rather than clobbering the model's rest pose).
-    const headBone: THREE.Object3D | null = foundHead;
-    const headRest: { x: number; y: number; z: number } | null = foundHead
-      ? {
-          x: (foundHead as THREE.Object3D).rotation.x,
-          y: (foundHead as THREE.Object3D).rotation.y,
-          z: (foundHead as THREE.Object3D).rotation.z,
-        }
+    const headBone = found.bone;
+    const headRest = headBone
+      ? { x: headBone.rotation.x, y: headBone.rotation.y, z: headBone.rotation.z }
       : null;
 
     return {

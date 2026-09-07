@@ -9,6 +9,7 @@ export default function RightBird() {
       {/* Branch and Bird - 3D effect */}
       <div className="relative w-full h-[50px] min-h-[10px]">
         {/* Background branch - behind the bird */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/right_branch.png"
           alt="Right jungle branch background"
@@ -22,6 +23,7 @@ export default function RightBird() {
         </div>
 
         {/* Foreground branch - in front of the bird */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/right_branch_front.png"
           alt="Right jungle branch foreground"

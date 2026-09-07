@@ -9,6 +9,10 @@ export default function LeftBird() {
       <div className="relative z-10 transform scale-75 sm:scale-100">
         <BirdScene />
 
+        {/* Plain <img> is intentional: the branch SVG is small, vector-scaled
+            and doesn't benefit from next/image optimisation, which would
+            require explicit width/height and break the tailwind sizing. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/left_branch.svg"
           alt="Left jungle branch"

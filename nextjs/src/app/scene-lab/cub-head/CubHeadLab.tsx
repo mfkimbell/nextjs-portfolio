@@ -60,15 +60,22 @@ function BoneAwareCub({
     boneRef.current = null;
     restPosRef.current = null;
     const target = normalize(boneName);
+    // Assign to a local so TS can widen the type back to `Bone | null` after
+    // the traverse callback. Assigning to `boneRef.current` inside a closure
+    // narrows the ref to `never` in the outer scope on strict tsc.
+    let found: THREE.Bone | null = null;
     scene.traverse((o) => {
       const b = o as THREE.Bone;
       if (!b.isBone) return;
-      if (!boneRef.current && normalize(o.name) === target) {
-        boneRef.current = b;
-        restPosRef.current = b.position.clone();
+      if (!found && normalize(o.name) === target) {
+        found = b;
       }
     });
-    if (onBoneStatus) onBoneStatus(!!boneRef.current, boneRef.current?.name ?? null);
+    if (found) {
+      boneRef.current = found;
+      restPosRef.current = (found as THREE.Bone).position.clone();
+    }
+    if (onBoneStatus) onBoneStatus(!!found, found ? (found as THREE.Bone).name : null);
   }, [scene, boneName, onBoneStatus]);
 
   useFrame(() => {

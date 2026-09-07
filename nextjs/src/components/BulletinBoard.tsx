@@ -650,6 +650,11 @@ function Scene({
   votingId: string | null;
   onHoverTitleChange?: HoverTitleChange;
 }) {
+  // Accepted for API symmetry with the outer BulletinBoard component but not
+  // forwarded to any child inside Scene yet - Bulletin and ContactPaper each
+  // fire their own onHoverTitleChange from within. Referenced here to satisfy
+  // no-unused-vars without deleting the prop from the public signature.
+  void onHoverTitleChange;
   const { viewport } = useThree();
   const halfW = viewport.width / 2;
   const halfH = viewport.height / 2;

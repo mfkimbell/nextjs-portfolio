@@ -56,7 +56,7 @@ export default function BirdGLB({ containerRef }: Props) {
   useEffect(() => {
     head.current = scene.getObjectByName("Head")!;
     head.current.rotation.set(BASE_PITCH, BASE_YAW, BASE_ROLL);
-  }, [scene, BASE_YAW]);
+  }, [scene, BASE_PITCH, BASE_YAW, BASE_ROLL]);
 
   /* pointer tracking with pixel-based dead zone and center offset */
   useEffect(() => {
@@ -126,7 +126,7 @@ export default function BirdGLB({ containerRef }: Props) {
       window.removeEventListener("scroll", onScrollResize);
       window.removeEventListener("resize", onScrollResize);
     };
-  }, [containerRef, INVERT_Y]);
+  }, [containerRef, INVERT_Y, INVERT_X, DEAD_ZONE, SENSITIVITY, CENTER_OFFSET_X, CENTER_OFFSET_Y]);
 
   /* per-frame smoothing toward target rotations */
   useFrame(() => {
