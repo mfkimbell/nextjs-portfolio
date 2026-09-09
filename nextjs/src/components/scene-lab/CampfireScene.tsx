@@ -416,7 +416,10 @@ const GAMECUBE_URL = "/bear/gamecube.glb";
 // authoring scale, so each Selectable that uses one wraps it in a small
 // anchor + baseScale normalization.
 const XBOX360_URL = "/bear/2/xbox_360_fat_low_poly.glb";
-const PS2_SLIM_URL = "/bear/2/a_playstation_2_slim.glb";
+// The PS2 slim used to sit here. Removed with its GLB: it had been hidden
+// (objectOverrides.arcade_ps2_slim.hide = 1) so nothing rendered it, but the
+// module-scope useGLTF.preload downloaded and parsed it anyway - 11.4 MB and
+// 186,743 triangles, 51% of the scene's geometry, for a console nobody saw.
 const GAMECUBE_CONSOLE_URL = "/bear/2/gamecube_console.glb";
 const CONTROLLER_URL = "/bear/gamecube_controller.glb";
 
@@ -2695,6 +2698,118 @@ function GLBModel({ url }: { url: string }) {
  * because the effective triangle winding is inverted vs what the culling
  * expects, and pointer events go through the model instead of selecting it.
  */
+
+/**
+ * An owl perched on the cabin's lantern beam.
+ *
+ * WHERE it sits comes out of the cabin, not out of guesswork. The lantern
+ * hangs off a wooden bracket - Cube.004_wood_0 - which measures x[15.1, 16.7]
+ * y[37.1, 38.8] z[36.6, 48.6] in the cabin's own space, and the lantern body
+ * occupies z[45.2, 50.0] of it. So the beam's top face is y 38.8, its centre
+ * line x 15.9, and the free run of beam beside the lantern is z 36.6 to 45.2.
+ * The defaults put the owl at (15.9, 38.8, 43) - stood on the beam, just clear
+ * of the lantern, right in its pool of light.
+ *
+ * Coordinates are in the SAME cabin-local units as arcadeCabinLampX/Y/Z, so
+ * the owl's 15.9 / 38.8 / 41.5 reads directly against the lamp's 16.05 /
+ * 33.04 / 47.62 - and the lamp's config lands dead on the lantern mesh's own
+ * centre (16.05, 33.05, 47.65), which is how the frame was confirmed.
+ *
+ * One world unit is 32.6 cabin units at the cabin's current scale (0.1
+ * baseScale x 0.307 override), so the default 9.8-unit owl is 30 cm tall -
+ * deliberately the same size as the two owls already on the front log, which
+ * sit at ANIMALS scale 0.5 against a 0.5986 bind height.
+ *
+ * Perched and idling it occupies 6.6 x 9.8 x 9.1 cabin units, which is why Z
+ * is 41.5 rather than 43: half its depth is 4.5, so it reaches z 46 at 43 and
+ * clips into the lantern. At 41.5 it spans 37.0 to 46.0... turned across the
+ * beam by the default pi/2 spin it spans z 38.2 to 44.8, clear of the
+ * lantern's 45.2 with room to spare, and inside the beam's 36.6 to 48.6.
+ *
+ * Two things this rides for free by living inside the cabin's model frame:
+ * it tracks the cabin through the mirror group and every scale above it, and
+ * three flips the winding for the mirror's negative determinant on its own
+ * (WebGLRenderer.js:1100), so no DoubleSide fixup is needed - unlike
+ * MirroredGLBModel, which forces it for RAYCASTING, which Mesh.raycast does
+ * not compensate for.
+ */
+const CABIN_OWL_CLIPS = ["idle", "sleep", "headtwist"] as const;
+/*
+ * Sizing a SKINNED mesh: do NOT measure the POSITION attribute.
+ *
+ * white_owl.glb's raw POSITION data, with every node transform applied, boxes
+ * up at 0.015006 x 0.006080 x 0.006450. That number is meaningless. The mesh
+ * is skinned, so what actually reaches the screen is each vertex pushed
+ * through sum(w_j * boneWorld_j * inverseBind_j) - and for this file the bind
+ * matrices carry a ~98x scale. Skinning the vertices properly gives a bind
+ * pose of 1.32912 x 0.59861 x 0.76330. Normalising against the raw box made
+ * the owl ninety-eight times too big.
+ *
+ * And the bind pose is wings-OUT, which is not how it will ever be seen. The
+ * numbers below come from evaluating the idle clip itself across its 9.13s
+ * cycle, which folds the wings:
+ *
+ *            width    height   depth    feet y
+ *   bind     1.3291   0.5986   0.7633   -0.0633
+ *   idle     0.4459   0.6579   0.6079   -0.0219 .. -0.0086
+ *
+ * So: normalise to one unit tall on the IDLE height, and lift by the lowest
+ * the feet get in the cycle, so they never sink into the beam. The Y knob then
+ * means "the surface it stands on" and Scale means "how tall it is", both in
+ * cabin units.
+ */
+const CABIN_OWL_NORMALIZE = 1 / 0.6579;
+const CABIN_OWL_FEET_LIFT = 0.0219 / 0.6579;
+
+function CabinOwl({ config }: { config: CampfireSceneConfig }) {
+  const gltf = useGLTF(WHITE_OWL_URL) as unknown as {
+    scene: THREE.Group; animations: THREE.AnimationClip[];
+  };
+  // skeletonClone, not the cached scene: this same white owl is already
+  // perched on the front log by CampfireAnimals, and a plain reference would
+  // leave both birds sharing one skeleton - whichever mixer ran last would
+  // pose them together. No new download either, the file is already preloaded.
+  const owl = useMemo(() => skeletonClone(gltf.scene), [gltf.scene]);
+  const { actions } = useAnimations(gltf.animations, owl);
+
+  useEffect(() => {
+    owl.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) { mesh.castShadow = true; mesh.receiveShadow = true; }
+    });
+  }, [owl]);
+
+  const clip = CABIN_OWL_CLIPS[
+    Math.max(0, Math.min(CABIN_OWL_CLIPS.length - 1, Math.round(config.arcadeCabinOwlClip)))
+  ];
+  useEffect(() => {
+    // The two owl files prefix their clips with different rig names -
+    // "EagleOwl_Rig|EagleOwl_Rig|idle" here, "Bird1009_Rig|..." in the red one
+    // - so match the verb at the end rather than the whole key.
+    const key = Object.keys(actions).find((k) => k.toLowerCase().endsWith(clip));
+    const action = key ? actions[key] : undefined;
+    if (!action) return;
+    action.reset().setLoop(THREE.LoopRepeat, Infinity).play();
+    return () => { action.stop(); };
+  }, [actions, clip]);
+
+  return (
+    <group
+      position={[config.arcadeCabinOwlX, config.arcadeCabinOwlY, config.arcadeCabinOwlZ]}
+      rotation={[0, config.arcadeCabinOwlRotY, 0]}
+      scale={config.arcadeCabinOwlScale}
+    >
+      {/* Feet on the beam. The lift is in owl-heights, so the outer scale
+          carries it into cabin units along with everything else. */}
+      <group position={[0, CABIN_OWL_FEET_LIFT, 0]}>
+        <group scale={CABIN_OWL_NORMALIZE}>
+          <primitive object={owl} />
+        </group>
+      </group>
+    </group>
+  );
+}
+
 /**
  * The arcade's wooden cabin, with its lantern actually lit.
  *
@@ -2805,10 +2920,37 @@ function LitWoodenCabin({ config }: { config: CampfireSceneConfig }) {
       config.arcadeCabinLampColorR, config.arcadeCabinLampColorG, config.arcadeCabinLampColorB),
     [config.arcadeCabinLampColorR, config.arcadeCabinLampColorG, config.arcadeCabinLampColorB]
   );
+  const bugColor = useMemo(
+    () => new THREE.Color().setRGB(config.deskBugR, config.deskBugG, config.deskBugB),
+    [config.deskBugR, config.deskBugG, config.deskBugB]
+  );
 
   return (
     <>
       <primitive object={model} />
+      {config.arcadeCabinOwlOn >= 0.5 && <CabinOwl config={config} />}
+      {/* Moths at the porch light. Same swarm as the camp lamps, in the
+          cabin's frame: baseScale 0.1 on the Selectable times its override, so
+          the world-unit knobs come out the same size here as they do out at
+          the signpost even though one cabin unit is 5.6x smaller than one camp
+          unit. The mirror group above only flips X, so magnitude is all that
+          matters. */}
+      {config.arcadeCabinLampBugs >= 0.5 && (
+        <BugSwarm
+          origin={[config.arcadeCabinLampX, config.arcadeCabinLampY, config.arcadeCabinLampZ]}
+          frameScale={0.1 * (config.objectOverrides?.["arcade_wooden_cabin"]?.scale ?? 1)}
+          count={config.deskBugCount}
+          radius={config.deskBugRadius}
+          spread={config.deskBugSpread}
+          height={config.deskBugHeight}
+          speed={config.deskBugSpeed}
+          jitter={config.deskBugJitter}
+          dive={config.deskBugDive}
+          size={config.deskBugSize}
+          opacity={config.deskBugOpacity}
+          color={bugColor}
+        />
+      )}
       {/* Sits in the model's frame so it tracks the lantern through the mirror
           and every scale above it. `distance` stays in WORLD units - three does
           not scale light falloff by the parent transform. */}
@@ -3133,14 +3275,44 @@ type DeskCampLamp = {
   /** The emissive glass. Gets a point light and the Emissive slider. */
   meshes: readonly string[];
   /** Housing, shade, bracket - no light of its own, but it has to travel with
-   *  the glass or moving a fixture leaves its body behind. Found by taking
-   *  every mesh whose centre is within 0.45 of the glass. */
+   *  the glass or moving a fixture leaves its body behind.
+   *
+   *  These were first gathered by proximity - every mesh within 0.45 of the
+   *  glass - and that is NOT sufficient on its own. It swept the van's two
+   *  grey trim squares in as if they were headlight housings, and they then
+   *  slid about under the lights whenever the fixture moved. Check what a
+   *  mesh actually is before listing it here: the lantern bodies below are
+   *  four-part assemblies that really do belong to their lamp; the van's
+   *  headlight is just the glass. */
   body?: readonly string[];
+  /** Fixtures that throw a BEAM rather than glowing in all directions get a
+   *  forward direction here, in camp space. Only the van's headlights have
+   *  one - a point light at a headlight reads as a glowing ball, not as a
+   *  vehicle with its lights on.
+   *
+   *  Measured, not guessed: the van's chassis (Object_341) centres at blender
+   *  (-1.82, -1.86) and the headlight midpoint is (-1.46, -4.29), so nose-
+   *  forward is (0.148, -0.989) in blender xy = (0.148, 0, 0.989) in camp
+   *  space. The perpendicular to the line joining the two headlights comes
+   *  out at (0.151, 0, 0.989) independently, which agrees.
+   *
+   *  Y is 0 here: this is the HORIZONTAL heading only. The downward tilt is
+   *  deskLamp<id>BeamTilt so it can be dialled without editing the table, and
+   *  both lights take the same direction from their own positions - which is
+   *  what keeps the two pools parallel instead of converging. */
+  beam?: readonly [number, number, number];
   label: string;
 };
 const DESK_CAMP_LAMPS: readonly DeskCampLamp[] = [
+  // No `body`: the van's headlight IS the round glass, nothing else. The two
+  // grey squares below them (Object_399/401) are NOT housings - they are
+  // generic trim in Material.002, the same material as the little caps on the
+  // posts up by the camp (Object_312/322), and they belong to the van's face,
+  // not to the lamp. Bundling them made them slide around under the
+  // headlights whenever the lamp was nudged.
   { id: "VanHeads", meshes: ["Object_335", "Object_337"],
-    body: ["Object_399", "Object_401"], label: "Camper van headlights (both)" },
+    beam: [0.148, 0, 0.989],
+    label: "Camper van headlights (both)" },
   { id: "SmallA", meshes: ["Object_133"],
     body: ["Object_446", "Object_447", "Object_448", "Object_449"], label: "Small lamp · near the fire pit" },
   { id: "SmallB", meshes: ["Object_131"],
@@ -3155,6 +3327,248 @@ const DESK_CAMP_LAMP_PARTS = new Map<string, string>(
 );
 
 const WATER_MATERIALS = new Set(["Material.057"]);
+
+/**
+ * Shadow opt-in for the desk diorama.
+ *
+ * Nothing in camping.glb sets castShadow or receiveShadow, so every mesh
+ * defaults to false and no lamp in that scene could cast onto anything - the
+ * flags have to be turned on explicitly before any of this works.
+ *
+ * Kept to the smallest set that gives the dock a shadow on the water: a point
+ * light's shadow is a CUBE map, six depth passes a frame, and restricting the
+ * casters to the dock's three planks means those passes render three meshes
+ * rather than the whole camp. That is also why the toggles below default to
+ * on for the dock lantern only.
+ */
+// Object_378 is the WHOLE dock in one mesh - 270 verts, 44 horizontal
+// triangles (the deck surface) and 92 vertical (posts and sides). So the deck
+// is a caster, not just the posts. Object_379/380 are the two flat boards
+// lying on top of it.
+const DESK_SHADOW_CASTERS = new Set(["Object_378", "Object_379", "Object_380"]);
+const DESK_SHADOW_RECEIVER_MATERIALS = new Set([
+  "Material.057",                                  // the river
+  "Material.108", "Material.045", "Material.077",  // ground it may fall on
+]);
+
+/**
+ * Push the shared shadow-quality settings onto a light.
+ *
+ * near/far are the part that decides whether this works AT ALL. They are in
+ * WORLD units, and the camp is scaled to ~0.17, so the distances involved are
+ * tiny: the dock lantern sits 0.24 camp units above the deck, which is 0.042
+ * world units, and 1.02 above the water, which is 0.176. three's default
+ * PointLightShadow near is 0.5 - both are well inside it, so at the defaults
+ * the dock never enters the shadow camera and no shadow is produced at all.
+ * Hence a near of 0.01.
+ */
+function applyDeskShadow(light: THREE.Light & { shadow?: THREE.LightShadow }, c: Record<string, number>) {
+  const sh = light.shadow;
+  if (!sh) return;
+  const size = Math.max(128, Math.round(c.deskShadowMapSize ?? 512));
+  if (sh.mapSize.width !== size) {
+    sh.mapSize.set(size, size);
+    // The old depth target has to go, or three keeps rendering at the old size.
+    sh.map?.dispose();
+    sh.map = null;
+  }
+  sh.bias = c.deskShadowBias ?? -0.0015;
+  sh.radius = c.deskShadowRadius ?? 3;
+  const cam = sh.camera as THREE.PerspectiveCamera;
+  cam.near = Math.max(0.001, c.deskShadowNear ?? 0.01);
+  cam.far = Math.max(cam.near + 0.01, c.deskShadowFar ?? 2);
+  cam.updateProjectionMatrix();
+  sh.needsUpdate = true;
+}
+
+/**
+ * The dock's shadow, baked into something JS can ask questions of.
+ *
+ * The lantern already throws a real shadow on the water - DESK_SHADOW_CASTERS
+ * above turns the deck into a caster and the river into a receiver. But a
+ * shadow map only darkens PIXELS. It cannot tell the fish component "you are
+ * in the dark right now", and a fish lit exactly as brightly under the deck as
+ * out in the open is what gave the shoal away.
+ *
+ * So the same occlusion is solved a second time, analytically. Two facts out
+ * of the file make that cheap:
+ *
+ *  - the deck is near-planar. Its 44 upward-facing triangles sit between y
+ *    1.131 and 1.361, over a 2.69 x 2.75 footprint, so treating them as one
+ *    plane at their area-weighted mean height is well inside the softness of
+ *    the edge.
+ *  - the lantern is a POINT. A point light's shadow of a plane onto another
+ *    plane below is just the footprint scaled out from the light's XZ. So the
+ *    whole test is 2-D: project the fish back UP onto the deck plane along the
+ *    ray to the lantern, and ask whether it lands on the deck.
+ *
+ * The footprint is not a rectangle. The dock is two planks crossing at an
+ * angle and covers ~34% of its own bounding box, so a box test would black out
+ * fish swimming through the open corners. It is rasterised once into a SIGNED
+ * DISTANCE FIELD instead - positive inside the deck, negative outside, in camp
+ * units. Distance rather than a 0/1 mask because it buys a soft edge for free,
+ * and one the panel can widen or tighten live without rebuilding the grid.
+ */
+type DeskShadeField = {
+  x0: number; z0: number; cell: number; w: number; h: number;
+  deckY: number; sdf: Float32Array;
+};
+// 0.03 camp units puts ~90x92 cells on the deck - finer than the shadow map
+// resolves once it has been thrown 4x outward. The pad is room for the field
+// to keep going negative past the edge, so Soft has something to ramp across.
+const SHADE_CELL = 0.03;
+const SHADE_PAD = 0.6;
+
+function buildDockShade(root: THREE.Object3D): DeskShadeField | null {
+  const tris: number[][] = [];
+  let yWeighted = 0, areaTotal = 0;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const ab = new THREE.Vector3(), ac = new THREE.Vector3(), n = new THREE.Vector3();
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !DESK_SHADOW_CASTERS.has(mesh.name)) return;
+    const geo = mesh.geometry as THREE.BufferGeometry;
+    const pos = geo.getAttribute("position");
+    if (!pos) return;
+    const idx = geo.getIndex();
+    const count = idx ? idx.count : pos.count;
+    for (let i = 0; i + 2 < count; i += 3) {
+      const i0 = idx ? idx.getX(i) : i;
+      const i1 = idx ? idx.getX(i + 1) : i + 1;
+      const i2 = idx ? idx.getX(i + 2) : i + 2;
+      a.fromBufferAttribute(pos, i0).applyMatrix4(mesh.matrixWorld);
+      b.fromBufferAttribute(pos, i1).applyMatrix4(mesh.matrixWorld);
+      c.fromBufferAttribute(pos, i2).applyMatrix4(mesh.matrixWorld);
+      ab.subVectors(b, a); ac.subVectors(c, a); n.crossVectors(ab, ac);
+      const len = n.length();
+      if (len < 1e-9) continue;
+      // Deck surface only. The posts and the sides face sideways; they block
+      // nothing the deck above them is not already blocking, and including
+      // them would smear the footprint out to the bounding box.
+      if (Math.abs(n.y) / len < 0.85) continue;
+      tris.push([a.x, a.z, b.x, b.z, c.x, c.z]);
+      yWeighted += ((a.y + b.y + c.y) / 3) * len; areaTotal += len;
+    }
+  });
+  if (!tris.length || areaTotal <= 0) return null;
+
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const t of tris) {
+    for (let k = 0; k < 6; k += 2) {
+      if (t[k] < x0) x0 = t[k];
+      if (t[k] > x1) x1 = t[k];
+      if (t[k + 1] < z0) z0 = t[k + 1];
+      if (t[k + 1] > z1) z1 = t[k + 1];
+    }
+  }
+  x0 -= SHADE_PAD; x1 += SHADE_PAD; z0 -= SHADE_PAD; z1 += SHADE_PAD;
+  const w = Math.max(8, Math.ceil((x1 - x0) / SHADE_CELL));
+  const h = Math.max(8, Math.ceil((z1 - z0) / SHADE_CELL));
+
+  // Scan-convert the triangle soup. Overlaps are fine - this is a union, and
+  // a cell already set stays set.
+  const inside = new Uint8Array(w * h);
+  for (const [ax, az, bx, bz, cx, cz] of tris) {
+    const det = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(det) < 1e-12) continue;
+    const gx0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) - x0) / SHADE_CELL));
+    const gx1 = Math.min(w - 1, Math.ceil((Math.max(ax, bx, cx) - x0) / SHADE_CELL));
+    const gz0 = Math.max(0, Math.floor((Math.min(az, bz, cz) - z0) / SHADE_CELL));
+    const gz1 = Math.min(h - 1, Math.ceil((Math.max(az, bz, cz) - z0) / SHADE_CELL));
+    for (let gz = gz0; gz <= gz1; gz++) {
+      const pz = z0 + (gz + 0.5) * SHADE_CELL;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        const px = x0 + (gx + 0.5) * SHADE_CELL;
+        const u = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / det;
+        const v = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / det;
+        if (u >= 0 && v >= 0 && u + v <= 1) inside[gz * w + gx] = 1;
+      }
+    }
+  }
+
+  // Two-pass chamfer distance transform, run once from the inside cells and
+  // once from the outside ones; the difference is the signed distance. Exact
+  // Euclidean would cost more and buy nothing - the error is a few percent of
+  // a cell, and Soft is measured in whole camp units.
+  const BIG = 1e6, D1 = 1, D2 = Math.SQRT2;
+  const transform = (want: number) => {
+    const d = new Float32Array(w * h);
+    for (let i = 0; i < d.length; i++) d[i] = inside[i] === want ? 0 : BIG;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x; let m = d[i];
+        if (x > 0) m = Math.min(m, d[i - 1] + D1);
+        if (y > 0) {
+          m = Math.min(m, d[i - w] + D1);
+          if (x > 0) m = Math.min(m, d[i - w - 1] + D2);
+          if (x < w - 1) m = Math.min(m, d[i - w + 1] + D2);
+        }
+        d[i] = m;
+      }
+    }
+    for (let y = h - 1; y >= 0; y--) {
+      for (let x = w - 1; x >= 0; x--) {
+        const i = y * w + x; let m = d[i];
+        if (x < w - 1) m = Math.min(m, d[i + 1] + D1);
+        if (y < h - 1) {
+          m = Math.min(m, d[i + w] + D1);
+          if (x < w - 1) m = Math.min(m, d[i + w + 1] + D2);
+          if (x > 0) m = Math.min(m, d[i + w - 1] + D2);
+        }
+        d[i] = m;
+      }
+    }
+    return d;
+  };
+  const toInside = transform(1);
+  const toOutside = transform(0);
+  const sdf = new Float32Array(w * h);
+  for (let i = 0; i < sdf.length; i++) sdf[i] = (toOutside[i] - toInside[i]) * SHADE_CELL;
+
+  return { x0, z0, cell: SHADE_CELL, w, h, deckY: yWeighted / areaTotal, sdf };
+}
+
+/** Everything a fish needs to know about being in the dark. */
+type FishShade = {
+  field: DeskShadeField;
+  light: [number, number, number];
+  amount: number;
+  fade: number;
+  soft: number;
+};
+
+/**
+ * How deep in the dock's shadow the point (x, y, z) is. 0 = fully lit, 1 =
+ * fully blocked, with a smoothstep across the edge.
+ */
+function shadeAt(s: FishShade, x: number, y: number, z: number): number {
+  const f = s.field;
+  const drop = s.light[1] - f.deckY;
+  if (drop <= 1e-4) return 0;                 // lantern is at or below the deck
+  const k = (s.light[1] - y) / drop;          // how far the shadow has spread
+  if (k <= 1) return 0;                       // the point is not below the deck
+  // Back up the ray to the lantern until it meets the deck plane.
+  const dx = s.light[0] + (x - s.light[0]) / k;
+  const dz = s.light[2] + (z - s.light[2]) / k;
+  const gx = (dx - f.x0) / f.cell - 0.5;
+  const gz = (dz - f.z0) / f.cell - 0.5;
+  if (gx < 0 || gz < 0 || gx > f.w - 1 || gz > f.h - 1) return 0;
+  const ix = Math.floor(gx), iz = Math.floor(gz);
+  const tx = gx - ix, tz = gz - iz;
+  const ix1 = Math.min(ix + 1, f.w - 1), iz1 = Math.min(iz + 1, f.h - 1);
+  const d =
+    f.sdf[iz * f.w + ix] * (1 - tx) * (1 - tz) + f.sdf[iz * f.w + ix1] * tx * (1 - tz) +
+    f.sdf[iz1 * f.w + ix] * (1 - tx) * tz + f.sdf[iz1 * f.w + ix1] * tx * tz;
+  // Soft is authored at the FISH's depth, but the field is in the deck plane -
+  // and the projection between them shrinks everything by k. Without this the
+  // edge would visibly tighten as the fish swims deeper.
+  const width = Math.max(1e-4, s.soft / k);
+  const u = 0.5 + d / (2 * width);
+  return u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
+}
+
+
+
 
 /**
  * One long skinny light hanging over the camp's string-light run.
@@ -3202,6 +3616,8 @@ type FishParams = {
   rx: number; rz: number; rot: number; twist: number; scatter: number;
   speed: number; scale: number; bob: number;
   eight: number; wander: number; depthSpread: number; bank: number; yaw: number;
+  // Shared by every shoal - how the fish MOVES, as opposed to where it goes.
+  wiggle: number; beat: number; sway: number;
 };
 function readFishParams(config: CampfireSceneConfig, id: string): FishParams {
   const c = config as unknown as Record<string, number>;
@@ -3214,6 +3630,7 @@ function readFishParams(config: CampfireSceneConfig, id: string): FishParams {
     speed: v("Speed", 0.5), scale: v("Scale", 0.09), bob: v("Bob", 0.04),
     eight: v("Eight", 0), wander: v("Wander", 0), depthSpread: v("DepthSpread", 0),
     bank: v("Bank", 0.5), yaw: v("YawOffset", 0),
+    wiggle: c.deskFishWiggle ?? 1, beat: c.deskFishBeat ?? 1, sway: c.deskFishSway ?? 0,
   };
 }
 
@@ -3275,6 +3692,85 @@ function fishPathAt(i: number, n: number, t: number, P: FishParams): [number, nu
   ];
 }
 
+
+/**
+ * What "Armature|Swim" actually animates - measured out of fish.glb, because
+ * the reason the shoal read as stiff is not obvious from watching it.
+ *
+ * The clip is 1.292s and touches FIVE bones:
+ *
+ *   Tail      25.5 deg    about bone-local -Z
+ *   Spine3    12.3 deg    about bone-local -Z, in phase with the tail
+ *   Bone.001   7.3 deg    a pectoral fin, in ANTIphase with the tail
+ *   Bone       5.9 deg    the other fin
+ *   Root       2.5 deg    a whole-body nod
+ *
+ * Spine1 and Spine2 have no tracks at all. So the fish does not swim - it
+ * holds a rigid body and flicks its back third, and Spine3 and Tail peak at
+ * the same instant, which is a hinge rather than a wave. At the size these
+ * are on screen (0.063 fish scale under the camp's 0.207, so ~13mm of world)
+ * a hinge in the last third is close to invisible.
+ *
+ * Two fixes, both driven off Wiggle:
+ *
+ *  - the bones the clip DOES move get their rotation stretched about the
+ *    clip's own mean pose, so the motion keeps its authored axis and phase
+ *    and only grows.
+ *  - Spine1 and Spine2 get a bend the clip never gave them, LEADING the tail,
+ *    which turns the hinge into a wave running head to tail. They are safe to
+ *    drive on local Z: their rest rotations are within 0.5 deg of identity
+ *    relative to Spine3, so the whole chain shares one bend plane.
+ */
+const SWIM_PEAK_PHASE = 0.774;   // where in the cycle the tail is fully over
+const SWIM_BEND_AXIS = new THREE.Vector3(0, 0, -1);
+const SWIM_AMPLIFY: Record<string, number> = {
+  Tail: 1, Spine3: 0.8, Bone: 0.5, "Bone.001": 0.5,
+};
+// Amplitude in radians at Wiggle 1, and how far each bone leads the tail, in
+// cycles. Spine2 bends about twice as far as Spine1 - the body arches most
+// behind the head, not at the nose.
+const SWIM_WAVE: readonly { name: string; amp: number; lead: number }[] = [
+  { name: "Spine1", amp: 0.055, lead: 0.30 },
+  { name: "Spine2", amp: 0.105, lead: 0.15 },
+];
+
+/**
+ * Each animated bone's NEUTRAL pose, taken as the mean of its track rather
+ * than from the bone itself.
+ *
+ * Reading bone.quaternion at mount would be simpler and wrong: the source
+ * scene is drei's shared cache, and the desk's pet fish attaches its mixer
+ * straight to it, so by the time a shoal clones the model those bones may be
+ * sitting anywhere in a flop. The clip's own average is the fish swimming
+ * straight, whatever the cache is doing.
+ *
+ * Quaternions are summed in the hemisphere of the first key - q and -q are the
+ * same rotation, so without the flip a swing either side of straight cancels
+ * itself out.
+ */
+const swimNeutralCache = new WeakMap<THREE.AnimationClip, Map<string, THREE.Quaternion>>();
+function swimNeutrals(clip: THREE.AnimationClip): Map<string, THREE.Quaternion> {
+  const hit = swimNeutralCache.get(clip);
+  if (hit) return hit;
+  const out = new Map<string, THREE.Quaternion>();
+  for (const track of clip.tracks) {
+    const dot = track.name.lastIndexOf(".");
+    if (dot < 0 || track.name.slice(dot + 1) !== "quaternion") continue;
+    const v = track.values;
+    const n = Math.floor(v.length / 4);
+    if (!n) continue;
+    let x = 0, y = 0, z = 0, w = 0;
+    for (let i = 0; i < n; i++) {
+      const k = i * 4;
+      const s = v[k] * v[0] + v[k+1] * v[1] + v[k+2] * v[2] + v[k+3] * v[3] < 0 ? -1 : 1;
+      x += s * v[k]; y += s * v[k+1]; z += s * v[k+2]; w += s * v[k+3];
+    }
+    out.set(track.name.slice(0, dot), new THREE.Quaternion(x, y, z, w).normalize());
+  }
+  swimNeutralCache.set(clip, out);
+  return out;
+}
+
 /**
  * One fish. fish.glb ships its own skeletal clip - "Armature|Swim" - so the
  * tail motion is the model's; only the path is procedural.
@@ -3288,11 +3784,67 @@ function fishPathAt(i: number, n: number, t: number, P: FishParams): [number, nu
  * direction points it along its own length. Which END is the nose is the
  * model's business - that is what YawOffset is for.
  */
-function SwimFish({ index, count, params }: { index: number; count: number; params: FishParams }) {
+function SwimFish({
+  index, count, params, shade,
+}: {
+  index: number; count: number; params: FishParams; shade: FishShade | null;
+}) {
   const gltf = useGLTF(FISH_URL) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
   const scene = useMemo(() => skeletonClone(gltf.scene), [gltf.scene]);
+
+  // Each fish gets its OWN materials. SkeletonUtils.clone rebuilds the bone
+  // hierarchy per copy but SHARES materials with the source, so darkening one
+  // fish in place would darken the entire shoal - and, because the source is
+  // drei's cached fish.glb, every fish this page ever loads, surviving a
+  // remount. Cached by source uuid so parts of one fish that shared a material
+  // still share its clone and only get written once a frame.
+  const tint = useMemo(() => {
+    const out: { mat: THREE.MeshStandardMaterial; base: THREE.Color }[] = [];
+    const seen = new Map<string, THREE.MeshStandardMaterial>();
+    scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.material) return;
+      const src = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const next = src.map((m) => {
+        let clone = seen.get(m.uuid);
+        if (!clone) {
+          clone = (m as THREE.MeshStandardMaterial).clone();
+          seen.set(m.uuid, clone);
+          out.push({ mat: clone, base: clone.color.clone() });
+        }
+        return clone;
+      });
+      mesh.material = Array.isArray(mesh.material) ? next : next[0];
+    });
+    return out;
+  }, [scene]);
   const { actions } = useAnimations(gltf.animations, scene);
   const grp = useRef<THREE.Group>(null);
+  const swim = useRef<THREE.AnimationAction | null>(null);
+
+  // The bones this fish will push around, resolved once against ITS OWN clone.
+  const rig = useMemo(() => {
+    const clip = gltf.animations.find((a) => /swim/i.test(a.name)) ?? gltf.animations[0];
+    const neutrals = clip ? swimNeutrals(clip) : new Map<string, THREE.Quaternion>();
+    const amplify: { obj: THREE.Object3D; neutral: THREE.Quaternion; weight: number }[] = [];
+    for (const [name, weight] of Object.entries(SWIM_AMPLIFY)) {
+      const obj = scene.getObjectByName(name);
+      const neutral = neutrals.get(name);
+      if (obj && neutral) amplify.push({ obj, neutral, weight });
+    }
+    const wave: { obj: THREE.Object3D; rest: THREE.Quaternion; amp: number; lead: number }[] = [];
+    for (const { name, amp, lead } of SWIM_WAVE) {
+      const obj = scene.getObjectByName(name);
+      // Safe to read the bone here: nothing animates Spine1/Spine2, in this
+      // clip or in the pet fish's, so they are still at their bind pose.
+      if (obj) wave.push({ obj, rest: obj.quaternion.clone(), amp, lead });
+    }
+    return { amplify, wave, duration: clip?.duration || 1 };
+  }, [scene, gltf.animations]);
+
+  // Scratch, so a shoal of forty does not allocate 200 quaternions a frame.
+  const scratch = useMemo(
+    () => ({ a: new THREE.Quaternion(), b: new THREE.Quaternion() }), []);
 
   useEffect(() => {
     const action = actions["Armature|Swim"] ?? Object.values(actions)[0];
@@ -3300,11 +3852,18 @@ function SwimFish({ index, count, params }: { index: number; count: number; para
     action.reset();
     // Stagger the tail beat so the shoal doesn't pulse as one animal.
     action.time = (index / Math.max(1, count)) * (action.getClip().duration || 1);
-    action.timeScale = 0.85 + 0.3 * ((index * PHI) % 1);
+    // Beat with the swimming, not against it. This used to be a flat 0.85-1.15
+    // whatever the Speed slider said, so a shoal dawdling at Speed 0.32 still
+    // thrashed its tail at full rate. 0.4 is group A's authored speed, i.e.
+    // the rate the clip is scaled to look right at; the floor keeps a parked
+    // fish idling rather than freezing solid.
+    const travel = Math.max(0.3, Math.min(3, params.speed / 0.4));
+    action.timeScale = params.beat * travel * (0.85 + 0.3 * ((index * PHI) % 1));
     action.setEffectiveWeight(1);
     action.play();
-    return () => { action.stop(); };
-  }, [actions, index, count]);
+    swim.current = action;
+    return () => { action.stop(); swim.current = null; };
+  }, [actions, index, count, params.beat, params.speed]);
 
   useFrame(({ clock }) => {
     const g = grp.current;
@@ -3318,6 +3877,44 @@ function SwimFish({ index, count, params }: { index: number; count: number; para
     const [x, y, z] = fishPathAt(index, count, t, params);
     const [xf, , zf] = fishPathAt(index, count, t + dt, params);
     g.position.set(x, y, z);
+
+    // --- body ------------------------------------------------------------
+    //
+    // Runs after drei's mixer: useAnimations is called above this hook, so its
+    // useFrame is registered first and has already written the clip's pose by
+    // the time this reads it.
+    const action = swim.current;
+    if (action) {
+      // Stretch what the clip animates. slerp extrapolates past t = 1 - it is
+      // a formula along the great circle, not a clamped blend - so this is the
+      // authored motion made bigger, on the authored axis, not a new one.
+      for (const { obj, neutral, weight } of rig.amplify) {
+        const factor = 1 + (params.wiggle - 1) * weight;
+        if (Math.abs(factor - 1) < 0.001) continue;
+        scratch.a.copy(obj.quaternion);
+        obj.quaternion.copy(neutral).slerp(scratch.a, factor);
+      }
+      // Bend the two bones the clip forgot, ahead of the tail, so the flick
+      // becomes a wave travelling from the head back.
+      if (rig.wave.length && Math.abs(params.wiggle) > 0.001) {
+        const cycle = (action.time / rig.duration) - SWIM_PEAK_PHASE;
+        for (const { obj, rest, amp, lead } of rig.wave) {
+          const a = amp * params.wiggle * Math.cos(2 * Math.PI * (cycle + lead));
+          obj.quaternion.copy(rest).multiply(scratch.b.setFromAxisAngle(SWIM_BEND_AXIS, a));
+        }
+      }
+    }
+
+    // The nose sweeps with the beat. The bones bend the fish; this swings the
+    // whole animal, which is what carries at the distance these are viewed
+    // from. Locked to the clip's phase so it never drifts against the tail.
+    //
+    // Added at the END, not to `yaw`: `turn` below is the difference between
+    // this heading and the one a moment ago, and a sway inside it would read
+    // as a hard turn and roll the fish onto its side twice a beat.
+    const sway = action && params.sway
+      ? params.sway * Math.sin(2 * Math.PI * ((action.time / rig.duration) - SWIM_PEAK_PHASE))
+      : 0;
     const yaw = Math.atan2(xf - x, zf - z) + params.yaw;
     const yawBack = Math.atan2(x - xb, z - zb) + params.yaw;
     // Wrap before differencing, or the roll snaps whenever heading crosses +-PI.
@@ -3325,7 +3922,33 @@ function SwimFish({ index, count, params }: { index: number; count: number; para
     while (turn > Math.PI) turn -= Math.PI * 2;
     while (turn < -Math.PI) turn += Math.PI * 2;
     const roll = Math.max(-0.7, Math.min(0.7, (turn / dt) * 0.12 * params.bank));
-    g.rotation.set(0, yaw, -roll);
+    g.rotation.set(0, yaw + sway, -roll);
+
+    // Into the dark under the dock. At Shade 0 and Fade 0 this writes the
+    // material's own colour back every frame, which is what restores a fish
+    // that swims out again - and what makes turning the sliders down a real
+    // reset rather than something that needs a remount.
+    if (!shade) return;
+    const s = shadeAt(shade, x, y, z);
+    const k = 1 - s * shade.amount;
+    const o = 1 - s * shade.fade;
+    const clear = o < 0.999;
+    for (const { mat, base } of tint) {
+      mat.color.copy(base).multiplyScalar(k);
+      mat.opacity = o;
+      // Safe to drive opacity absolutely: all three of fish.glb's materials
+      // (Bottom, Top, Fins) are alphaMode OPAQUE with a baseColorFactor alpha
+      // of 1 and no texture, so there is no authored transparency to trample.
+      //
+      // transparent flips the material between render passes, which needs a
+      // shader recompile - so only touch it when it actually changes, not on
+      // every frame of a fish crossing the edge.
+      if (mat.transparent !== clear) {
+        mat.transparent = clear;
+        mat.depthWrite = !clear;
+        mat.needsUpdate = true;
+      }
+    }
   });
 
   return (
@@ -3336,22 +3959,26 @@ function SwimFish({ index, count, params }: { index: number; count: number; para
 }
 
 /** One shoal. Count remounts its fish, which is fine - it is a lab knob. */
-function DeskFishShoal({ config, id }: { config: CampfireSceneConfig; id: string }) {
+function DeskFishShoal({
+  config, id, shade,
+}: { config: CampfireSceneConfig; id: string; shade: FishShade | null }) {
   const params = readFishParams(config, id);
   return (
     <>
       {Array.from({ length: params.count }, (_, i) => (
-        <SwimFish key={i} index={i} count={params.count} params={params} />
+        <SwimFish key={i} index={i} count={params.count} params={params} shade={shade} />
       ))}
     </>
   );
 }
 
-function DeskWaterFish({ config }: { config: CampfireSceneConfig }) {
+function DeskWaterFish({
+  config, shade,
+}: { config: CampfireSceneConfig; shade: FishShade | null }) {
   return (
     <>
       {DESK_FISH_GROUPS.map((g) => (
-        <DeskFishShoal key={g.id} config={config} id={g.id} />
+        <DeskFishShoal key={g.id} config={config} id={g.id} shade={shade} />
       ))}
     </>
   );
@@ -3399,6 +4026,163 @@ function DeskStringLight({ config, campScale }: { config: CampfireSceneConfig; c
   );
 }
 
+
+/**
+ * A few dozen insects orbiting a lamp.
+ *
+ * Rendered exactly like Sparks - one <points> with a per-vertex alpha
+ * attribute patched into PointsMaterial - because that is already the cheapest
+ * way to get dozens of independently-fading motes on screen here. Everything
+ * about the MOTION is different, and that difference is the whole effect:
+ *
+ *  - A spark is born at the ground, rises, and dies. A bug never leaves. Each
+ *    one holds its own orbit around the bulb - its own radius, height, plane
+ *    tilt, speed and DIRECTION, with every other bug going round the other
+ *    way, so the swarm reads as a cloud instead of a carousel.
+ *  - Insects at a lamp do not glide, they snap. Each axis gets a wobble at its
+ *    own frequency (7.3, 9.1, 6.1) on top of the orbit - deliberately
+ *    incommensurate, so the path never visibly repeats.
+ *  - Every so often one lunges at the bulb and pulls back out. That is the
+ *    behaviour the eye reads as alive. It is sin() raised to the 8th, which
+ *    holds near zero and spikes briefly; a plain sine would look like the
+ *    whole swarm breathing in and out together.
+ *  - Alpha flickers fast and per-bug, the way wings catch the light, and
+ *    brightens through the lunge, when the bug is closest to the bulb.
+ *
+ * Every knob is in WORLD units, and `frameScale` is what makes that true.
+ *
+ * The swarm gets hung on lamps in wildly different frames - the camp diorama
+ * runs at 0.173 world units per unit, the arcade cabin at 0.0307, so one camp
+ * unit is 5.64 cabin units. Left in local units, one set of sliders would give
+ * a swarm 5.6x smaller on the cabin than on the signpost. So Radius and Height
+ * are divided by the accumulated scale of whatever frame the swarm is mounted
+ * in, and one set of numbers describes the same real swarm everywhere.
+ *
+ * `size` is the exception that needs NO conversion, because three assigns
+ * gl_PointSize straight from the uniform and only then divides by view depth
+ * (points.glsl.js:34-40) - the model matrix never reaches it. Same trap as
+ * RectAreaLight's width/height and pointLight.distance, except here it works
+ * in our favour.
+ *
+ * frustumCulled is off because the geometry's bounding sphere is computed once
+ * from the initial buffer - all zeros - and never recomputed, so three would
+ * cull the whole swarm against a sphere of radius 0 at the camp origin.
+ */
+type BugSwarmProps = {
+  origin: [number, number, number];
+  /** World units per unit of the frame this swarm is mounted in. */
+  frameScale: number;
+  count: number; radius: number; spread: number; height: number;
+  speed: number; jitter: number; dive: number;
+  size: number; opacity: number; color: THREE.Color;
+};
+
+function BugSwarm({
+  origin, frameScale, count, radius, spread, height, speed, jitter, dive,
+  size, opacity, color,
+}: BugSwarmProps) {
+  // Radius and Height are authored in world units; the orbit is built in the
+  // parent's units, so divide the frame's scale back out.
+  const s = Math.abs(frameScale) > 1e-6 ? Math.abs(frameScale) : 1;
+  const localRadius = radius / s;
+  const localHeight = height / s;
+  const N = Math.max(1, Math.min(400, Math.round(count)));
+  const posRef = useRef<THREE.BufferAttribute>(null);
+  const alphaRef = useRef<THREE.BufferAttribute>(null);
+
+  // One fixed set of per-bug constants, from a seeded generator: a reload
+  // gives back the same swarm, and dragging a slider re-shapes it rather than
+  // reshuffling which bug is which.
+  const { positions, alphas, bugs } = useMemo(() => {
+    const rand = seededRandom(0xb0c5);
+    const made = Array.from({ length: N }, (_, i) => ({
+      rf: 0.35 + rand(),                              // where it sits in the radius band
+      phase: rand() * Math.PI * 2,
+      w: (0.55 + rand() * 0.9) * (i % 2 ? -1 : 1),    // half of them orbit the other way
+      yf: rand() - 0.5,                               // height within the column
+      tilt: (rand() - 0.5) * 1.4,                     // how tipped its orbit plane is
+      tiltPhase: rand() * Math.PI * 2,
+      jp: rand() * Math.PI * 2,                       // wobble phase
+      dw: 0.18 + rand() * 0.5,                        // how often this one lunges
+      dphase: rand() * Math.PI * 2,
+      ff: 9 + rand() * 14,                            // flicker rate
+      fp: rand() * Math.PI * 2,
+    }));
+    // Buffers are sized by N, so this deliberately rebuilds when the count
+    // changes and at no other time - a slider drag on radius or speed must not
+    // reshuffle which bug is which.
+    return { positions: new Float32Array(N * 3), alphas: new Float32Array(N), bugs: made };
+  }, [N]);
+
+  const p = useRef({
+    origin, radius: localRadius, spread, height: localHeight, speed, jitter, dive,
+  });
+  p.current = {
+    origin, radius: localRadius, spread, height: localHeight, speed, jitter, dive,
+  };
+
+  useFrame(({ clock }) => {
+    const posAttr = posRef.current, alphaAttr = alphaRef.current;
+    if (!posAttr || !alphaAttr) return;
+    const P = posAttr.array as Float32Array;
+    const A = alphaAttr.array as Float32Array;
+    const t = clock.elapsedTime;
+    const c = p.current;
+    for (let i = 0; i < N; i += 1) {
+      const b = bugs[i];
+      const r0 = c.radius * (1 - c.spread * 0.5 + c.spread * b.rf);
+      // Brief lunge at the bulb, not a pulse - see the note above about ^8.
+      const d = Math.pow(0.5 + 0.5 * Math.sin(t * b.dw + b.dphase), 8) * c.dive;
+      const r = r0 * (1 - 0.8 * d);
+      const a = b.phase + t * b.w * c.speed;
+      const j = c.jitter * r0;
+      P[i * 3] = c.origin[0] + Math.cos(a) * r
+        + j * 0.5 * Math.sin(t * 7.3 + b.jp);
+      P[i * 3 + 1] = c.origin[1] + c.height * b.yf
+        + Math.sin(a + b.tiltPhase) * c.height * 0.5 * b.tilt
+        - d * c.height * 0.55
+        + j * 0.35 * Math.sin(t * 9.1 + b.jp * 1.7);
+      P[i * 3 + 2] = c.origin[2] + Math.sin(a) * r
+        + j * 0.5 * Math.cos(t * 6.1 + b.jp * 2.3);
+      const flick = 0.5 + 0.5 * Math.sin(t * b.ff + b.fp);
+      A[i] = Math.min(1, 0.25 + 0.75 * flick + d * 0.6);
+    }
+    posAttr.needsUpdate = true;
+    alphaAttr.needsUpdate = true;
+  });
+
+  return (
+    <points frustumCulled={false}>
+      <bufferGeometry>
+        <bufferAttribute ref={posRef} attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute ref={alphaRef} attach="attributes-alpha" args={[alphas, 1]} />
+      </bufferGeometry>
+      <pointsMaterial
+        color={color}
+        size={size}
+        sizeAttenuation
+        transparent
+        opacity={opacity}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        toneMapped={false}
+        onBeforeCompile={(shader) => {
+          shader.vertexShader = shader.vertexShader.replace(
+            "void main() {",
+            "attribute float alpha;\nvarying float vAlpha;\nvoid main() {\n  vAlpha = alpha;"
+          );
+          shader.fragmentShader = shader.fragmentShader
+            .replace("void main() {", "varying float vAlpha;\nvoid main() {")
+            .replace(
+              "vec4 diffuseColor = vec4( diffuse, opacity );",
+              "vec4 diffuseColor = vec4( diffuse, opacity * vAlpha );"
+            );
+        }}
+      />
+    </points>
+  );
+}
+
 /** One camp lamp's point light. Split into its own component so each lamp
  *  reads only its own config keys - a scrub of one lamp's slider re-renders
  *  that light, not all five. */
@@ -3413,26 +4197,142 @@ function DeskCampLampLight({
 }) {
   const c = config as unknown as Record<string, number>;
   const on = c[`deskLamp${lamp.id}On`] ?? 1;
-  // Same offset the meshes get, so the light stays inside its own lamp.
-  const off: [number, number, number] = [
-    c[`deskLamp${lamp.id}OffX`] ?? 0,
-    c[`deskLamp${lamp.id}OffY`] ?? 0,
-    c[`deskLamp${lamp.id}OffZ`] ?? 0,
-  ];
   const r = c[`deskLamp${lamp.id}R`] ?? 1;
   const g = c[`deskLamp${lamp.id}G`] ?? 0.72;
   const b = c[`deskLamp${lamp.id}B`] ?? 0.35;
   const color = useMemo(() => new THREE.Color().setRGB(r, g, b), [r, g, b]);
-  if (on < 0.5) return null;
-  return (
-    <pointLight
-      position={[position.x + off[0], position.y + off[1], position.z + off[2]]}
-      color={color}
-      intensity={c[`deskLamp${lamp.id}Intensity`] ?? 0.2}
-      distance={c[`deskLamp${lamp.id}Reach`] ?? 4.5}
-      decay={c[`deskLamp${lamp.id}Decay`] ?? 2}
-      castShadow={false}
+  const bugColor = useMemo(
+    () => new THREE.Color().setRGB(config.deskBugR, config.deskBugG, config.deskBugB),
+    [config.deskBugR, config.deskBugG, config.deskBugB]
+  );
+
+  const bulb = useRef<THREE.PointLight>(null);
+  const shadowOn = (c[`deskLamp${lamp.id}Shadow`] ?? 0) >= 0.5;
+  useEffect(() => {
+    if (!shadowOn) return;
+    if (bulb.current) applyDeskShadow(bulb.current, c);
+    if (spot.current) applyDeskShadow(spot.current, c);
+  });
+
+  const spot = useRef<THREE.SpotLight>(null);
+  const spotTarget = useRef<THREE.Object3D>(null);
+  // A SpotLight's target defaults to a DETACHED Object3D, which three reads as
+  // target.matrixWorld = target.matrix - i.e. its position is taken as WORLD
+  // space, not local. Every beam would aim at the world origin, which for a
+  // camp sitting 15 units off it means the headlights point at nothing. The
+  // <object3D> below is a real child, so it inherits the camp's transform.
+  useEffect(() => {
+    if (spot.current && spotTarget.current) spot.current.target = spotTarget.current;
+  }, []);
+
+  // Where the light actually emits from. The LENS is placed separately, by
+  // the lampParts effect off deskLamp<id>Off*, and this component no longer
+  // reads that at all - the two used to share one offset, so nudging a lamp's
+  // look dragged its light with it and vice versa.
+  const lightPos: [number, number, number] = [
+    position.x + (c[`deskLamp${lamp.id}LightX`] ?? 0),
+    position.y + (c[`deskLamp${lamp.id}LightY`] ?? 0),
+    position.z + (c[`deskLamp${lamp.id}LightZ`] ?? 0),
+  ];
+
+  // Bugs orbit the EMITTER, so they follow Light X/Y/Z. Beam fixtures push
+  // their spot source forward out of the bodywork; the swarm deliberately
+  // stays on lightPos, because insects gather at the bulb, not out in the
+  // cone ahead of it.
+  const bugs = (c[`deskLamp${lamp.id}Bugs`] ?? 0) >= 0.5 ? (
+    <BugSwarm
+      origin={lightPos}
+      // baseScale on the camping Selectable is 1, so the accumulated scale IS
+      // its override - the same reasoning DeskStringLight uses for its bar.
+      frameScale={config.objectOverrides?.["old_bear_camping"]?.scale ?? 1}
+      count={config.deskBugCount}
+      radius={config.deskBugRadius}
+      spread={config.deskBugSpread}
+      height={config.deskBugHeight}
+      speed={config.deskBugSpeed}
+      jitter={config.deskBugJitter}
+      dive={config.deskBugDive}
+      size={config.deskBugSize}
+      opacity={config.deskBugOpacity}
+      color={bugColor}
     />
+  ) : null;
+  const intensity = c[`deskLamp${lamp.id}Intensity`] ?? 0.2;
+  const reach = c[`deskLamp${lamp.id}Reach`] ?? 4.5;
+  const decay = c[`deskLamp${lamp.id}Decay`] ?? 2;
+
+  if (on < 0.5) return null;
+
+  const beamOn = lamp.beam && (c[`deskLamp${lamp.id}Beam`] ?? 1) >= 0.5;
+  if (beamOn && lamp.beam) {
+    const aim = Math.max(0.1, reach);
+    // Normalise the authored direction so Push is in real camp units.
+    // Horizontal heading from the table, downward tilt from config. Both
+    // headlights use the SAME direction from their own positions, so the two
+    // cones are parallel by construction and lay down two parallel pools
+    // rather than crossing.
+    const tilt = c[`deskLamp${lamp.id}BeamTilt`] ?? -0.28;
+    const bx = lamp.beam[0], bz = lamp.beam[2];
+    const bl = Math.hypot(bx, tilt, bz) || 1;
+    const dir: [number, number, number] = [bx / bl, tilt / bl, bz / bl];
+    // Push the source OUT of the bodywork before it emits. A spot sitting
+    // flush in the lens lights the van's own face at point-blank range, and
+    // with decay 2 a panel a few centimetres away receives intensity/d^2 -
+    // enormous - so the surrounds and trim squares blew out to flat white
+    // while the rest of the van stayed black. Ahead of the bumper the cone
+    // opens onto the ground instead, and the face falls behind the light
+    // where it belongs. The van's frontmost geometry sits about 0.33 ahead
+    // of the lens centre, so the default clears it.
+    // Push runs along the HORIZONTAL heading, never along the tilted beam.
+    // Pushing along `dir` coupled the two knobs: dir's Y comes from Tilt, so
+    // tilting the beam also dragged the source down and back, and the lit
+    // circle at the origin slid instead of the cone simply pivoting. Push is
+    // "get clear of the bodywork", which is a horizontal concern; Tilt is
+    // aim. Kept apart, Tilt rotates the cone about a fixed source.
+    const push = c[`deskLamp${lamp.id}BeamPush`] ?? 0;
+    const hl = Math.hypot(bx, bz) || 1;
+    // A BEAM fixture's light is placed independently of its lens. It starts
+    // from the same anchor the mesh does, but takes its own Beam X/Y/Z rather
+    // than the lens's Move X/Y/Z, so the two can be dialled in without either
+    // dragging the other about. `position` is the anchor, deliberately NOT
+    // `pos` - reading pos here is what tied them together before.
+    const src: [number, number, number] = [
+      lightPos[0] + (bx / hl) * push, lightPos[1], lightPos[2] + (bz / hl) * push,
+    ];
+    return (
+      <>
+        {bugs}
+        <spotLight
+          ref={spot}
+          position={src}
+          color={color}
+          intensity={intensity}
+          distance={reach}
+          decay={decay}
+          angle={c[`deskLamp${lamp.id}BeamAngle`] ?? 0.6}
+          penumbra={c[`deskLamp${lamp.id}BeamPenumbra`] ?? 0.5}
+          castShadow={shadowOn}
+        />
+        <object3D
+          ref={spotTarget}
+          position={[src[0] + dir[0] * aim, src[1] + dir[1] * aim, src[2] + dir[2] * aim]}
+        />
+      </>
+    );
+  }
+  return (
+    <>
+      {bugs}
+      <pointLight
+        ref={bulb}
+        position={lightPos}
+        color={color}
+        intensity={intensity}
+        distance={reach}
+        decay={decay}
+        castShadow={shadowOn}
+      />
+    </>
   );
 }
 
@@ -3446,7 +4346,7 @@ function CampingWithSelectableTrees({
   onSelect: (name: string) => void;
 }) {
   const gltf = useGLTF(url) as unknown as { scene: THREE.Group };
-  const { base, trees, lampAnchors, lampParts, waterMeshes } = useMemo(() => {
+  const { base, trees, lampAnchors, lampParts, bulbMats, waterMeshes, dockShade } = useMemo(() => {
     const cloned = gltf.scene.clone(true);
     const treeParentPattern = /^(Cylinder|Icosphere)\.\d+_\d+$/;
 
@@ -3625,6 +4525,65 @@ function CampingWithSelectableTrees({
       .flatMap((lamp) => lamp.meshes.map((mesh) => ({ lamp, mesh, ...(byMesh.get(mesh) ?? {}) })))
       .filter((a): a is { lamp: DeskCampLamp; mesh: string; position: THREE.Vector3; glass: THREE.Material[] } => !!a.position);
 
+    // --- the string-light bulbs ---------------------------------------------
+    //
+    // The 26 bulbs on the overhead run. These get no light of their own - the
+    // RectAreaLight bar does that - so these knobs are purely how bright and
+    // how warm the bulbs LOOK at the source.
+    //
+    // Selected by mesh name, not material, because the bare "Lamp" material is
+    // shared between 18 of these bulbs AND the van's two headlights. Worse,
+    // Material.clone() copies the NAME too, so the headlights' own clones are
+    // also called "Lamp" and cannot be told apart that way. Skipping the
+    // fixture mesh names is the only reliable split.
+    //
+    // Materials are cached per SOURCE uuid so the 18 bulbs sharing "Lamp" end
+    // up sharing one clone - one slider then moves the whole run, and the
+    // per-bulb strengths the file authors (2.06 to 4.25 across the nine
+    // materials) survive because Brightness is a multiplier on each material's
+    // own value rather than an absolute.
+    cloned.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      if (DESK_SHADOW_CASTERS.has(mesh.name)) mesh.castShadow = true;
+      const ms = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      if (ms.some((m) => DESK_SHADOW_RECEIVER_MATERIALS.has((m as { name?: string })?.name ?? ""))) {
+        mesh.receiveShadow = true;
+      }
+    });
+
+    // Same three meshes, read a second way: the shadow map above darkens the
+    // water, this darkens the fish swimming under it. Built here because it
+    // needs the deck's world transform, which only exists inside this memo.
+    const dockShade = buildDockShade(cloned);
+
+    const bulbMats: { mat: THREE.MeshStandardMaterial; emissive: THREE.Color; intensity: number }[] = [];
+    const bulbClones = new Map<string, THREE.MeshStandardMaterial>();
+    cloned.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || DESK_CAMP_LAMP_MESHES.has(mesh.name)) return;
+      const src = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      const next = src.map((m) => {
+        const name = (m as { name?: string })?.name ?? "";
+        if (name !== "Lamp" && !name.startsWith("Lamp.")) return m;
+        const key = m.uuid;
+        let clone = bulbClones.get(key);
+        if (!clone) {
+          clone = (m as THREE.MeshStandardMaterial).clone();
+          bulbClones.set(key, clone);
+          bulbMats.push({
+            mat: clone,
+            emissive: clone.emissive.clone(),
+            intensity: clone.emissiveIntensity,
+          });
+        }
+        return clone;
+      });
+      if (next.some((m, i) => m !== src[i])) {
+        mesh.material = Array.isArray(mesh.material) ? next : next[0];
+      }
+    });
+
     // --- the river ----------------------------------------------------------
     //
     // One mesh, "Object_119" under the River_35 node, material "Material.057"
@@ -3663,7 +4622,7 @@ function CampingWithSelectableTrees({
       });
     });
 
-    return { base: cloned, trees, lampAnchors, lampParts, waterMeshes };
+    return { base: cloned, trees, lampAnchors, lampParts, bulbMats, waterMeshes, dockShade };
   }, [gltf.scene, config.deskCampGroundMaxY]);
 
   // Height and opacity are applied OUTSIDE that memo on purpose. Putting them
@@ -3676,6 +4635,26 @@ function CampingWithSelectableTrees({
   // hood, so the post read as unlit next to everything else even before its
   // point light was turned up.
   const cfgRec = config as unknown as Record<string, number>;
+  // Warmth blends each bulb from near-white toward the amber the file authors,
+  // and past it: 0 is white, 1 is exactly as authored, 2 pushes further into
+  // the amber. Channels are clamped because extrapolating can overshoot.
+  useEffect(() => {
+    const w = config.deskStringBulbWarmth;
+    const seeThrough = config.deskStringBulbOpacity < 0.999;
+    for (const { mat, emissive, intensity } of bulbMats) {
+      mat.emissive.setRGB(
+        Math.min(1, Math.max(0, 0.98 + (emissive.r - 0.98) * w)),
+        Math.min(1, Math.max(0, 0.95 + (emissive.g - 0.95) * w)),
+        Math.min(1, Math.max(0, 0.90 + (emissive.b - 0.90) * w)),
+      );
+      mat.emissiveIntensity = intensity * config.deskStringBulbBrightness;
+      mat.opacity = config.deskStringBulbOpacity;
+      mat.transparent = seeThrough;
+      mat.depthWrite = !seeThrough;
+      mat.needsUpdate = true;
+    }
+  }, [bulbMats, config.deskStringBulbWarmth, config.deskStringBulbBrightness, config.deskStringBulbOpacity]);
+
   const offsetSignature = DESK_CAMP_LAMPS
     .map((l) => `${cfgRec[`deskLamp${l.id}OffX`] ?? 0},${cfgRec[`deskLamp${l.id}OffY`] ?? 0},${cfgRec[`deskLamp${l.id}OffZ`] ?? 0}`)
     .join("|");
@@ -3732,6 +4711,33 @@ function CampingWithSelectableTrees({
     }
   }, [waterMeshes, config.deskWaterHeight, config.deskWaterOpacity]);
 
+  // The lantern the fish are shaded FROM. SmallB is the one standing on the
+  // dock (Object_131), and it is the only light over this stretch of water -
+  // the van and the signpost are up on the bank behind the camp. Its emitter,
+  // not its lens: Light X/Y/Z is where the light actually leaves, and moving
+  // it has to move the shadow with it or the two drift apart.
+  //
+  // With that lamp switched off there is no light here to be blocked, so
+  // Shade and Fade go to zero and the fish render as the file authors them.
+  const fishShade = useMemo<FishShade | null>(() => {
+    if (!dockShade) return null;
+    const anchor = lampAnchors.find((a) => a.lamp.id === "SmallB");
+    if (!anchor) return null;
+    const cr = config as unknown as Record<string, number>;
+    const lit = config.deskCampLampEnabled >= 0.5 && (cr.deskLampSmallBOn ?? 1) >= 0.5;
+    return {
+      field: dockShade,
+      light: [
+        anchor.position.x + (cr.deskLampSmallBLightX ?? 0),
+        anchor.position.y + (cr.deskLampSmallBLightY ?? 0),
+        anchor.position.z + (cr.deskLampSmallBLightZ ?? 0),
+      ],
+      amount: lit ? config.deskFishShade : 0,
+      fade: lit ? config.deskFishShadeFade : 0,
+      soft: config.deskFishShadeSoft,
+    };
+  }, [dockShade, lampAnchors, config]);
+
   return (
     <>
       <primitive object={base} />
@@ -3752,7 +4758,7 @@ function CampingWithSelectableTrees({
           rather than at it, because the post stands on the bank and terrain
           covers the river directly under it. See the deskFish block in
           sceneConfig.ts. */}
-      <DeskWaterFish config={config} />
+      <DeskWaterFish config={config} shade={fishShade} />
       {trees.map((t) => (
         <Selectable
           key={t.name}
@@ -6341,20 +7347,6 @@ function ArcadeSector({ config, onSelect }: { config: CampfireSceneConfig; onSel
         </group>
       </Selectable>
       <Selectable
-        name="arcade_ps2_slim"
-        onSelect={onSelect}
-        config={config}
-        basePosition={[-0.6, 0, 0.9]}
-        baseRotationY={0}
-        baseScale={1.3}
-      >
-        <group position={[-0.138, -0.496, -0.057]}>
-          <SafeAsset label="ps2 slim">
-            <GLBModel url={PS2_SLIM_URL} />
-          </SafeAsset>
-        </group>
-      </Selectable>
-      <Selectable
         name="arcade_gamecube_console"
         onSelect={onSelect}
         config={config}
@@ -7024,6 +8016,12 @@ function makeGroundPatch(
  * (sin a, cos a) * locationRadius - about (0.18, -15.20) - NOT at the world
  * origin, which is the ring's hub 15 units away.
  *
+ * Placement is two-tier: the group carries the shared Offset X/Z, and each
+ * patch then carries its own Offset X/Z inside it. So the pair can be moved
+ * together without losing however they were arranged relative to each other,
+ * and the inner patch can be pushed off-centre from the outer - which is what
+ * makes the two rings read as worn ground rather than as a target.
+ *
  * Radii have to stay small. The ground reads only where the fire lights it,
  * and the fire's point light reaches about 8.9 units; anything authored
  * beyond that is drawn in the dark.
@@ -7066,7 +8064,12 @@ function GroundPatches({ config, centreX, centreZ }: { config: CampfireSceneConf
           depthWrite comes off with transparency for the same reason it does
           on the fire's glow disc: a see-through decal that still writes depth
           occludes whatever is meant to show through it. */}
-      <mesh geometry={layers.outer} position={[0, -0.02 + config.groundPatchOuterY, 0]} renderOrder={1} receiveShadow>
+      <mesh
+        geometry={layers.outer}
+        position={[config.groundPatchOuterOffsetX, -0.02 + config.groundPatchOuterY, config.groundPatchOuterOffsetZ]}
+        renderOrder={1}
+        receiveShadow
+      >
         <meshStandardMaterial
           color={outerColor} roughness={0.97} metalness={0} flatShading side={THREE.DoubleSide}
           transparent={config.groundPatchOuterOpacity < 0.999}
@@ -7074,7 +8077,12 @@ function GroundPatches({ config, centreX, centreZ }: { config: CampfireSceneConf
           depthWrite={config.groundPatchOuterOpacity >= 0.999}
         />
       </mesh>
-      <mesh geometry={layers.inner} position={[0, -0.02 + config.groundPatchInnerY, 0]} renderOrder={2} receiveShadow>
+      <mesh
+        geometry={layers.inner}
+        position={[config.groundPatchInnerOffsetX, -0.02 + config.groundPatchInnerY, config.groundPatchInnerOffsetZ]}
+        renderOrder={2}
+        receiveShadow
+      >
         <meshStandardMaterial
           color={innerColor} roughness={0.97} metalness={0} flatShading side={THREE.DoubleSide}
           transparent={config.groundPatchInnerOpacity < 0.999}
@@ -7803,7 +8811,6 @@ useGLTF.preload(CUB_URL);
 useGLTF.preload(WOODEN_CABIN_URL);
 useGLTF.preload(GAMECUBE_URL);
 useGLTF.preload(XBOX360_URL);
-useGLTF.preload(PS2_SLIM_URL);
 useGLTF.preload(GAMECUBE_CONSOLE_URL);
 useGLTF.preload(CONTROLLER_URL);
 useGLTF.preload(GLASSES_URL);

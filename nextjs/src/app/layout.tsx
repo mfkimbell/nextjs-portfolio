@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import StoreProvider from "./StoreProvider";
@@ -46,8 +46,15 @@ export const metadata: Metadata = {
     images: ["https://mitchellkimbell.com/backdrop.png"],
   },
   other: {
-    "theme-color": "#0ea5e9",
+    "theme-color": "#000000",
   },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#000000",
 };
 
 export default function RootLayout({
@@ -57,11 +64,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      {/* gradient follows the document scroll (no bg-fixed!) */}
       <body
         className={`
           ${geistSans.variable} ${geistMono.variable} antialiased
-          bg-gradient-to-b from-sky-300 via-sky-400 to-sky-500
+          bg-black
         `}
       >
         <StoreProvider>{children}</StoreProvider>

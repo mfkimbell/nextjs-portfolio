@@ -115,7 +115,9 @@ export interface CampfireSceneConfig {
    *
    *  The patches centre on the CAMPFIRE camp - location 0 on the ring, world
    *  (0.18, -15.20) - not on the ground disc, which is centred on the ring's
-   *  hub 15 units away. Offset X/Z nudge from there.
+   *  hub 15 units away. The shared Offset X/Z moves BOTH patches from there;
+   *  each patch then has its own Offset X/Z on top, so the inner one can sit
+   *  off-centre inside the outer instead of the two being concentric.
    *
    *  Opacity under 1 drops the patch into the transparent pass and turns its
    *  depthWrite off with it - otherwise a see-through decal still occludes
@@ -132,6 +134,8 @@ export interface CampfireSceneConfig {
   groundPatchOffsetX: number;
   groundPatchOffsetZ: number;
   groundPatchOuterRadius: number;
+  groundPatchOuterOffsetX: number;
+  groundPatchOuterOffsetZ: number;
   groundPatchOuterJag: number;
   groundPatchOuterSides: number;
   groundPatchOuterSpin: number;
@@ -142,6 +146,8 @@ export interface CampfireSceneConfig {
   groundPatchOuterY: number;
   groundPatchOuterOpacity: number;
   groundPatchInnerRadius: number;
+  groundPatchInnerOffsetX: number;
+  groundPatchInnerOffsetZ: number;
   groundPatchInnerJag: number;
   groundPatchInnerSides: number;
   groundPatchInnerSpin: number;
@@ -220,6 +226,19 @@ export interface CampfireSceneConfig {
   deskStringLightColorR: number;
   deskStringLightColorG: number;
   deskStringLightColorB: number;
+  /** How the 26 string BULBS look at the source - their own emissive - as
+   *  opposed to deskStringLight*, which is the RectAreaLight above them and
+   *  controls what they cast onto the scene.
+   *
+   *  Brightness is a MULTIPLIER, not an absolute: the file authors a different
+   *  emissive strength per bulb (2.06 to 4.25 across its nine bulb materials)
+   *  and multiplying keeps that variation instead of flattening the run.
+   *
+   *  Warmth blends from near-white toward the amber the file authors -
+   *  0 white, 1 exactly as authored, 2 pushed further into the amber. */
+  deskStringBulbBrightness: number;
+  deskStringBulbWarmth: number;
+  deskStringBulbOpacity: number;
   /** ---------------------------------------------------------------------
    *  3 - Fish. THREE independent shoals, ids from DESK_FISH_GROUPS.
    *
@@ -299,7 +318,90 @@ export interface CampfireSceneConfig {
   deskFishCDepthSpread: number;
   deskFishCBank: number;
   deskFishCYawOffset: number;
+  /** How much the fish bends as it swims, shared by every shoal. 1 is the
+   *  swim clip exactly as fish.glb authors it, which is stiffer than it
+   *  sounds: the clip animates only Spine3, Tail and the two fins, and moves
+   *  Spine3 and Tail in phase, so the fish holds a rigid body and hinges its
+   *  back third. Above 1 that motion is stretched about the clip's own mean
+   *  pose, and Spine1/Spine2 - which the clip never touches - pick up a bend
+   *  running ahead of the tail, turning the hinge into a head-to-tail wave.
+   *  0 freezes the body straight.
+   *
+   *  Measured by running the rig over a full cycle - tail-tip sweep, as a
+   *  fraction of the 6.16-unit body, and how far the MIDDLE of the fish moves:
+   *
+   *    as shipped   29.5%   mid-body 0.004   (i.e. the body does not move)
+   *    1.0 + wave   42.1%   mid-body 0.173
+   *    1.4          57%     mid-body 0.24
+   *    3.0         101%     mid-body 0.514   (a burst, not a cruise)
+   *
+   *  Vertical drift stays under 0.3% of the body throughout: the bend axis is
+   *  bone-local Z, which displaces the tail almost purely sideways. */
+  deskFishWiggle: number;
+  /** Tail-beat rate. Multiplies a rate that already tracks each shoal's Speed,
+   *  so faster fish beat faster; this is the overall tempo on top. */
+  deskFishBeat: number;
+  /** How far the whole fish swings side to side, in radians, locked to the
+   *  beat. The bones bend the animal; this swings it, which is the part that
+   *  still reads at the size these are on screen. */
+  deskFishSway: number;
+  /** How dark a fish goes when the dock's shadow falls on it. 0 leaves them
+   *  lit everywhere; 1 takes them to black, so they vanish against the water.
+   *
+   *  This is the SAME occlusion the dock lantern's shadow map draws on the
+   *  water, solved analytically - see buildDockShade in CampfireScene.tsx. A
+   *  shadow map darkens pixels but cannot tell the fish they are in the dark,
+   *  and a fish lit as brightly under the deck as out in the open is what gave
+   *  the shoal away. Nothing happens while the dock lantern is off: with no
+   *  light there is no shadow to be in. */
+  deskFishShade: number;
+  /** Fades the fish out on top of darkening them, for when black still reads
+   *  as a fish-shaped hole. 0 keeps them solid. */
+  deskFishShadeFade: number;
+  /** How wide the shadow's edge is, in camp units at the fish's own depth. 0
+   *  is a hard cut at the deck's outline; larger blurs it. */
+  deskFishShadeSoft: number;
   deskCampLampEnabled: number;
+  /** Bugs circling a lamp. Per fixture: deskLamp<Id>Bugs turns the swarm on
+   *  for that one. The rest are shared shape knobs - one swarm design, worn by
+   *  whichever lamps have it switched on.
+   *
+   *  EVERY knob here is in WORLD units. The swarm hangs on lamps in frames
+   *  that differ by 5.6x - the camp diorama runs at 0.173 world units per
+   *  unit, the arcade cabin at 0.0307 - so Radius and Height are divided by
+   *  the mount frame's scale at each site, and one set of numbers describes
+   *  the same real swarm everywhere. Size needs no conversion: three writes
+   *  gl_PointSize from the uniform and only then divides by view depth, so no
+   *  model matrix ever reaches it (the RectAreaLight width/height trap, for
+   *  once working in our favour). */
+  deskBugCount: number;
+  deskBugRadius: number;
+  deskBugSpread: number;
+  deskBugHeight: number;
+  deskBugSpeed: number;
+  deskBugJitter: number;
+  deskBugDive: number;
+  deskBugSize: number;
+  deskBugOpacity: number;
+  deskBugR: number;
+  deskBugG: number;
+  deskBugB: number;
+  /** Shadow quality, shared by whichever desk lamps have Shadow on.
+   *
+   *  Near/Far are in WORLD units and are what decides whether this works at
+   *  all. The camp is scaled to ~0.17, so the distances are tiny: the dock
+   *  lantern is 0.24 camp units above the deck = 0.042 world, and 1.02 above
+   *  the water = 0.176 world. three's default PointLightShadow near is 0.5 -
+   *  both sit inside it, so at the default the dock never enters the shadow
+   *  camera and nothing casts. Hence Near 0.01.
+   *
+   *  Cost: a POINT light's shadow is a cube map, six depth passes a frame; a
+   *  SPOT light's is one. Only the dock lantern is on by default. */
+  deskShadowMapSize: number;
+  deskShadowBias: number;
+  deskShadowRadius: number;
+  deskShadowNear: number;
+  deskShadowFar: number;
   /** ---------------------------------------------------------------------
    *  3 - Desk sector camp lamps, one block PER FIXTURE.
    *
@@ -321,10 +423,28 @@ export interface CampfireSceneConfig {
   deskLampVanHeadsG: number;
   deskLampVanHeadsB: number;
   deskLampVanHeadsEmissive: number;
-  /** Nudge the whole camper van headlights (both) - glass AND housing - in camp units. */
+  deskLampVanHeadsShadow: number;
+  deskLampVanHeadsBugs: number;
+  /** LENS placement - the glowing circle and its housing. The light does NOT
+   *  follow it: every fixture has its own Light X/Y/Z for the exact point the
+   *  light emits from, so the visible lamp and its light are independent. */
   deskLampVanHeadsOffX: number;
   deskLampVanHeadsOffY: number;
   deskLampVanHeadsOffZ: number;
+  /** The headlights throw a beam, not a glow. Beam 0/1 swaps the spot back
+   *  to a plain point light; Angle/Penumbra shape the cone. Push moves the
+   *  source forward out of the bodywork before it emits - a spot flush in the
+   *  lens lights the van's own face at point-blank range and, with decay 2,
+   *  blows the surrounds and trim squares to flat white. The frontmost
+   *  geometry is about 0.33 ahead of the lens centre, so 0.7 clears it. */
+  deskLampVanHeadsBeam: number;
+  deskLampVanHeadsBeamAngle: number;
+  deskLampVanHeadsBeamPenumbra: number;
+  deskLampVanHeadsBeamPush: number;
+  deskLampVanHeadsBeamTilt: number;
+  deskLampVanHeadsLightX: number;
+  deskLampVanHeadsLightY: number;
+  deskLampVanHeadsLightZ: number;
   /** Small lamp · near the fire pit */
   deskLampSmallAOn: number;
   deskLampSmallAIntensity: number;
@@ -334,6 +454,11 @@ export interface CampfireSceneConfig {
   deskLampSmallAG: number;
   deskLampSmallAB: number;
   deskLampSmallAEmissive: number;
+  deskLampSmallAShadow: number;
+  deskLampSmallABugs: number;
+  deskLampSmallALightX: number;
+  deskLampSmallALightY: number;
+  deskLampSmallALightZ: number;
   /** Nudge the whole small lamp - glass AND housing - in camp units. */
   deskLampSmallAOffX: number;
   deskLampSmallAOffY: number;
@@ -347,6 +472,11 @@ export interface CampfireSceneConfig {
   deskLampSmallBG: number;
   deskLampSmallBB: number;
   deskLampSmallBEmissive: number;
+  deskLampSmallBShadow: number;
+  deskLampSmallBBugs: number;
+  deskLampSmallBLightX: number;
+  deskLampSmallBLightY: number;
+  deskLampSmallBLightZ: number;
   /** Nudge the whole lantern - glass AND housing - in camp units. */
   deskLampSmallBOffX: number;
   deskLampSmallBOffY: number;
@@ -360,6 +490,11 @@ export interface CampfireSceneConfig {
   deskLampHoodG: number;
   deskLampHoodB: number;
   deskLampHoodEmissive: number;
+  deskLampHoodShadow: number;
+  deskLampHoodBugs: number;
+  deskLampHoodLightX: number;
+  deskLampHoodLightY: number;
+  deskLampHoodLightZ: number;
   /** Nudge the whole hooded lantern - glass AND housing - in camp units. */
   deskLampHoodOffX: number;
   deskLampHoodOffY: number;
@@ -586,6 +721,24 @@ export interface CampfireSceneConfig {
   arcadeCabinLampColorG: number;
   arcadeCabinLampColorB: number;
   arcadeCabinLampEmissive: number;
+  /** Bug swarm around the cabin's lantern. Shape comes from the shared
+   *  deskBug* knobs. */
+  arcadeCabinLampBugs: number;
+  /** An owl on the cabin's lantern beam. X/Y/Z are in the same cabin-local
+   *  units as arcadeCabinLamp*, so they read directly against the lamp; the
+   *  defaults stand it on the beam's top face (y 38.8, centre line x 15.9)
+   *  just clear of the lantern, which occupies z 45.2 to 50.0. Y is where its
+   *  FEET go, not the model origin. Scale is its height in those units - 32.6
+   *  of them to a world unit at the cabin's current scale, so 9.8 is a 30 cm
+   *  owl, the same size as the two already on the front log.
+   *  Clip: 0 idle, 1 sleep, 2 headtwist. */
+  arcadeCabinOwlOn: number;
+  arcadeCabinOwlX: number;
+  arcadeCabinOwlY: number;
+  arcadeCabinOwlZ: number;
+  arcadeCabinOwlScale: number;
+  arcadeCabinOwlRotY: number;
+  arcadeCabinOwlClip: number;
   arcadeCrtGlow: number;
   /* --- arcade CRT spot-light shape ----------------------------------------
    * Each of the 4 CRTs runs its own THREE.SpotLight aimed OUT the screen face
@@ -1187,6 +1340,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   groundPatchOffsetX: 0,
   groundPatchOffsetZ: 0,
   groundPatchOuterRadius: 6.4,
+  groundPatchOuterOffsetX: 0,
+  groundPatchOuterOffsetZ: 0,
   groundPatchOuterJag: 0.34,
   groundPatchOuterSides: 22,
   groundPatchOuterSpin: 0.4,
@@ -1197,6 +1352,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   groundPatchOuterY: 0.006,
   groundPatchOuterOpacity: 1,
   groundPatchInnerRadius: 3.3,
+  groundPatchInnerOffsetX: 0,
+  groundPatchInnerOffsetZ: 0,
   groundPatchInnerJag: 0.38,
   groundPatchInnerSides: 11,
   groundPatchInnerSpin: 1.1,
@@ -1246,6 +1403,10 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskStringLightColorR: 1,
   deskStringLightColorG: 0.86,
   deskStringLightColorB: 0.66,
+  // --- 3 - the string bulbs' own look (the bar above is what they cast)
+  deskStringBulbBrightness: 1,
+  deskStringBulbWarmth: 1,
+  deskStringBulbOpacity: 1,
   // Shoal · milling under the dock
   deskFishAOn: 1,
   deskFishACount: 12,
@@ -1303,23 +1464,56 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskFishCDepthSpread: 0.18,
   deskFishCBank: 0.5,
   deskFishCYawOffset: 0,
+  deskFishWiggle: 1.4,
+  deskFishBeat: 1.2,
+  deskFishSway: 0.08,
+  deskFishShade: 0.85,
+  deskFishShadeFade: 0.35,
+  deskFishShadeSoft: 0.35,
   deskCampLampEnabled: 1,
+  deskBugCount: 26,
+  deskBugRadius: 0.073,
+  deskBugSpread: 0.65,
+  deskBugHeight: 0.052,
+  deskBugSpeed: 1,
+  deskBugJitter: 0.35,
+  deskBugDive: 0.55,
+  deskBugSize: 0.006,
+  deskBugOpacity: 0.9,
+  deskBugR: 1,
+  deskBugG: 0.88,
+  deskBugB: 0.6,
+  deskShadowMapSize: 512,
+  deskShadowBias: -0.0015,
+  deskShadowRadius: 3,
+  deskShadowNear: 0.01,
+  deskShadowFar: 2,
   // --- 3 - Desk camp lamps, per fixture. Seeded from the single shared
   // block these replaced (0.2 / 4.5 / 2 / warm white), so nothing changes
   // on load except the two bollard posts, which the old material-based
   // filter could not see and which were dark until now.
   // Camper van headlights (one block drives both bulbs)
   deskLampVanHeadsOn: 1,
-  deskLampVanHeadsIntensity: 0.2,
-  deskLampVanHeadsReach: 4.5,
+  deskLampVanHeadsIntensity: 6.5,
+  deskLampVanHeadsReach: 9,
   deskLampVanHeadsDecay: 2,
   deskLampVanHeadsR: 1,
   deskLampVanHeadsG: 0.72,
   deskLampVanHeadsB: 0.35,
   deskLampVanHeadsEmissive: 4.01,
+  deskLampVanHeadsShadow: 0,
+  deskLampVanHeadsBugs: 0,
   deskLampVanHeadsOffX: 0,
   deskLampVanHeadsOffY: 0,
   deskLampVanHeadsOffZ: 0,
+  deskLampVanHeadsBeam: 1,
+  deskLampVanHeadsBeamAngle: 0.22,
+  deskLampVanHeadsBeamPenumbra: 0.4,
+  deskLampVanHeadsBeamPush: 0.7,
+  deskLampVanHeadsBeamTilt: -0.28,
+  deskLampVanHeadsLightX: 0,
+  deskLampVanHeadsLightY: 0,
+  deskLampVanHeadsLightZ: 0,
   // Small lamp · near the fire pit
   deskLampSmallAOn: 1,
   deskLampSmallAIntensity: 0.2,
@@ -1329,23 +1523,33 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskLampSmallAG: 0.72,
   deskLampSmallAB: 0.35,
   deskLampSmallAEmissive: 3.8,
+  deskLampSmallAShadow: 0,
+  deskLampSmallABugs: 0,
+  deskLampSmallALightX: 0,
+  deskLampSmallALightY: 0,
+  deskLampSmallALightZ: 0,
   deskLampSmallAOffX: 0,
   deskLampSmallAOffY: 0,
   deskLampSmallAOffZ: 0,
   // Small lamp · far side of camp
   deskLampSmallBOn: 1,
-  deskLampSmallBIntensity: 0.2,
-  deskLampSmallBReach: 4.5,
+  deskLampSmallBIntensity: 1.4,
+  deskLampSmallBReach: 5.0,
   deskLampSmallBDecay: 2,
   deskLampSmallBR: 1,
   deskLampSmallBG: 0.72,
   deskLampSmallBB: 0.35,
   deskLampSmallBEmissive: 3.8,
+  deskLampSmallBShadow: 1,
+  deskLampSmallBBugs: 0,
+  deskLampSmallBLightX: 0,
+  deskLampSmallBLightY: 0,
+  deskLampSmallBLightZ: 0,
   deskLampSmallBOffX: -1.34,
   deskLampSmallBOffY: 0,
   deskLampSmallBOffZ: 0,
   // Hooded lantern · on the signpost
-  deskLampHoodOn: 1,
+  deskLampHoodOn: 0,
   deskLampHoodIntensity: 2.5,
   deskLampHoodReach: 3,
   deskLampHoodDecay: 2,
@@ -1353,6 +1557,11 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskLampHoodG: 0.72,
   deskLampHoodB: 0.35,
   deskLampHoodEmissive: 4.0,
+  deskLampHoodShadow: 0,
+  deskLampHoodBugs: 1,
+  deskLampHoodLightX: 0,
+  deskLampHoodLightY: 0,
+  deskLampHoodLightZ: 0,
   deskLampHoodOffX: 0,
   deskLampHoodOffY: 0,
   deskLampHoodOffZ: 0,
@@ -1522,6 +1731,14 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   arcadeCabinLampColorG: 0.87,
   arcadeCabinLampColorB: 0.55,
   arcadeCabinLampEmissive: 3.5,
+  arcadeCabinLampBugs: 1,
+  arcadeCabinOwlOn: 1,
+  arcadeCabinOwlX: 15.9,
+  arcadeCabinOwlY: 38.8,
+  arcadeCabinOwlZ: 41.5,
+  arcadeCabinOwlScale: 9.8,
+  arcadeCabinOwlRotY: 1.5708,
+  arcadeCabinOwlClip: 0,
   arcadeCrtGlow: 1,
   arcadeCrtLightForwardOffset: 0.35,
   arcadeCrtLightAngle: Math.PI / 3,
