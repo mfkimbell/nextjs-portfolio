@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentRef, ReactNode, RefObject } from "react";
 import IntroFlight from "@/components/scene-lab/IntroFlight";
 import SafeAsset from "@/components/scene-lab/SafeAsset";
-import { RetroCrtTv, Table, Chair, type CrtScreen } from "@/components/scene-lab/CampProps";
+import { RetroCrtTv, Table, Chair, meleeMenuHit, type CrtScreen, type CrtMenu } from "@/components/scene-lab/CampProps";
+import { roles } from "@/lib/experience";
+import { projects } from "@/lib/projects";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Clone, OrbitControls, Stars, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
@@ -502,11 +504,61 @@ const WIRE_RADIUS = 0.0042;
  * light they throw onto the bears feels like it's coming from what's on
  * screen, not a decorator's guess.
  */
+/**
+ * What crt_0 runs: a console menu built from the site's OWN data.
+ *
+ * Companies come out of lib/experience roles and titles out of lib/projects,
+ * so the screen cannot drift from the rest of the site - add a job or ship a
+ * project and the tube in the truck bed picks it up on the next build. Skills
+ * are the one literal list, mirroring the front of SkillsCarousel; importing
+ * that module here would drag a whole 3D carousel into the scene's graph for
+ * twelve strings.
+ *
+ * Four lines is the readout's limit at this size, and shortest-first reads
+ * better on a 256px tube than newest-first would.
+ */
+const PORTFOLIO_MENU: CrtMenu = {
+  title: "Main Menu",
+  dwell: 3.6,
+  variant: "melee",
+  backgroundVideo: "/melee-menu-bg.mp4",
+  items: [
+    {
+      label: "Experience",
+      subtitle: "Where I've Built",
+      lines: roles.slice(0, 4).map((r) => r.company),
+    },
+    {
+      label: "Projects",
+      subtitle: "Things I've Shipped",
+      lines: [...projects]
+        .sort((a, b) => a.name.length - b.name.length)
+        .slice(0, 4)
+        .map((p) => p.name),
+    },
+    {
+      label: "Skills",
+      subtitle: "Tools of the Trade",
+      lines: ["React / Next / TS", "Python / C# / .NET", "AWS / GCP / K8s", "Bedrock / PyTorch"],
+    },
+    {
+      label: "Options",
+      subtitle: "Tweak the Setup",
+      lines: ["Contact", "Resume", "GitHub", "LinkedIn"],
+    },
+    {
+      label: "Data",
+      subtitle: "Save & Records",
+      lines: ["Since 2013", "Full-Stack", "Cloud-Native", "Ship It"],
+    },
+  ],
+};
+
 const ARCADE_SCREENS: CrtScreen[] = [
-  // Right CRT. Tint sampled off the artwork itself: melee.png averages a
-  // warm tan once the near-black letterbox pixels are ignored, scaled up
-  // to something a lit tube would actually throw.
-  { content: "/bear/2/melee.png", tint: "#e6cd8f", glow: 1.0 },
+  // crt_0 runs the portfolio menu rather than media. Tint is the cool blue
+  // the menu actually averages to, so the light it throws onto the cubs comes
+  // from what is on the screen instead of from the artwork that used to be.
+  { menu: PORTFOLIO_MENU, tint: "#79c6f0", glow: 1.0 },
   // Left CRT: a real video rather than a GIF, so it actually moves.
   { content: "/bear/2/summit.mp4", tint: "#8bd0ff", glow: 0.95 },
   { content: "/gifs/darktower.gif", tint: "#ffb46f", glow: 0.9 },
@@ -1030,11 +1082,17 @@ function LocationCamera({
   config,
   panel,
   active,
+  focus = null,
   editing = false,
 }: {
   config: CampfireSceneConfig;
   panel: number;
   active: boolean;
+  /** When set, the camera flies to this shot instead of the location's own.
+   *  It is a LocationView in the SAME location-local frame, so the ring angle
+   *  is untouched and the existing turn easing carries the move both ways -
+   *  no second camera mode, just something else to aim at. */
+  focus?: LocationView | null;
   /**
    * In the lab we want to orbit a location to frame it, so this rig has to let go.
    * It keeps the camera only while moving to a new shot - after a location change or
@@ -1067,7 +1125,7 @@ function LocationCamera({
   useFrame((_, delta) => {
     if (!active) return;
     const wantAngle = LOCATION_AZIMUTH(panel, config);
-    const wantView = locationView(panel, config);
+    const wantView = focus ?? locationView(panel, config);
 
     if (angle.current === null || !view.current) {
       angle.current = wantAngle;
@@ -2939,16 +2997,7 @@ function LitWoodenCabin({ config }: { config: CampfireSceneConfig }) {
         <BugSwarm
           origin={[config.arcadeCabinLampX, config.arcadeCabinLampY, config.arcadeCabinLampZ]}
           frameScale={0.1 * (config.objectOverrides?.["arcade_wooden_cabin"]?.scale ?? 1)}
-          count={config.deskBugCount}
-          radius={config.deskBugRadius}
-          spread={config.deskBugSpread}
-          height={config.deskBugHeight}
-          speed={config.deskBugSpeed}
-          jitter={config.deskBugJitter}
-          dive={config.deskBugDive}
-          size={config.deskBugSize}
-          opacity={config.deskBugOpacity}
-          color={bugColor}
+          {...bugSwarmProps(config, bugColor)}
         />
       )}
       {/* Sits in the model's frame so it tracks the lantern through the mirror
@@ -3535,6 +3584,17 @@ type FishShade = {
   amount: number;
   fade: number;
   soft: number;
+  /** The lantern's reach, converted into CAMP units.
+   *
+   *  The config value is what goes on pointLight.distance, and three keeps
+   *  that in WORLD units - it does not scale light falloff by the parent
+   *  transform. The fish positions this is compared against are camp-local, so
+   *  handing the raw number straight over compared 5 against distances that
+   *  run to 28.9, and blacked out every fish more than a few units from the
+   *  lamp. Divided by the camp's scale at the point it is read. */
+  reach: number;
+  /** How much of the distance falloff shows on the fish. 0 = occlusion only. */
+  dark: number;
 };
 
 /**
@@ -3542,17 +3602,41 @@ type FishShade = {
  * fully blocked, with a smoothstep across the edge.
  */
 function shadeAt(s: FishShade, x: number, y: number, z: number): number {
+  /*
+   * Two ways for a fish to be dark, and the second one was missing.
+   *
+   * The deck can block the lantern - that is the signed-distance lookup below.
+   * But a fish can also simply be too far away to be lit at all, and that case
+   * used to return 0, i.e. "fully lit", which left fish swimming at full
+   * brightness through water that had already fallen off to black. Group B
+   * spends 10% of its lap beyond the lantern's reach entirely, and at its
+   * median distance the lamp is about six times dimmer than at group A's
+   * closest approach - none of which the fish were showing.
+   *
+   * The falloff is quadratic against the lamp's OWN reach rather than a
+   * separate curve, so the fish dim on the same schedule as the water they
+   * are swimming over. Whichever darkness is deeper wins; they do not stack,
+   * because a fish in shadow AND out of range should not go blacker than
+   * black.
+   */
+  const dx0 = x - s.light[0], dy0 = y - s.light[1], dz0 = z - s.light[2];
+  const dist = Math.sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0);
+  const lit = s.reach > 1e-4
+    ? Math.max(0, Math.min(1, 1 - (dist / s.reach) * (dist / s.reach)))
+    : 1;
+  const byDistance = (1 - lit) * s.dark;
+
   const f = s.field;
   const drop = s.light[1] - f.deckY;
-  if (drop <= 1e-4) return 0;                 // lantern is at or below the deck
+  if (drop <= 1e-4) return byDistance;                 // lantern is at or below the deck
   const k = (s.light[1] - y) / drop;          // how far the shadow has spread
-  if (k <= 1) return 0;                       // the point is not below the deck
+  if (k <= 1) return byDistance;                       // the point is not below the deck
   // Back up the ray to the lantern until it meets the deck plane.
   const dx = s.light[0] + (x - s.light[0]) / k;
   const dz = s.light[2] + (z - s.light[2]) / k;
   const gx = (dx - f.x0) / f.cell - 0.5;
   const gz = (dz - f.z0) / f.cell - 0.5;
-  if (gx < 0 || gz < 0 || gx > f.w - 1 || gz > f.h - 1) return 0;
+  if (gx < 0 || gz < 0 || gx > f.w - 1 || gz > f.h - 1) return byDistance;
   const ix = Math.floor(gx), iz = Math.floor(gz);
   const tx = gx - ix, tz = gz - iz;
   const ix1 = Math.min(ix + 1, f.w - 1), iz1 = Math.min(iz + 1, f.h - 1);
@@ -3564,7 +3648,8 @@ function shadeAt(s: FishShade, x: number, y: number, z: number): number {
   // edge would visibly tighten as the fish swims deeper.
   const width = Math.max(1e-4, s.soft / k);
   const u = 0.5 + d / (2 * width);
-  return u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
+  const occl = u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
+  return Math.max(occl, byDistance);
 }
 
 
@@ -3617,7 +3702,7 @@ type FishParams = {
   speed: number; scale: number; bob: number;
   eight: number; wander: number; depthSpread: number; bank: number; yaw: number;
   // Shared by every shoal - how the fish MOVES, as opposed to where it goes.
-  wiggle: number; beat: number; sway: number;
+  wiggle: number; beat: number; sway: number; waves: number; turnBend: number;
 };
 function readFishParams(config: CampfireSceneConfig, id: string): FishParams {
   const c = config as unknown as Record<string, number>;
@@ -3631,6 +3716,7 @@ function readFishParams(config: CampfireSceneConfig, id: string): FishParams {
     eight: v("Eight", 0), wander: v("Wander", 0), depthSpread: v("DepthSpread", 0),
     bank: v("Bank", 0.5), yaw: v("YawOffset", 0),
     wiggle: c.deskFishWiggle ?? 1, beat: c.deskFishBeat ?? 1, sway: c.deskFishSway ?? 0,
+    waves: c.deskFishWaves ?? 0.75, turnBend: c.deskFishTurnBend ?? 0.35,
   };
 }
 
@@ -3723,15 +3809,48 @@ function fishPathAt(i: number, n: number, t: number, P: FishParams): [number, nu
  */
 const SWIM_PEAK_PHASE = 0.774;   // where in the cycle the tail is fully over
 const SWIM_BEND_AXIS = new THREE.Vector3(0, 0, -1);
-const SWIM_AMPLIFY: Record<string, number> = {
-  Tail: 1, Spine3: 0.8, Bone: 0.5, "Bone.001": 0.5,
-};
-// Amplitude in radians at Wiggle 1, and how far each bone leads the tail, in
-// cycles. Spine2 bends about twice as far as Spine1 - the body arches most
-// behind the head, not at the nose.
-const SWIM_WAVE: readonly { name: string; amp: number; lead: number }[] = [
-  { name: "Spine1", amp: 0.055, lead: 0.30 },
-  { name: "Spine2", amp: 0.105, lead: 0.15 },
+// Only the pectoral fins still come from the clip. The spine is driven
+// entirely below, because the clip moves Spine3 and Tail IN PHASE - the back
+// third swings as one rigid piece, which is what read as "only the tail tip is
+// flicking". A hinge cannot be fixed by scaling it; it has to be replaced.
+const SWIM_AMPLIFY: Record<string, number> = { Bone: 0.5, "Bone.001": 0.5 };
+
+/*
+ * The spine as a travelling wave.
+ *
+ * `amp` is the joint angle in radians at Wiggle 1; `lead` is how far ahead of
+ * the tail that joint runs, in cycles. The lead is the important half - four
+ * joints bending in phase is a hinge, the same four staggered is a fish.
+ *
+ * The angles rise toward the tail, but the visible sweep does NOT rise with
+ * them, because a joint's effect compounds down everything behind it. Measured
+ * against this rig, one degree at each joint moves the tail tip by:
+ *
+ *   Spine1  0.108      Spine2  0.080      Spine3  0.051      Tail  0.021
+ *
+ * So the nose joint is five times more powerful per degree than the tail
+ * joint. Weighting purely by angle is what buried the front of the body: at
+ * the old numbers the tail turned 36 degrees while Spine1 managed 4.4, an 8:1
+ * ratio that put every visible bit of motion in the last segment. These
+ * angles keep the back half leading, but by a margin you can read as a body
+ * bending rather than a tip twitching.
+ */
+/*
+ * `pos` is where the joint sits along the body, 1 at the head and 0 at the
+ * tail. The lead is not baked in any more - it is `pos * deskFishWaves`, so
+ * that one slider says how much of a wavelength the body carries. At 0.25 the
+ * fish sweeps almost as one piece; at 0.75 an S is visible along it at any
+ * instant; past 1 it starts to fold back on itself and reads as an eel.
+ *
+ * The angles are flatter than they look. Tail is no longer the largest -
+ * driving it hardest is what flung the tip out, and it is the joint with the
+ * LEAST leverage on the tip anyway (0.021 per degree against Spine1's 0.108).
+ */
+const SWIM_WAVE: readonly { name: string; amp: number; pos: number }[] = [
+  { name: "Spine1", amp: 0.13, pos: 1.000 },
+  { name: "Spine2", amp: 0.17, pos: 0.667 },
+  { name: "Spine3", amp: 0.20, pos: 0.333 },
+  { name: "Tail",   amp: 0.20, pos: 0.000 },
 ];
 
 /**
@@ -3832,12 +3951,16 @@ function SwimFish({
       const neutral = neutrals.get(name);
       if (obj && neutral) amplify.push({ obj, neutral, weight });
     }
-    const wave: { obj: THREE.Object3D; rest: THREE.Quaternion; amp: number; lead: number }[] = [];
-    for (const { name, amp, lead } of SWIM_WAVE) {
+    const wave: { obj: THREE.Object3D; rest: THREE.Quaternion; amp: number; pos: number }[] = [];
+    for (const { name, amp, pos } of SWIM_WAVE) {
       const obj = scene.getObjectByName(name);
-      // Safe to read the bone here: nothing animates Spine1/Spine2, in this
-      // clip or in the pet fish's, so they are still at their bind pose.
-      if (obj) wave.push({ obj, rest: obj.quaternion.clone(), amp, lead });
+      if (!obj) continue;
+      // Neutral first, bind pose only as a fallback. Spine3 and Tail ARE in
+      // the clip, so reading their live quaternion here would capture whatever
+      // pose drei's shared cache happens to be holding; the clip's own mean is
+      // the fish swimming straight. Spine1/Spine2 have no track at all, so for
+      // those the bind pose IS the neutral.
+      wave.push({ obj, rest: (neutrals.get(name) ?? obj.quaternion).clone(), amp, pos });
     }
     return { amplify, wave, duration: clip?.duration || 1 };
   }, [scene, gltf.animations]);
@@ -3878,6 +4001,44 @@ function SwimFish({
     const [xf, , zf] = fishPathAt(index, count, t + dt, params);
     g.position.set(x, y, z);
 
+    // Heading first, because the spine below needs to know which way the fish
+    // is turning before it can lean into it.
+    const yaw = Math.atan2(xf - x, zf - z) + params.yaw;
+    const yawBack = Math.atan2(x - xb, z - zb) + params.yaw;
+    // Wrap before differencing, or the roll snaps whenever heading crosses +-PI.
+    let turn = yaw - yawBack;
+    while (turn > Math.PI) turn -= Math.PI * 2;
+    while (turn < -Math.PI) turn += Math.PI * 2;
+    const turnRate = turn / dt;
+
+    /*
+     * A fish going round a corner does not stay straight and pivot - it holds
+     * a curve through its whole body for as long as the turn lasts. That is a
+     * steady offset on every spine joint, riding under the travelling wave.
+     *
+     * tanh, not a clamp. Measured over the actual paths these shoals swim, the
+     * turn rate is 0.85 rad/s at the median but 3.4 at the 90th percentile and
+     * 8.8 at its worst - a 10x spread. Anything linear enough to read at the
+     * median folds the fish in half at the top end, and anything gentle enough
+     * to survive the top end is invisible most of the time. tanh gives 7 deg
+     * at the median, 18 at p90, and never more than TurnBend however hard the
+     * corner.
+     *
+     * On the sign: the tail curls toward the INSIDE of the turn, which is the
+     * opposite of what it feels like it should do. For a body following a
+     * circle of radius R, with the tail a small arc d behind the head, the
+     * tail's offset in the head's own frame expands to
+     *
+     *     tail - head  =  -R*d*(forward)  -  R*d^2/2*(outward radial)
+     *
+     * and that second term points INWARD. A body conforming to an arc trails
+     * its back end toward the centre of the turn, not away from it. The model
+     * faces +Z, so a rising yaw turns it toward its own +X, and a positive
+     * bend angle carries the tail that same way - which is the inside. So the
+     * sign is positive, and TurnBend negative in the panel mirrors it.
+     */
+    const bend = params.turnBend * Math.tanh(turnRate * 0.45);
+
     // --- body ------------------------------------------------------------
     //
     // Runs after drei's mixer: useAnimations is called above this hook, so its
@@ -3894,12 +4055,22 @@ function SwimFish({
         scratch.a.copy(obj.quaternion);
         obj.quaternion.copy(neutral).slerp(scratch.a, factor);
       }
-      // Bend the two bones the clip forgot, ahead of the tail, so the flick
-      // becomes a wave travelling from the head back.
+      // Drive the whole spine. Written absolutely from each bone's neutral
+      // rather than read-modify-write, so this cannot compound frame to frame
+      // whatever order the mixer's useFrame happens to run in.
       if (rig.wave.length && Math.abs(params.wiggle) > 0.001) {
         const cycle = (action.time / rig.duration) - SWIM_PEAK_PHASE;
-        for (const { obj, rest, amp, lead } of rig.wave) {
-          const a = amp * params.wiggle * Math.cos(2 * Math.PI * (cycle + lead));
+        // A fish putting on speed does not just beat faster, it throws more of
+        // its body into each beat. The tail-beat RATE already tracks Speed
+        // through the clip's timeScale; this is the amplitude half of it, on
+        // the same 0.4 reference so the two stay in step.
+        const travel = Math.max(0.3, Math.min(3, params.speed / 0.4));
+        const gain = params.wiggle * (0.7 + 0.3 * travel);
+        for (const { obj, rest, amp, pos } of rig.wave) {
+          // The turn curve is carried a little harder at the back than the
+          // front - the head leads into a corner, the body follows it round.
+          const lean = bend * (0.55 + 0.45 * (1 - pos));
+          const a = amp * gain * Math.cos(2 * Math.PI * (cycle + pos * params.waves)) + lean;
           obj.quaternion.copy(rest).multiply(scratch.b.setFromAxisAngle(SWIM_BEND_AXIS, a));
         }
       }
@@ -3915,13 +4086,7 @@ function SwimFish({
     const sway = action && params.sway
       ? params.sway * Math.sin(2 * Math.PI * ((action.time / rig.duration) - SWIM_PEAK_PHASE))
       : 0;
-    const yaw = Math.atan2(xf - x, zf - z) + params.yaw;
-    const yawBack = Math.atan2(x - xb, z - zb) + params.yaw;
-    // Wrap before differencing, or the roll snaps whenever heading crosses +-PI.
-    let turn = yaw - yawBack;
-    while (turn > Math.PI) turn -= Math.PI * 2;
-    while (turn < -Math.PI) turn += Math.PI * 2;
-    const roll = Math.max(-0.7, Math.min(0.7, (turn / dt) * 0.12 * params.bank));
+    const roll = Math.max(-0.7, Math.min(0.7, turnRate * 0.12 * params.bank));
     g.rotation.set(0, yaw + sway, -roll);
 
     // Into the dark under the dock. At Shade 0 and Fade 0 this writes the
@@ -4075,11 +4240,35 @@ type BugSwarmProps = {
   count: number; radius: number; spread: number; height: number;
   speed: number; jitter: number; dive: number;
   size: number; opacity: number; color: THREE.Color;
+  // --- shape: these regenerate the per-bug constants when they change -------
+  seed: number; speedVary: number; twoWay: number; tilt: number;
+  lungeRate: number; flickerRate: number;
+  // --- motion: read live every frame ---------------------------------------
+  lungeSharp: number; lungeDepth: number; jitterSpeed: number;
+  flickerDepth: number; drift: number; additive: number;
 };
+
+/** Everything the two mounting points hand a swarm, built once from config. */
+function bugSwarmProps(config: CampfireSceneConfig, color: THREE.Color) {
+  return {
+    count: config.deskBugCount, radius: config.deskBugRadius,
+    spread: config.deskBugSpread, height: config.deskBugHeight,
+    speed: config.deskBugSpeed, jitter: config.deskBugJitter,
+    dive: config.deskBugDive, size: config.deskBugSize,
+    opacity: config.deskBugOpacity, color,
+    seed: config.deskBugSeed, speedVary: config.deskBugSpeedVary,
+    twoWay: config.deskBugTwoWay, tilt: config.deskBugTilt,
+    lungeRate: config.deskBugLungeRate, flickerRate: config.deskBugFlickerRate,
+    lungeSharp: config.deskBugLungeSharp, lungeDepth: config.deskBugLungeDepth,
+    jitterSpeed: config.deskBugJitterSpeed, flickerDepth: config.deskBugFlickerDepth,
+    drift: config.deskBugDrift, additive: config.deskBugAdditive,
+  };
+}
 
 function BugSwarm({
   origin, frameScale, count, radius, spread, height, speed, jitter, dive,
-  size, opacity, color,
+  size, opacity, color, seed, speedVary, twoWay, tilt, lungeRate, flickerRate,
+  lungeSharp, lungeDepth, jitterSpeed, flickerDepth, drift, additive,
 }: BugSwarmProps) {
   // Radius and Height are authored in world units; the orbit is built in the
   // parent's units, so divide the frame's scale back out.
@@ -4094,32 +4283,36 @@ function BugSwarm({
   // gives back the same swarm, and dragging a slider re-shapes it rather than
   // reshuffling which bug is which.
   const { positions, alphas, bugs } = useMemo(() => {
-    const rand = seededRandom(0xb0c5);
-    const made = Array.from({ length: N }, (_, i) => ({
-      rf: 0.35 + rand(),                              // where it sits in the radius band
+    const rand = seededRandom(Math.round(seed));
+    const made = Array.from({ length: N }, () => ({
+      rf: 0.35 + rand(),                                    // where it sits in the radius band
       phase: rand() * Math.PI * 2,
-      w: (0.55 + rand() * 0.9) * (i % 2 ? -1 : 1),    // half of them orbit the other way
-      yf: rand() - 0.5,                               // height within the column
-      tilt: (rand() - 0.5) * 1.4,                     // how tipped its orbit plane is
+      // Orbit speed, and which way round. TwoWay is the probability of going
+      // the other way, so 0 is a carousel, 0.5 a cloud, 1 a carousel again in
+      // reverse - the interesting values are in the middle.
+      w: (1 - speedVary * 0.5 + rand() * speedVary) * (rand() < twoWay ? -1 : 1),
+      yf: rand() - 0.5,                                     // height within the column
+      tilt: (rand() - 0.5) * 2 * tilt,                      // how tipped its orbit plane is
       tiltPhase: rand() * Math.PI * 2,
-      jp: rand() * Math.PI * 2,                       // wobble phase
-      dw: 0.18 + rand() * 0.5,                        // how often this one lunges
+      jp: rand() * Math.PI * 2,                             // wobble phase
+      dw: lungeRate * (0.35 + rand()),                      // how often this one lunges
       dphase: rand() * Math.PI * 2,
-      ff: 9 + rand() * 14,                            // flicker rate
+      ff: flickerRate * (0.6 + rand() * 0.9),               // wing flicker rate
       fp: rand() * Math.PI * 2,
     }));
-    // Buffers are sized by N, so this deliberately rebuilds when the count
-    // changes and at no other time - a slider drag on radius or speed must not
-    // reshuffle which bug is which.
+    // These six decide who each bug IS, so changing one has to regenerate the
+    // set - unlike radius or speed, which only reshape a swarm that already
+    // exists. Reshuffling on a Radius drag would be maddening; not reshuffling
+    // on a Seed drag would make the knob do nothing.
     return { positions: new Float32Array(N * 3), alphas: new Float32Array(N), bugs: made };
-  }, [N]);
+  }, [N, seed, speedVary, twoWay, tilt, lungeRate, flickerRate]);
 
-  const p = useRef({
+  const live = {
     origin, radius: localRadius, spread, height: localHeight, speed, jitter, dive,
-  });
-  p.current = {
-    origin, radius: localRadius, spread, height: localHeight, speed, jitter, dive,
+    lungeSharp, lungeDepth, jitterSpeed, flickerDepth, drift,
   };
+  const p = useRef(live);
+  p.current = live;
 
   useFrame(({ clock }) => {
     const posAttr = posRef.current, alphaAttr = alphaRef.current;
@@ -4132,20 +4325,25 @@ function BugSwarm({
       const b = bugs[i];
       const r0 = c.radius * (1 - c.spread * 0.5 + c.spread * b.rf);
       // Brief lunge at the bulb, not a pulse - see the note above about ^8.
-      const d = Math.pow(0.5 + 0.5 * Math.sin(t * b.dw + b.dphase), 8) * c.dive;
-      const r = r0 * (1 - 0.8 * d);
+      // LungeSharp is the exponent: high holds near zero and spikes, low
+      // rounds it out into the whole swarm breathing together.
+      const d = Math.pow(0.5 + 0.5 * Math.sin(t * b.dw + b.dphase), c.lungeSharp) * c.dive;
+      const r = r0 * (1 - c.lungeDepth * d);
       const a = b.phase + t * b.w * c.speed;
       const j = c.jitter * r0;
+      const js = c.jitterSpeed;
       P[i * 3] = c.origin[0] + Math.cos(a) * r
-        + j * 0.5 * Math.sin(t * 7.3 + b.jp);
+        + j * 0.5 * Math.sin(t * 7.3 * js + b.jp);
       P[i * 3 + 1] = c.origin[1] + c.height * b.yf
         + Math.sin(a + b.tiltPhase) * c.height * 0.5 * b.tilt
-        - d * c.height * 0.55
-        + j * 0.35 * Math.sin(t * 9.1 + b.jp * 1.7);
+        - d * c.height * 0.55 * c.lungeDepth
+        + c.height * c.drift * Math.sin(t * 0.23 + b.jp * 1.3)
+        + j * 0.35 * Math.sin(t * 9.1 * js + b.jp * 1.7);
       P[i * 3 + 2] = c.origin[2] + Math.sin(a) * r
-        + j * 0.5 * Math.cos(t * 6.1 + b.jp * 2.3);
+        + j * 0.5 * Math.cos(t * 6.1 * js + b.jp * 2.3);
       const flick = 0.5 + 0.5 * Math.sin(t * b.ff + b.fp);
-      A[i] = Math.min(1, 0.25 + 0.75 * flick + d * 0.6);
+      // FlickerDepth 0 is a steady mote; 1 blinks all the way to dark.
+      A[i] = Math.min(1, (1 - c.flickerDepth) + c.flickerDepth * flick + d * 0.6);
     }
     posAttr.needsUpdate = true;
     alphaAttr.needsUpdate = true;
@@ -4164,7 +4362,7 @@ function BugSwarm({
         transparent
         opacity={opacity}
         depthWrite={false}
-        blending={THREE.AdditiveBlending}
+        blending={additive >= 0.5 ? THREE.AdditiveBlending : THREE.NormalBlending}
         toneMapped={false}
         onBeforeCompile={(shader) => {
           shader.vertexShader = shader.vertexShader.replace(
@@ -4245,16 +4443,7 @@ function DeskCampLampLight({
       // baseScale on the camping Selectable is 1, so the accumulated scale IS
       // its override - the same reasoning DeskStringLight uses for its bar.
       frameScale={config.objectOverrides?.["old_bear_camping"]?.scale ?? 1}
-      count={config.deskBugCount}
-      radius={config.deskBugRadius}
-      spread={config.deskBugSpread}
-      height={config.deskBugHeight}
-      speed={config.deskBugSpeed}
-      jitter={config.deskBugJitter}
-      dive={config.deskBugDive}
-      size={config.deskBugSize}
-      opacity={config.deskBugOpacity}
-      color={bugColor}
+      {...bugSwarmProps(config, bugColor)}
     />
   ) : null;
   const intensity = c[`deskLamp${lamp.id}Intensity`] ?? 0.2;
@@ -4336,6 +4525,27 @@ function DeskCampLampLight({
   );
 }
 
+/**
+ * The two camp chairs, lifted out of camping.glb so each can be moved on its own.
+ *
+ * Nothing in that file is named - every node is Object_N and every material is
+ * Material.NNN - so these were found by clustering instead: build a bbox for
+ * every mesh under 6 units, union any pair whose boxes come within 0.05, and
+ * two components fall out that are the same size (1.48 x 1.26 x 1.39 and
+ * 1.44 x 1.26 x 1.15), carry the same four materials, and stand 2.5 apart on
+ * the terrain surface at y 1.14. A matching pair of chairs, in other words.
+ *
+ * The small lamp between them (Object_133 + Object_446-449) is deliberately
+ * NOT here: it is the SmallA fixture in DESK_CAMP_LAMPS, and its point light,
+ * lens offsets and bug swarm are all resolved by looking its meshes up inside
+ * `cloned`. Removing them from `cloned` would strip the anchor and the light
+ * with it, so extracting the lamp means moving that plumbing too.
+ */
+const CAMP_CHAIRS: readonly { name: string; meshes: readonly string[] }[] = [
+  { name: "camping_chair_1", meshes: ["Object_369", "Object_370", "Object_371", "Object_372"] },
+  { name: "camping_chair_2", meshes: ["Object_364", "Object_365", "Object_366", "Object_367"] },
+];
+
 function CampingWithSelectableTrees({
   url,
   config,
@@ -4346,7 +4556,7 @@ function CampingWithSelectableTrees({
   onSelect: (name: string) => void;
 }) {
   const gltf = useGLTF(url) as unknown as { scene: THREE.Group };
-  const { base, trees, lampAnchors, lampParts, bulbMats, waterMeshes, dockShade } = useMemo(() => {
+  const { base, trees, chairs, lampAnchors, lampParts, bulbMats, waterMeshes, dockShade } = useMemo(() => {
     const cloned = gltf.scene.clone(true);
     const treeParentPattern = /^(Cylinder|Icosphere)\.\d+_\d+$/;
 
@@ -4426,6 +4636,46 @@ function CampingWithSelectableTrees({
       tp.quaternion.copy(worldQuat);
       tp.scale.copy(worldScale);
       trees.push({ name: `camping_tree_${tp.name.replace(/[^A-Za-z0-9_]/g, "_")}`, group: tp });
+    }
+
+    // --- lift the chairs out, same idea as the trees -------------------------
+    //
+    // The file's hierarchy is flat, so unlike a tree a chair has no parent node
+    // to grab - its four meshes are siblings. Each gets a fresh Group whose
+    // origin sits at the cluster's base centre (middle in X/Z, lowest point in
+    // Y), so the lab's rotate and scale turn the chair about its own feet
+    // rather than about the camp's origin.
+    const chairs: { name: string; group: THREE.Object3D }[] = [];
+    const chairBox = new THREE.Box3();
+    for (const spec of CAMP_CHAIRS) {
+      const parts = spec.meshes
+        .map((n) => cloned.getObjectByName(n))
+        .filter((o): o is THREE.Object3D => !!o);
+      if (parts.length !== spec.meshes.length) continue;   // model changed - skip rather than half-build
+      chairBox.makeEmpty();
+      for (const p of parts) {
+        p.updateWorldMatrix(true, true);
+        chairBox.expandByObject(p);
+      }
+      const pivot = new THREE.Vector3(
+        (chairBox.min.x + chairBox.max.x) / 2,
+        chairBox.min.y,
+        (chairBox.min.z + chairBox.max.z) / 2
+      );
+      const group = new THREE.Group();
+      group.position.copy(pivot);
+      const toLocal = new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z);
+      for (const p of parts) {
+        p.updateWorldMatrix(true, false);
+        const world = p.matrixWorld.clone();
+        p.parent?.remove(p);
+        group.add(p);
+        p.matrix.copy(toLocal.clone().multiply(world));
+        p.matrix.decompose(p.position, p.quaternion, p.scale);
+        const mesh = p as THREE.Mesh;
+        if (mesh.isMesh) { mesh.castShadow = true; mesh.receiveShadow = true; }
+      }
+      chairs.push({ name: spec.name, group });
     }
 
     // --- flatten the landscape above a ceiling -------------------------------
@@ -4622,7 +4872,7 @@ function CampingWithSelectableTrees({
       });
     });
 
-    return { base: cloned, trees, lampAnchors, lampParts, bulbMats, waterMeshes, dockShade };
+    return { base: cloned, trees, chairs, lampAnchors, lampParts, bulbMats, waterMeshes, dockShade };
   }, [gltf.scene, config.deskCampGroundMaxY]);
 
   // Height and opacity are applied OUTSIDE that memo on purpose. Putting them
@@ -4732,6 +4982,11 @@ function CampingWithSelectableTrees({
         anchor.position.y + (cr.deskLampSmallBLightY ?? 0),
         anchor.position.z + (cr.deskLampSmallBLightZ ?? 0),
       ],
+      // baseScale on the camping Selectable is 1, so its override IS the
+      // accumulated scale - the same reasoning DeskStringLight and BugSwarm use.
+      reach: ((config as unknown as Record<string, number>).deskLampSmallBReach ?? 5)
+        / Math.max(1e-4, config.objectOverrides?.["old_bear_camping"]?.scale ?? 1),
+      dark: config.deskFishDark,
       amount: lit ? config.deskFishShade : 0,
       fade: lit ? config.deskFishShadeFade : 0,
       soft: config.deskFishShadeSoft,
@@ -4759,6 +5014,19 @@ function CampingWithSelectableTrees({
           covers the river directly under it. See the deskFish block in
           sceneConfig.ts. */}
       <DeskWaterFish config={config} shade={fishShade} />
+      {chairs.map((c) => (
+        <Selectable
+          key={c.name}
+          name={c.name}
+          onSelect={onSelect}
+          config={config}
+          basePosition={[0, 0, 0]}
+          baseRotationY={0}
+          baseScale={1}
+        >
+          <primitive object={c.group} />
+        </Selectable>
+      ))}
       {trees.map((t) => (
         <Selectable
           key={t.name}
@@ -7167,109 +7435,32 @@ function DeskCampfire({ config }: { config: CampfireSceneConfig }) {
   );
 }
 
-function ArcadeSector({ config, onSelect }: { config: CampfireSceneConfig; onSelect: (n: string) => void }) {
-  const cords = useRef<CordRegistry>(new Map());
+/*
+ * ============================================================================
+ *  RING SLOT 2  =  SCENE 3  ("Cabin")
+ * ============================================================================
+ * The wooden cabin and the bear's study inside it: table, chair, computer,
+ * books, mug, papers, post-it, boxes. The cabin's wall lanterns (and the owl
+ * perched on one) stay with it.
+ *
+ * The arcade - CRTs, cubs, consoles, picnic set, truck - is NOT here any more;
+ * it moved to ArcadeSector (ring slot 1 / scene 2). Config keys here still
+ * carry the historical `arcade*` prefix for the same reason the other sector
+ * keeps `desk*`: renaming them would orphan saved values.
+ */
 
-  /* Truck sits centred in front of the camera with the open bed pointed at the
-     viewer. The camera lives at local +Z looking at -Z, so we point the truck's
-     rear at +Z by rotating 180 deg. Scale 0.4 keeps the whole truck under 2m
-     long in world space. The GLB (public/vehicles/pickup_truck.glb) has its
-     rear bed wall removed - no tailgate, open bed - so the TVs sit INSIDE the
-     bed rather than on a folded-down door.
-     Landmark positions in world units after scale + position:
-       front bumper       z ~ -1.58
-       cab / bed seam     z ~ -0.14   (bed front wall, closes cab from view)
-       bed rear (open)    z ~ +0.46
-       bed floor Y        ~ +0.36
-       bed rim top Y      ~ +0.52 */
-  const TRUCK_POS: [number, number, number] = [0, 0, -0.5];
-  const TRUCK_ROT_Y = Math.PI;
-  const TRUCK_SCALE = 0.4;
-
-  const BED_FRONT_Z = -0.14;        // cab-side wall of the bed
-  const BED_REAR_Z = 0.46;          // open rear edge of the bed
-  const BED_FLOOR_Y = 0.36;         // bed floor height in world
-
-  // CRT layout: two rows, two columns, ALL FOUR INSIDE the open bed. Bottom row
-  // sits on the bed floor near the rear opening, top row stacks on top and sits
-  // a bit deeper into the bed. All face +Z so their screens speak to the camera.
-  const TV_SCALE = 0.72;
-  const TV_HEIGHT = 0.28 * TV_SCALE;
-  const TV_COL_DX = 0.19;                       // half-spacing between columns
-  const TV_FRONT_Z = BED_REAR_Z - 0.10;         // bottom row: just inside the rear opening
-  const TV_BACK_Z  = BED_FRONT_Z + 0.16;        // top row: deeper toward cab wall
-  const TV_BOTTOM_Y = BED_FLOOR_Y + 0.005;      // slight lift so it doesn't z-fight
-  const TV_TOP_Y    = TV_BOTTOM_Y + TV_HEIGHT;
-
+function CabinSector({ config, onSelect }: { config: CampfireSceneConfig; onSelect: (n: string) => void }) {
+  // Top surface of the code-built Table is at y ≈ 0.62. GLB props that live on
+  // the table start there; drag/scale in the lab.
+  const TABLE_TOP_Y = 0.62;
   return (
-    <group name="sector_arcade">
-      {/* Truck: backed in to camera, open bed pointed at the viewer, headlights
-          + tail lights burning. Still Selectable so the panel can move it. */}
-      <Selectable
-        name="truck"
-        onSelect={onSelect}
-        config={config}
-        basePosition={TRUCK_POS}
-        baseRotationY={TRUCK_ROT_Y}
-        baseScale={TRUCK_SCALE}
-      >
-        <SafeAsset label="pickup truck">
-          <LitPickupTruck config={config} onSelect={onSelect} />
-        </SafeAsset>
-      </Selectable>
-
-
-      {/* Four TVs in a 2x2 grid inside the open truck bed, all facing +Z (the
-          camera). i = 0 bottom-left, 1 bottom-right, 2 top-left, 3 top-right.
-          Bottom row sits on the bed floor near the rear opening; top row stacks
-          on top and sits a bit deeper toward the cab wall - reads as a
-          staircase of screens seen through the tailgate opening. */}
-      {ARCADE_SCREENS.map((screen, i) => {
-        const col = i % 2;                 // 0 left, 1 right
-        const row = Math.floor(i / 2);     // 0 bottom, 1 top
-        const x = (col - 0.5) * 2 * TV_COL_DX;
-        const y = row === 0 ? TV_BOTTOM_Y : TV_TOP_Y;
-        const z = row === 0 ? TV_FRONT_Z : TV_BACK_Z;
-        // Multiply each screen's baked-in glow by the shared arcadeCrtGlow
-        // knob so a single slider brightens/dims all four TVs together and
-        // their spill on the cubs and truck reads uniformly hotter/cooler.
-        const scaledScreen = {
-          ...screen,
-          glow: (screen.glow ?? 1) * config.arcadeCrtGlow,
-        };
-        return (
-          <Selectable
-            key={i}
-            name={`crt_${i}`}
-            onSelect={onSelect}
-            config={config}
-            basePosition={[x, y, z]}
-            baseRotationY={0}
-            baseScale={TV_SCALE}
-          >
-            <RetroCrtTv
-              screen={scaledScreen}
-              seed={i}
-              light={{
-                forwardOffset: config.arcadeCrtLightForwardOffset,
-                angle: config.arcadeCrtLightAngle,
-                penumbra: config.arcadeCrtLightPenumbra,
-                distance: config.arcadeCrtLightDistance,
-                decay: config.arcadeCrtLightDecay,
-                intensityScale: config.arcadeCrtLightIntensity,
-                offsetX: config.arcadeCrtLightOffsetX,
-                offsetY: config.arcadeCrtLightOffsetY,
-              }}
-            />
-          </Selectable>
-        );
-      })}
-
+    <group name="sector_cabin">
+      {/* --- the cabin and its lighting -------------------------------- */}
       {/* Cool fill above the scene so unlit sides of things don't disappear.
           Kept low; the screens and the truck lamps do most of the work. */}
       <pointLight position={[0, 2.0, 1.8]} color="#8fa8c8" intensity={1.0} distance={7} decay={2} />
-
-      {/* Wooden cabin backdrop for the cub arcade set. Placement/scale are
+      {/* Wooden cabin backdrop. The cubs it was placed against have since
+          moved to the old-bear camp; it stayed. Placement/scale are
           rough defaults - drag it around in the lab to line it up with the
           cubs and TVs. */}
       <Selectable
@@ -7292,108 +7483,6 @@ function ArcadeSector({ config, onSelect }: { config: CampfireSceneConfig; onSel
           </SafeAsset>
         </group>
       </Selectable>
-
-      {/* Honey wand on the ground next to the cubs - a little snack prop.
-          Positioned to the side of the seated cubs; adjust in the lab. */}
-      <Selectable
-        name="arcade_honey_wand"
-        onSelect={onSelect}
-        config={config}
-        basePosition={[0.75, 0.02, 1.7]}
-        baseRotationY={0}
-        baseScale={0.2}
-      >
-        <SafeAsset label="honey wand">
-          <GLBModel url={HONEY_WAND_URL} />
-        </SafeAsset>
-      </Selectable>
-
-      {/* Four cubs on the ground between the TVs and the camera, facing back
-          toward the truck - viewer sees the backs of their heads and the
-          glowing screens beyond, classic "kids on the floor" arcade shot. */}
-      {ARCADE_CUBS.map((placement, i) => {
-        const name = `arcade_cub_${i}`;
-        if ((config.objectOverrides?.[name]?.hide ?? 0) >= 0.5) return null;
-        return (
-          <SafeAsset key={name} label={`arcade cub ${i}`}>
-            <Animal
-              name={name}
-              placement={placement}
-              config={config}
-              onSelect={onSelect}
-              cords={cords}
-              seed={i + 20}
-            />
-          </SafeAsset>
-        );
-      })}
-      {/* Extra consoles added to /public/bear/cub. Each source has wildly
-          different authoring units, so the wrapper groups anchor min-Y to 0
-          and re-center X/Z; the baseScale then sets the console's final size.
-          All three are Selectable, so drag/scale in the drawer to place them
-          around the cubs. */}
-      <Selectable
-        name="arcade_xbox360"
-        onSelect={onSelect}
-        config={config}
-        basePosition={[-1.2, 0, 0.9]}
-        baseRotationY={0}
-        baseScale={0.02}
-      >
-        <group position={[8.179, 1.495, 0.977]}>
-          <SafeAsset label="xbox 360">
-            <GLBModel url={XBOX360_URL} />
-          </SafeAsset>
-        </group>
-      </Selectable>
-      <Selectable
-        name="arcade_gamecube_console"
-        onSelect={onSelect}
-        config={config}
-        basePosition={[0.0, 0, 0.9]}
-        baseRotationY={0}
-        baseScale={0.014}
-      >
-        <group position={[0, -0.061, 1.107]}>
-          <SafeAsset label="gamecube console">
-            <GLBModel url={GAMECUBE_CONSOLE_URL} />
-          </SafeAsset>
-        </group>
-      </Selectable>
-
-      {/* Second campfire, off to one side of the truck so the arcade scene
-          has its own light source and reads as a lit-up hangout at night.
-          Selectable so it drags with the object drawer. */}
-      <Selectable
-        name="arcade_campfire"
-        onSelect={onSelect}
-        config={config}
-        basePosition={[config.arcadeCampfireX, config.arcadeCampfireY, config.arcadeCampfireZ]}
-        baseRotationY={config.arcadeCampfireRotationY}
-        baseScale={config.arcadeCampfireScale}
-      >
-        <ArcadeCampfire config={config} />
-      </Selectable>
-
-      {/* Every non-console GLB from /public/bear/2/. Rendered as one
-          Selectable each so the object drawer surfaces them and the user can
-          drag/scale each into place; default positions are a rough grid
-          behind the cubs. Hide unused ones via objectOverrides.*.hide. */}
-      {ARCADE_CUB_PROPS.map((prop) => (
-        <Selectable
-          key={prop.name}
-          name={prop.name}
-          onSelect={onSelect}
-          config={config}
-          basePosition={prop.position}
-          baseRotationY={prop.rotationY ?? 0}
-          baseScale={prop.scale}
-        >
-          <SafeAsset label={prop.label}>
-            <GLBModel url={prop.url} />
-          </SafeAsset>
-        </Selectable>
-      ))}
       {/* Two lanterns, moved over from the desk scene. Each carries its own
           warm pointLight so it acts as a real light source. The source GLB is
           authored at about 1.3M units tall (Poly by Google), so a normalization
@@ -7453,32 +7542,24 @@ function ArcadeSector({ config, onSelect }: { config: CampfireSceneConfig; onSel
           decay={2}
         />
       </Selectable>
-    </group>
-  );
-}
 
-/** Location 2 - contact. A bear writing at a table, in profile so the face reads. */
-function ContactSector({ config, onSelect }: { config: CampfireSceneConfig; onSelect: (n: string) => void }) {
-  // Top surface of the code-built Table is at y ≈ 0.62. GLB props that live on
-  // the table start there; drag/scale in the lab.
-  const TABLE_TOP_Y = 0.62;
-  return (
-    <group name="sector_contact">
-      {/* Warm hemisphere fill scoped to the desk sector - sky color is the
-          amber lantern tint, ground is a cool complement, kept dim so the
-          lanterns/computer still do most of the lighting. */}
-      <hemisphereLight
-        intensity={config.deskAmbientIntensity}
-        color={new THREE.Color(config.deskAmbientColorR, config.deskAmbientColorG, config.deskAmbientColorB)}
-        groundColor="#1a1420"
-      />
+      {/* --- the bear's study, moved here from the camping scene -------
+          These override rows were dialled in while the study lived in the
+          camping scene, and they are BIG - dx 4.8..8.4, dz 8.1..15.1. Carried
+          over as-is that put the desk seven to fifteen units out from the
+          cabin, which on a 15.2-radius ring lands it over by the camp: the
+          props were in scene 3, but nowhere near the thing that defines it.
+
+          Same treatment as the arcade set - one offset group, so the desk
+          keeps its arrangement (mug on the table, books beside it) and slides
+          to the cabin as a unit. Per-prop dragging still works through it. */}
+      <group position={[config.cabinSetX, config.cabinSetY, config.cabinSetZ]}>
       <Selectable name="contact_table" onSelect={onSelect} config={config} basePosition={[0.15, 0, 0]} baseRotationY={0}>
         <Table />
       </Selectable>
       <Selectable name="contact_chair" onSelect={onSelect} config={config} basePosition={[-0.95, 0, 0]} baseRotationY={Math.PI / 2}>
         <Chair />
       </Selectable>
-
       {/* Real GLB table + chair, added alongside the code-built ones so the
           object panel can pick whichever reads better. Hide the code versions
           in the lab once you've dialled these in. */}
@@ -7492,7 +7573,6 @@ function ContactSector({ config, onSelect }: { config: CampfireSceneConfig; onSe
           <GLBModel url={OLD_BEAR_CHAIR_URL} />
         </SafeAsset>
       </Selectable>
-
       {/* On-table props. Base positions place them on the top surface of the
           code-built table (y = 0.62) around the bear's writing spot. */}
       <Selectable name="old_bear_computer" onSelect={onSelect} config={config} basePosition={[0.35, TABLE_TOP_Y, -0.15]} baseRotationY={Math.PI}>
@@ -7543,7 +7623,6 @@ function ContactSector({ config, onSelect }: { config: CampfireSceneConfig; onSe
           <GLBModel url={OLD_BEAR_DEBRIS_URL} />
         </SafeAsset>
       </Selectable>
-
       {/* Floor props next to the desk. */}
       <Selectable name="old_bear_boxes" onSelect={onSelect} config={config} basePosition={[1.2, 0, -0.4]} baseRotationY={-0.2}>
         <SafeAsset label="old-bear boxes">
@@ -7555,7 +7634,75 @@ function ContactSector({ config, onSelect }: { config: CampfireSceneConfig; onSe
           <GLBModel url={OLD_BEAR_TOILET_URL} />
         </SafeAsset>
       </Selectable>
+      <Animal
+        name="bear_contact"
+        placement={CONTACT_BEAR}
+        config={config}
+        onSelect={onSelect}
+      />
+      </group>
+    </group>
+  );
+}
 
+/*
+ * ============================================================================
+ *  RING SLOT 1  =  SCENE 2  ("Arcade")
+ * ============================================================================
+ * The camping diorama (old_bear_camping - tent, dock, fish) with the gaming
+ * cubs' arcade built around it: the CRTs, the consoles, the picnic set and the
+ * truck. Anything the lab labels "2 - Arcade" is in here.
+ *
+ * The bear's desk - table, chair, computer, books, mug, papers - is NOT here
+ * any more; it moved to CabinSector (ring slot 2 / scene 3). Config keys in
+ * this sector still carry the historical `desk*` prefix (deskAmbient*,
+ * deskCampfire*, deskFish*, deskBug*, deskLantern*) because renaming them
+ * would orphan every saved value in campfireScene.json - the prefix is a name,
+ * not a location.
+ */
+
+function ArcadeSector({ config, onSelect, crtMenu, onCrtClick }: {
+  config: CampfireSceneConfig;
+  onSelect: (n: string) => void;
+  crtMenu?: CrtMenu;
+  onCrtClick?: (uv: { x: number; y: number } | null) => void;
+}) {
+  const cords = useRef<CordRegistry>(new Map());
+  // One colour for every CRT's throw, the way arcadeCrtGlow is one brightness
+  // for all of them. It overrides each screen's own `tint` - those were sampled
+  // from the artwork each tube used to play, which stopped meaning much once
+  // crt_0 started drawing a menu instead.
+  const crtLightColor = `#${[config.arcadeCrtLightR, config.arcadeCrtLightG, config.arcadeCrtLightB]
+    .map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0"))
+    .join("")}`;
+
+  /* Truck sits centred in front of the camera with the open bed pointed at the
+     viewer. The camera lives at local +Z looking at -Z, so we point the truck's
+     rear at +Z by rotating 180 deg. Scale 0.4 keeps the whole truck under 2m
+     long in world space. The GLB (public/vehicles/pickup_truck.glb) has its
+     rear bed wall removed - no tailgate, open bed - so the TVs sit INSIDE the
+     bed rather than on a folded-down door.
+     Landmark positions in world units after scale + position:
+       front bumper       z ~ -1.58
+       cab / bed seam     z ~ -0.14   (bed front wall, closes cab from view)
+       bed rear (open)    z ~ +0.46
+       bed floor Y        ~ +0.36
+       bed rim top Y      ~ +0.52 */
+  const TRUCK_POS: [number, number, number] = [0, 0, -0.5];
+  const TRUCK_ROT_Y = Math.PI;
+  const TRUCK_SCALE = 0.4;
+
+  return (
+    <group name="sector_arcade">
+      {/* --- the camping diorama this scene is built around ------------- */}
+      {/* Warm hemisphere fill scoped to the desk sector - sky color is the
+          amber lantern tint, ground is a cool complement, kept dim so the
+          lanterns/computer still do most of the lighting. */}
+      <hemisphereLight
+        intensity={config.deskAmbientIntensity}
+        color={new THREE.Color(config.deskAmbientColorR, config.deskAmbientColorG, config.deskAmbientColorB)}
+        groundColor="#1a1420"
+      />
       {/* Two campers parked at the desk scene - separate instances with their
           own override rows ("desk_camper" and "desk_camper_2"), so each can
           be dragged/scaled independently in the lab. */}
@@ -7579,7 +7726,6 @@ function ContactSector({ config, onSelect }: { config: CampfireSceneConfig; onSe
           />
         </SafeAsset>
       )}
-
       {/* Caravan parked behind the bear (bear sits at x=-0.95 facing +X, so
           "behind" = further -X). Caravan model is authored huge (~80 units
           long), so scale is tiny; drag/scale in the lab to place. */}
@@ -7661,12 +7807,198 @@ function ContactSector({ config, onSelect }: { config: CampfireSceneConfig; onSe
           </group>
         </group>
       </Selectable>
-      <Animal
-        name="bear_contact"
-        placement={CONTACT_BEAR}
-        config={config}
+
+      {/* --- the arcade proper, moved here from the cabin scene ---------
+          Every base position in here was laid out around the CABIN's origin,
+          so carrying the set over dropped it at z -2.6..-1.3 - which in this
+          scene is right at the camera's feet (it stands at z -2.56 looking
+          toward +0.35), hence the row of snacks across the foreground.
+
+          Rather than rewrite twenty override rows and lose the arrangement,
+          the whole set hangs off ONE offset group. Everything inside keeps its
+          relative layout - the CRT stays on the picnic table - and the three
+          arcadeSet* sliders slide the set around the camp as a unit.
+          ObjectDragLayer resolves drags through `parent.worldToLocal`, so
+          per-prop dragging still lands in the prop's own frame and this group
+          is transparent to it. */}
+      <group position={[config.arcadeSetX, config.arcadeSetY, config.arcadeSetZ]}>
+      {/* Truck: backed in to camera, open bed pointed at the viewer, headlights
+          + tail lights burning. Still Selectable so the panel can move it. */}
+      <Selectable
+        name="truck"
         onSelect={onSelect}
-      />
+        config={config}
+        basePosition={TRUCK_POS}
+        baseRotationY={TRUCK_ROT_Y}
+        baseScale={TRUCK_SCALE}
+      >
+        <SafeAsset label="pickup truck">
+          <LitPickupTruck config={config} onSelect={onSelect} />
+        </SafeAsset>
+      </Selectable>
+      {/* Everything that had drifted into the old-bear camp, brought back and
+          grouped around the cabin: the CRTs, the cubs and their consoles, and
+          the picnic set. The cord registry travels with the cubs - it is the
+          ref their controller wires resolve against. Positions below are
+          derived from the cabin's own placement, so moving the cabin makes
+          them stale; re-derive rather than nudging each one. */}
+      {/* The CRTs, sitting over the camper van in the old-bear camp.
+          The van has no group of its own in camping.glb - every mesh hangs off
+          one flat root - so its roof was found from a landmark instead: the
+          headlights, which measure x -1.46, z 4.29, topping out at y 2.71 in
+          camping.glb units. Through that diorama's own transform (basePosition
+          z -6, offset 0.73/0.80/5.59, scale 0.173) they land at (0.47, 1.27,
+          0.33) here, which is what the crt_0 override below is written
+          against. Move the camp and the saved override goes stale - re-derive
+          rather than nudging blind.
+          crt_1..3 stay hidden; crt_0 is the live one. */}
+      {ARCADE_SCREENS.map((screen, i) => {
+        const col = i % 2;                 // 0 left, 1 right
+        const row = Math.floor(i / 2);     // 0 bottom, 1 top
+        const x = (col - 0.5) * 2 * 0.19;
+        const y = row === 0 ? 0.365 : 0.365 + 0.28 * 0.72;
+        const z = row === 0 ? 0.36 : 0.02;
+        // Multiply each screen's baked-in glow by the shared arcadeCrtGlow
+        // knob so one slider moves all four together.
+        const scaledScreen = {
+          ...screen,
+          glow: (screen.glow ?? 1) * config.arcadeCrtGlow,
+          // Only crt_0 is driven; the rest keep whatever they were given.
+          ...(i === 0 && crtMenu ? { menu: crtMenu } : {}),
+        };
+        return (
+          <Selectable
+            key={i}
+            name={`crt_${i}`}
+            onSelect={onSelect}
+            config={config}
+            basePosition={[x, y, z]}
+            baseRotationY={0}
+            baseScale={0.72}
+          >
+            <RetroCrtTv
+              screen={scaledScreen}
+              seed={i}
+              onScreenClick={i === 0 ? onCrtClick : undefined}
+              light={{
+                forwardOffset: config.arcadeCrtLightForwardOffset,
+                angle: config.arcadeCrtLightAngle,
+                penumbra: config.arcadeCrtLightPenumbra,
+                distance: config.arcadeCrtLightDistance,
+                decay: config.arcadeCrtLightDecay,
+                intensityScale: config.arcadeCrtLightIntensity,
+                offsetX: config.arcadeCrtLightOffsetX,
+                offsetY: config.arcadeCrtLightOffsetY,
+                color: crtLightColor,
+              }}
+            />
+          </Selectable>
+        );
+      })}
+      {/* The arcade set, moved over from the truck. Parked in a row ABOVE
+          the camp so it is impossible to miss - these are find-me values, not
+          final ones. The cord registry came with the cubs: it is the ref their
+          controller wires resolve against, and it was declared in
+          ArcadeSector, so leaving it behind would have snapped every wire. */}
+      <Selectable
+        name="arcade_honey_wand"
+        onSelect={onSelect}
+        config={config}
+        basePosition={[0.75, 0.02, 1.7]}
+        baseRotationY={0}
+        baseScale={0.2}
+      >
+        <SafeAsset label="honey wand">
+          <GLBModel url={HONEY_WAND_URL} />
+        </SafeAsset>
+      </Selectable>
+      {/* Four cubs on the ground between the TVs and the camera, facing back
+          toward the truck - viewer sees the backs of their heads and the
+          glowing screens beyond, classic "kids on the floor" arcade shot. */}
+      {ARCADE_CUBS.map((placement, i) => {
+        const name = `arcade_cub_${i}`;
+        if ((config.objectOverrides?.[name]?.hide ?? 0) >= 0.5) return null;
+        return (
+          <SafeAsset key={name} label={`arcade cub ${i}`}>
+            <Animal
+              name={name}
+              placement={placement}
+              config={config}
+              onSelect={onSelect}
+              cords={cords}
+              seed={i + 20}
+            />
+          </SafeAsset>
+        );
+      })}
+      {/* Extra consoles added to /public/bear/cub. Each source has wildly
+          different authoring units, so the wrapper groups anchor min-Y to 0
+          and re-center X/Z; the baseScale then sets the console's final size.
+          All three are Selectable, so drag/scale in the drawer to place them
+          around the cubs. */}
+      <Selectable
+        name="arcade_xbox360"
+        onSelect={onSelect}
+        config={config}
+        basePosition={[-1.2, 0, 0.9]}
+        baseRotationY={0}
+        baseScale={0.02}
+      >
+        <group position={[8.179, 1.495, 0.977]}>
+          <SafeAsset label="xbox 360">
+            <GLBModel url={XBOX360_URL} />
+          </SafeAsset>
+        </group>
+      </Selectable>
+      <Selectable
+        name="arcade_gamecube_console"
+        onSelect={onSelect}
+        config={config}
+        basePosition={[0.0, 0, 0.9]}
+        baseRotationY={0}
+        baseScale={0.014}
+      >
+        <group position={[0, -0.061, 1.107]}>
+          <SafeAsset label="gamecube console">
+            <GLBModel url={GAMECUBE_CONSOLE_URL} />
+          </SafeAsset>
+        </group>
+      </Selectable>
+      {/* The picnic set, moved over with the CRTs. Same block as before -
+          only the sector changed, so every prop keeps its own Selectable and
+          its scale/rotation overrides. Their dx/dz were rewritten to sit under
+          the CRT rather than carried across: the old ones put eleven of them
+          in a heap out at (-3.7, -2.0) and the pretzel at z 13.8, which is
+          what "the middle of nowhere" was. */}
+      {ARCADE_CUB_PROPS.map((prop) => (
+        <Selectable
+          key={prop.name}
+          name={prop.name}
+          onSelect={onSelect}
+          config={config}
+          basePosition={prop.position}
+          baseRotationY={prop.rotationY ?? 0}
+          baseScale={prop.scale}
+        >
+          <SafeAsset label={prop.label}>
+            <GLBModel url={prop.url} />
+          </SafeAsset>
+        </Selectable>
+      ))}
+      {/* Second campfire, off to one side of the truck so the arcade scene
+          has its own light source and reads as a lit-up hangout at night.
+          Selectable so it drags with the object drawer. */}
+      <Selectable
+        name="arcade_campfire"
+        onSelect={onSelect}
+        config={config}
+        basePosition={[config.arcadeCampfireX, config.arcadeCampfireY, config.arcadeCampfireZ]}
+        baseRotationY={config.arcadeCampfireRotationY}
+        baseScale={config.arcadeCampfireScale}
+      >
+        <ArcadeCampfire config={config} />
+      </Selectable>
+      </group>
     </group>
   );
 }
@@ -8125,6 +8457,33 @@ function BackgroundGlow() {
   );
 }
 
+/** crt_0's base position, straight out of the CRT block: col 0, row 0. */
+const CRT0_BASE: [number, number, number] = [-0.19, 0.365, 0.36];
+/** RetroCrtTv's picture, in ITS OWN local frame: centre, then width/height.
+ *  Mirrors SCREEN_CENTER / SCREEN_SIZE in CampProps - the close-up frames the
+ *  glass, not the chassis, so if those move this has to move with them. */
+const CRT_SCREEN_LOCAL: [number, number, number] = [0, 0.1625, 0.129];
+const CRT_SCREEN_H = 0.20;
+/** The scale the CRT block gives every tube before its own override. */
+const CRT_BASE_SCALE = 0.72;
+/*
+ * The three ring slots, by name. The lab numbers scenes from 1, so a slot's
+ * scene number is its index + 1:
+ *
+ *   slot 0  =  scene 1  "Campfire"
+ *   slot 1  =  scene 2  "Arcade"   - camping diorama + CRTs, cubs, picnic set
+ *   slot 2  =  scene 3  "Cabin"    - wooden cabin + the bear's study
+ *
+ * Use these instead of bare numbers: the contents of slots 1 and 2 have been
+ * traded once already, and a literal 2 sitting in a file is exactly what goes
+ * stale when that happens.
+ */
+const LOCATION_CAMPFIRE = 0;
+const LOCATION_ARCADE = 1;
+const LOCATION_CABIN = 2;
+/** The extra plate the focused screen grows. Selecting it lets the camera go. */
+const CRT_BACK_ITEM = { label: "Back", lines: ["Leave the screen"] };
+
 function CampfireWorld({
   config,
   onCameraChange,
@@ -8168,6 +8527,86 @@ function CampfireWorld({
     { pos: [number, number, number]; tgt: [number, number, number] } | null
   >;
 }) {
+
+  /*
+   * Click the tube to pull the camera in; the screen's last plate lets it go.
+   *
+   * The close-up is a LocationView in the arcade's own frame - the same shape
+   * locationView() returns - so LocationCamera needed no new mode, only
+   * something else to aim at, and the turn easing carries the move in and back
+   * out for free.
+   *
+   * The aim point is read from crt_0's LIVE override rather than pinned, so
+   * dragging the CRT in the lab drags the close-up with it.
+   */
+  const [crtFocus, setCrtFocus] = useState(false);
+  const [crtIndex, setCrtIndex] = useState(0);
+
+  const crtFocusView = useMemo<LocationView | null>(() => {
+    if (!crtFocus || editing || panel !== LOCATION_ARCADE) return null;
+    const o = config.objectOverrides?.["crt_0"] ?? EMPTY_OVERRIDE;
+    const s = CRT_BASE_SCALE * o.scale;
+
+    // The tube is turned on the ring (crt_0 currently sits at rotY -137 deg),
+    // so "in front of the screen" is +Z ROTATED BY THAT HEADING, not +Z. Aiming
+    // at the group origin would also be wrong: the glass is up and forward of
+    // it, and at this range that offset is most of the frame.
+    const c = Math.cos(o.rotY), sn = Math.sin(o.rotY);
+    const [lx, ly, lz] = CRT_SCREEN_LOCAL;
+    // crt_0 hangs off the arcade set's offset group, so its base position is
+    // NOT where it ends up - miss this and the close-up flies at the empty
+    // patch of camp the set used to sit on.
+    const tx = config.arcadeSetX + CRT0_BASE[0] + o.dx + (lx * c + lz * sn) * s;
+    const ty = config.arcadeSetY + CRT0_BASE[1] + o.dy + ly * s;
+    const tz = config.arcadeSetZ + CRT0_BASE[2] + o.dz + (-lx * sn + lz * c) * s;
+
+    // Standoff in SCREEN HEIGHTS, so the framing survives rescaling the tube.
+    // At fov 50 a screen fills the view vertically at (h/2)/tan(25 deg) = 1.07
+    // screen heights; the default leaves a little room around it.
+    const d = config.crtFocusBack * CRT_SCREEN_H * s;
+    return {
+      cx: tx + sn * d,
+      cy: ty + config.crtFocusHeight * CRT_SCREEN_H * s,
+      cz: tz + c * d,
+      tx, ty, tz,
+    };
+  }, [crtFocus, editing, panel, config.objectOverrides, config.crtFocusHeight, config.crtFocusBack,
+      config.arcadeSetX, config.arcadeSetY, config.arcadeSetZ]);
+
+  // Ringing away to another campsite drops the close-up. Without this the
+  // camera would keep aiming at a shot written in the arcade's local frame
+  // while the ring angle had already swung somewhere else.
+  useEffect(() => {
+    if (panel !== LOCATION_ARCADE) { setCrtFocus(false); setCrtIndex(0); }
+  }, [panel]);
+
+  /** What crt_0 shows: free-running normally, driven once the camera is in. */
+  const crtMenu = useMemo<CrtMenu>(() => (
+    crtFocus
+      ? { ...PORTFOLIO_MENU, items: [...PORTFOLIO_MENU.items, CRT_BACK_ITEM], activeIndex: crtIndex }
+      : PORTFOLIO_MENU
+  ), [crtFocus, crtIndex]);
+
+  const onCrtClick = useCallback((uv: { x: number; y: number } | null) => {
+    // In the lab a click on the tube means "select it", not "fly at it" -
+    // otherwise the camera runs off every time you go to nudge the thing.
+    if (editing) return;
+    // The menu's own plates are the buttons: the click is hit-tested against
+    // the same layout the canvas draws with, so pointing at a plate picks that
+    // plate rather than just stepping to the next one.
+    const back = PORTFOLIO_MENU.items.length;
+    const hit = uv ? meleeMenuHit(uv.x, uv.y, back + 1) : null;
+    if (!crtFocus) {
+      // Anywhere on the glass pulls the camera in; land on whatever was
+      // pointed at, or the top plate if it was a miss.
+      setCrtIndex(hit !== null && hit < back ? hit : 0);
+      setCrtFocus(true);
+      return;
+    }
+    if (hit === null) return;            // missed the plates - leave it alone
+    if (hit >= back) { setCrtFocus(false); setCrtIndex(0); return; }  // Back
+    setCrtIndex(hit);
+  }, [crtFocus, editing]);
   // Track the last named object under the cursor. r3f fires onPointerMove for
   // every hovered mesh; we only want a sound when the resolved "top-level
   // named ancestor" actually changes.
@@ -8233,7 +8672,7 @@ function CampfireWorld({
       })()}
       <CameraRig config={config} paused={flying || panelled} />
       {panelled ? (
-        <LocationCamera config={config} panel={panel} active={!flying} editing={editing} />
+        <LocationCamera config={config} panel={panel} active={!flying} editing={editing} focus={crtFocusView} />
       ) : null}
       {flying ? (
         <IntroFlight
@@ -8314,7 +8753,7 @@ function CampfireWorld({
         {/* Location 0 - the campfire. Everything here was already composed around the
             origin with the camera off at +Z, so it moves onto the ring untouched and
             keeps every slider meaning exactly what it did. */}
-        <Location index={0} config={config}>
+        <Location index={LOCATION_CAMPFIRE} config={config}>
           <CampfireSceneModel config={config} onSelect={onSelect} />
           {(config.objectOverrides?.["camper"]?.hide ?? 0) < 0.5 && (
             <SafeAsset label="camper"><Camper config={config} onSelect={onSelect} /></SafeAsset>
@@ -8670,12 +9109,24 @@ function CampfireWorld({
           </group>
         </Location>
 
-        <Location index={1} config={config}>
-          <SafeAsset label="arcade"><ArcadeSector config={config} onSelect={onSelect} /></SafeAsset>
+        {/* Ring slot -> scene number is just +1: slot 0 is scene 1, and so on.
+            The slots themselves never moved. What moved is what is IN them:
+            the arcade (CRTs, cubs, consoles, picnic set, truck) came here to
+            join the camping diorama, and the bear's study (table, computer,
+            books) went the other way to join the cabin. The two anchors -
+            old_bear_camping and arcade_wooden_cabin - stayed exactly where
+            they were, so both saved camera views still frame the right thing
+            and cameraDefaults.json needed no change. */}
+        <Location index={LOCATION_ARCADE} config={config}>
+          <SafeAsset label="arcade">
+            <ArcadeSector config={config} onSelect={onSelect} crtMenu={crtMenu} onCrtClick={onCrtClick} />
+          </SafeAsset>
         </Location>
 
-        <Location index={2} config={config}>
-          <SafeAsset label="contact"><ContactSector config={config} onSelect={onSelect} /></SafeAsset>
+        <Location index={LOCATION_CABIN} config={config}>
+          <SafeAsset label="cabin">
+            <CabinSector config={config} onSelect={onSelect} />
+          </SafeAsset>
         </Location>
       </ObjectDragLayer>
       </group>

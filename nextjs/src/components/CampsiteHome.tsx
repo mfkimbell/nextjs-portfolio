@@ -24,8 +24,8 @@ type Mode = "config" | "site";
 
 const PANELS = [
   { title: "By the fire", blurb: "Pull up a log." },
-  { title: "The arcade", blurb: "Four screens, one truck battery." },
   { title: "Get in touch", blurb: "Come and sit down." },
+  { title: "The arcade", blurb: "Four screens, one truck battery." },
 ];
 
 /**

@@ -327,19 +327,32 @@ export interface CampfireSceneConfig {
    *  running ahead of the tail, turning the hinge into a head-to-tail wave.
    *  0 freezes the body straight.
    *
-   *  Measured by running the rig over a full cycle - tail-tip sweep, as a
-   *  fraction of the 6.16-unit body, and how far the MIDDLE of the fish moves:
+   *  Measured by running the rig over a full cycle. Lateral sweep at each
+   *  joint, as a percentage of the 6.16-unit body, at Wiggle 1.0:
    *
-   *    as shipped   29.5%   mid-body 0.004   (i.e. the body does not move)
-   *    1.0 + wave   42.1%   mid-body 0.173
-   *    1.4          57%     mid-body 0.24
-   *    3.0         101%     mid-body 0.514   (a burst, not a cruise)
+   *    Spine2   5%      Spine3  17%      Tail  36%      tail tip  53%
+   *
+   *  Spine1 reads 0% and that is correct, not a bug: it is the first joint in
+   *  the bending chain, so its rotation moves everything BEHIND it while its
+   *  own position never leaves the body's origin.
+   *
+   *  For contrast, the clip on its own puts 57% at the tip and 0.1% at Spine2
+   *  - all of the motion in the last segment, which is what read as a twitch.
    *
    *  Vertical drift stays under 0.3% of the body throughout: the bend axis is
    *  bone-local Z, which displaces the tail almost purely sideways. */
   deskFishWiggle: number;
   /** Tail-beat rate. Multiplies a rate that already tracks each shoal's Speed,
    *  so faster fish beat faster; this is the overall tempo on top. */
+  /** How much of a wavelength the body carries at once. 0.25 sweeps almost as
+   *  one piece; 0.75 shows a clear S along the fish; past 1 it folds back on
+   *  itself and reads as an eel. */
+  deskFishWaves: number;
+  /** How far the body curves into a turn, in radians at full lock. The
+   *  response saturates, so this is a ceiling rather than a gain: about 7 deg
+   *  of it shows at a typical turn, 18 at a sharp one. Negative flips which
+   *  way the body leans. */
+  deskFishTurnBend: number;
   deskFishBeat: number;
   /** How far the whole fish swings side to side, in radians, locked to the
    *  beat. The bones bend the animal; this swings it, which is the part that
@@ -354,6 +367,11 @@ export interface CampfireSceneConfig {
    *  and a fish lit as brightly under the deck as out in the open is what gave
    *  the shoal away. Nothing happens while the dock lantern is off: with no
    *  light there is no shadow to be in. */
+  /** How much the lantern's distance falloff darkens a fish, on top of the
+   *  deck's cast shadow. 0 is occlusion only - a fish beyond the lamp's reach
+   *  then swims at full brightness through black water, which is what it used
+   *  to do. 1 fades it out completely as it leaves the pool of light. */
+  deskFishDark: number;
   deskFishShade: number;
   /** Fades the fish out on top of darkening them, for when black still reads
    *  as a fish-shaped hole. 0 keeps them solid. */
@@ -374,6 +392,30 @@ export interface CampfireSceneConfig {
    *  gl_PointSize from the uniform and only then divides by view depth, so no
    *  model matrix ever reaches it (the RectAreaLight width/height trap, for
    *  once working in our favour). */
+  /** Reshuffle who is who. Changing it rebuilds the swarm's per-bug constants; every other shape knob reshapes the swarm that already exists. */
+  deskBugSeed: number;
+  /** Spread of orbit speeds. 0 makes every bug circle in lockstep. */
+  deskBugSpeedVary: number;
+  /** Chance a bug orbits the other way. 0 or 1 is a carousel; the middle is a cloud. */
+  deskBugTwoWay: number;
+  /** How far orbit planes tip out of horizontal. 0 flattens the swarm into a disc. */
+  deskBugTilt: number;
+  /** How often each bug dives at the bulb. */
+  deskBugLungeRate: number;
+  /** Wing-flicker speed. */
+  deskBugFlickerRate: number;
+  /** Exponent on the lunge. High holds near zero then spikes; low rounds it into the whole swarm breathing together. */
+  deskBugLungeSharp: number;
+  /** How far in a lunge carries, as a fraction of the orbit radius. */
+  deskBugLungeDepth: number;
+  /** Frequency of the erratic wobble, on top of its Jitter amount. */
+  deskBugJitterSpeed: number;
+  /** How hard they blink. 0 is a steady mote, 1 goes all the way to dark. */
+  deskBugFlickerDepth: number;
+  /** Slow vertical wander of the whole swarm, as a fraction of Column height. */
+  deskBugDrift: number;
+  /** 1 = additive blending, so they glow against the dark. 0 = normal, for bugs seen in daylight. */
+  deskBugAdditive: number;
   deskBugCount: number;
   deskBugRadius: number;
   deskBugSpread: number;
@@ -739,7 +781,30 @@ export interface CampfireSceneConfig {
   arcadeCabinOwlScale: number;
   arcadeCabinOwlRotY: number;
   arcadeCabinOwlClip: number;
+  /** The close-up framing when crt_0 is clicked, both measured in SCREEN
+   *  HEIGHTS so they hold whatever scale the tube is set to: how far out in
+   *  front of the glass the camera stands, and how far above its centre.
+   *  1.07 back is exactly full-frame at fov 50. */
+  crtFocusBack: number;
+  crtFocusHeight: number;
+  /** Rigid offset applied to the whole arcade set inside scene 2 - CRTs,
+   *  cubs, consoles, picnic table, snacks and the arcade fire. Moves them as
+   *  one unit without disturbing their relative layout. */
+  arcadeSetX: number;
+  arcadeSetY: number;
+  arcadeSetZ: number;
+  /** The same rigid offset for the bear's study inside scene 3 - table, chair,
+   *  computer, books, mug, papers, boxes, TP and the bear himself. */
+  cabinSetX: number;
+  cabinSetY: number;
+  cabinSetZ: number;
   arcadeCrtGlow: number;
+  /** Colour of the light every CRT throws forward. Overrides each screen's own
+   *  `tint`. Defaults to #79c6f0, the blue crt_0's menu averages to, so nothing
+   *  moves until a slider does. */
+  arcadeCrtLightR: number;
+  arcadeCrtLightG: number;
+  arcadeCrtLightB: number;
   /* --- arcade CRT spot-light shape ----------------------------------------
    * Each of the 4 CRTs runs its own THREE.SpotLight aimed OUT the screen face
    * (local +Z). These knobs shape all four together — the previous point
@@ -1464,13 +1529,28 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskFishCDepthSpread: 0.18,
   deskFishCBank: 0.5,
   deskFishCYawOffset: 0,
-  deskFishWiggle: 1.4,
+  deskFishWiggle: 1,
+  deskFishWaves: 0.75,
+  deskFishTurnBend: 0.35,
   deskFishBeat: 1.2,
   deskFishSway: 0.08,
+  deskFishDark: 0.8,
   deskFishShade: 0.85,
   deskFishShadeFade: 0.35,
   deskFishShadeSoft: 0.35,
   deskCampLampEnabled: 1,
+  deskBugSeed: 45253,
+  deskBugSpeedVary: 0.9,
+  deskBugTwoWay: 0.5,
+  deskBugTilt: 0.7,
+  deskBugLungeRate: 0.43,
+  deskBugFlickerRate: 16,
+  deskBugLungeSharp: 8,
+  deskBugLungeDepth: 0.8,
+  deskBugJitterSpeed: 1,
+  deskBugFlickerDepth: 0.75,
+  deskBugDrift: 0,
+  deskBugAdditive: 1,
   deskBugCount: 26,
   deskBugRadius: 0.073,
   deskBugSpread: 0.65,
@@ -1739,7 +1819,18 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   arcadeCabinOwlScale: 9.8,
   arcadeCabinOwlRotY: 1.5708,
   arcadeCabinOwlClip: 0,
+  cabinSetX: -7.21,
+  cabinSetY: 0,
+  cabinSetZ: -10.15,
+  arcadeSetX: 0.55,
+  arcadeSetY: 0.37,
+  arcadeSetZ: 2.6,
+  crtFocusBack: 1.35,
+  crtFocusHeight: 0,
   arcadeCrtGlow: 1,
+  arcadeCrtLightR: 0.475,
+  arcadeCrtLightG: 0.776,
+  arcadeCrtLightB: 0.941,
   arcadeCrtLightForwardOffset: 0.35,
   arcadeCrtLightAngle: Math.PI / 3,
   arcadeCrtLightPenumbra: 0.5,
@@ -1962,8 +2053,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
    */
   locationViews: [
     { cx: 0, cy: 1.7, cz: 7.0, tx: 0, ty: 0.9, tz: 0 }, // campfire
-    { cx: 0, cy: 1.5, cz: 5.5, tx: 0, ty: 0.8, tz: 0 }, // arcade
     { cx: 0, cy: 1.4, cz: 4.5, tx: 0, ty: 0.7, tz: 0 }, // desk
+    { cx: 0, cy: 1.5, cz: 5.5, tx: 0, ty: 0.8, tz: 0 }, // arcade
   ],
 
   masterVolume: 0.7,

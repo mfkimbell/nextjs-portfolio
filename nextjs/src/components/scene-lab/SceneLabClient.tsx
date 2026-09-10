@@ -37,7 +37,7 @@ const SCENE_DETAILS: Record<SceneKey, { label: string; eyebrow: string; descript
 };
 
 /** Must stay in the same order as the locations in CampfireScene. */
-const LOCATION_NAMES = ["Campfire", "Arcade", "Desk"] as const;
+const LOCATION_NAMES = ["Campfire", "Arcade", "Cabin"] as const;
 
 const isSceneKey = (value: string): value is SceneKey => value === "campfire" || value === "ocean";
 const STORAGE_KEY = "scene-lab-config-v1";
@@ -315,6 +315,144 @@ function SectionJumpBar({ titles }: { titles: string[] }) {
   );
 }
 
+
+/**
+ * Which control groups hold a selectable object's LIGHT knobs.
+ *
+ * Selecting a lamp in the viewport used to give you its transform drawer and
+ * nothing else - the sliders that actually make it a light were somewhere in a
+ * three-thousand-line sidebar, in a collapsed group, possibly hidden by the
+ * scene filter. This is the missing link: click the thing, get its light.
+ *
+ * Keyed by the Selectable's `name`, valued by ControlGroup TITLES rather than
+ * ids, because the title is what the group is declared with a few hundred
+ * lines below and a stale entry is then obvious on sight. Titles resolve to
+ * ids through the same sectionIdFromTitle the jump bar uses, and anything that
+ * fails to resolve is skipped rather than throwing - a renamed group loses the
+ * shortcut, it does not break selection.
+ *
+ * Objects deliberately absent: props with no light of their own. Fire groups
+ * include their ground glow, because the pool on the dirt is the half of a
+ * campfire people actually reach for.
+ */
+const LIGHT_SECTIONS: Record<string, readonly string[]> = {
+  campfire: [
+    "1 · Campfire — fire light",
+    "1 · Campfire — flame",
+    "1 · Campfire — ground glow",
+  ],
+  campfire_laptop_kenney: ["1 · Campfire — laptop screen"],
+
+  desk_campfire: ["2 · Arcade — campfire"],
+  old_bear_computer: ["Prop lights · lanterns + computer (3 · Cabin), ambient + caravan (2 · Arcade)"],
+  old_bear_camping: [
+    "2 · Arcade — camp lamps",
+    "2 · Arcade — string-light bar",
+    "2 · Arcade — string bulbs (the bulbs themselves)",
+    "2 · Arcade — bug swarm",
+  ],
+
+  arcade_campfire: ["2 · Arcade — fire & screens", "2 · Arcade — ground glow"],
+  arcade_wooden_cabin: ["3 · Cabin — cabin lamp"],
+  old_bear_lantern: ["3 · Cabin — lanterns"],
+  old_bear_lantern_2: ["3 · Cabin — lanterns"],
+  truck: [
+    "2 · Arcade — truck lights",
+    "2 · Arcade — truck headlight lens",
+    "2 · Arcade — truck taillight lens",
+  ],
+};
+
+/**
+ * The light knobs worth having on the object itself.
+ *
+ * Same idea as LIGHT_SECTIONS, one step further in: that one gets you TO the
+ * group, this one saves the trip entirely. Selecting a lamp puts its own
+ * intensity, reach and colour in the drawer beside its move sliders, which is
+ * the whole point - a light is a thing you place and a thing you tune, and
+ * those two jobs used to live three thousand lines apart.
+ *
+ * Labels and ranges are lifted verbatim from the panel's own SliderRow calls,
+ * so a knob reads and behaves identically in both places rather than drifting
+ * into two slightly different controls for one value. The chips above still
+ * jump to the full group for everything that does not fit here.
+ */
+type LightKnob = { key: keyof CampfireSceneConfig; label: string; min: number; max: number; step: number };
+const LIGHT_CONTROLS: Record<string, readonly LightKnob[]> = {
+  campfire: [
+    { key: "fireIntensity", label: "Fire intensity", min: 0, max: 1000, step: 0.1 },
+    { key: "flickerAmount", label: "Flicker amount", min: 0, max: 20, step: 0.05 },
+    { key: "fireLightReach", label: "Fire reach", min: 0, max: 200, step: 0.1 },
+    { key: "fireDecay", label: "Fire decay (near/far contrast)", min: 0.1, max: 4, step: 0.05 },
+    { key: "farGlowIntensity", label: "Far glow intensity", min: 0, max: 20, step: 0.05 },
+    { key: "farGlowReach", label: "Far glow reach", min: 0, max: 200, step: 0.5 },
+  ],
+  desk_campfire: [
+    { key: "deskFireIntensity", label: "Intensity", min: 0, max: 1000, step: 0.1 },
+    { key: "deskFlickerAmount", label: "Flicker", min: 0, max: 20, step: 0.05 },
+  ],
+  arcade_campfire: [
+    { key: "arcadeFireIntensity", label: "Intensity", min: 0, max: 1000, step: 0.1 },
+    { key: "arcadeFlickerAmount", label: "Flicker", min: 0, max: 20, step: 0.05 },
+  ],
+  old_bear_computer: [
+    { key: "deskComputerIntensity", label: "Computer intensity", min: 0, max: 20, step: 0.05 },
+    { key: "deskComputerDistance", label: "Computer distance", min: 0, max: 30, step: 0.05 },
+    { key: "deskComputerColorR", label: "Computer R", min: 0, max: 1, step: 0.01 },
+    { key: "deskComputerColorG", label: "Computer G", min: 0, max: 1, step: 0.01 },
+    { key: "deskComputerColorB", label: "Computer B", min: 0, max: 1, step: 0.01 },
+  ],
+  arcade_wooden_cabin: [
+    { key: "arcadeCabinLampIntensity", label: "Lamp intensity", min: 0, max: 20, step: 0.05 },
+    { key: "arcadeCabinLampDistance", label: "Lamp reach (world)", min: 0, max: 15, step: 0.05 },
+    { key: "arcadeCabinLampDecay", label: "Lamp decay", min: 0, max: 4, step: 0.05 },
+    { key: "arcadeCabinLampColorR", label: "Lamp R", min: 0, max: 1, step: 0.01 },
+    { key: "arcadeCabinLampColorG", label: "Lamp G", min: 0, max: 1, step: 0.01 },
+    { key: "arcadeCabinLampColorB", label: "Lamp B", min: 0, max: 1, step: 0.01 },
+    { key: "arcadeCabinLampEmissive", label: "Lantern glass brightness", min: 0, max: 12, step: 0.1 },
+    { key: "arcadeCabinLampBugs", label: "Bug swarm (0/1)", min: 0, max: 1, step: 1 },
+  ],
+  old_bear_lantern: [
+    { key: "deskLanternIntensity", label: "Lantern intensity", min: 0, max: 20, step: 0.05 },
+    { key: "deskLanternDistance", label: "Lantern distance", min: 0, max: 30, step: 0.05 },
+    { key: "deskLanternColorR", label: "Lantern R", min: 0, max: 1, step: 0.01 },
+    { key: "deskLanternColorG", label: "Lantern G", min: 0, max: 1, step: 0.01 },
+    { key: "deskLanternColorB", label: "Lantern B", min: 0, max: 1, step: 0.01 },
+  ],
+  old_bear_lantern_2: [
+    { key: "deskLanternIntensity", label: "Lantern intensity", min: 0, max: 20, step: 0.05 },
+    { key: "deskLanternDistance", label: "Lantern distance", min: 0, max: 30, step: 0.05 },
+    { key: "deskLanternColorR", label: "Lantern R", min: 0, max: 1, step: 0.01 },
+    { key: "deskLanternColorG", label: "Lantern G", min: 0, max: 1, step: 0.01 },
+    { key: "deskLanternColorB", label: "Lantern B", min: 0, max: 1, step: 0.01 },
+  ],
+  truck: [
+    { key: "truckHeadLightIntensity", label: "Head intensity", min: 0, max: 30, step: 0.1 },
+    { key: "truckHeadLightDistance", label: "Head reach", min: 0, max: 40, step: 0.1 },
+    { key: "truckHeadLightDecay", label: "Head decay", min: 0, max: 4, step: 0.05 },
+  ],
+  old_bear_camping: [
+    { key: "deskCampLampEnabled", label: "ALL camp lamps on (0/1)", min: 0, max: 1, step: 1 },
+  ],
+};
+
+/** The scene number a group title starts with, for un-hiding it. */
+function scopeOfTitle(title: string): LocationScope | null {
+  const c = title.trim()[0];
+  return c === "1" || c === "2" || c === "3" ? c : null;
+}
+
+/** Open a group, remember that it is open, and return the element. */
+function openSection(title: string, map: Record<string, boolean>) {
+  const el = document.getElementById(sectionIdFromTitle(title)) as HTMLDetailsElement | null;
+  if (!el) return null;
+  // Assigning .open fires a native toggle event, which ControlGroup's onToggle
+  // turns back into React state - the same route SectionJumpBar takes.
+  el.open = true;
+  map[el.id] = true;
+  return el;
+}
+
 function normalizeCampfireConfig(config: CampfireSceneConfig): CampfireSceneConfig {
   const fogFar = Math.max(1.3, config.fogFar);
   const fogNear = Math.max(0.1, Math.min(config.fogNear, fogFar - 0.5));
@@ -383,6 +521,55 @@ export default function SceneLabClient() {
   /** Filter for the config sidebar: which of the three sites' sections are
    *  visible. null = show all. */
   const [locationScopeFilter, setLocationScopeFilter] = useState<LocationScope | null>(null);
+
+  /**
+   * Clicking a light in the viewport brings its sliders to you.
+   *
+   * Three things have to happen in order, and the order is the whole trick:
+   * the scene filter has to stop hiding the group, THEN the group has to be
+   * mounted again, THEN it can be opened and scrolled to. Un-hiding is a state
+   * change, so the element does not exist yet on this tick - hence the
+   * requestAnimationFrame before touching the DOM.
+   *
+   * Duplicates resolve to their source, so a copied lantern opens the same
+   * lantern controls the original does.
+   */
+  const lightSections = useMemo(() => {
+    if (!selectedObject) return [] as readonly string[];
+    const base = selectedObject.startsWith(DUPLICATE_PREFIX)
+      ? campfireConfig.objectDuplicates?.[selectedObject]?.source ?? selectedObject
+      : selectedObject;
+    return LIGHT_SECTIONS[base] ?? [];
+  }, [selectedObject, campfireConfig.objectDuplicates]);
+
+  const lightKnobs = useMemo(() => {
+    if (!selectedObject) return [] as readonly LightKnob[];
+    const base = selectedObject.startsWith(DUPLICATE_PREFIX)
+      ? campfireConfig.objectDuplicates?.[selectedObject]?.source ?? selectedObject
+      : selectedObject;
+    return LIGHT_CONTROLS[base] ?? [];
+  }, [selectedObject, campfireConfig.objectDuplicates]);
+
+  useEffect(() => {
+    if (!lightSections.length) return;
+    const scope = scopeOfTitle(lightSections[0]);
+    setLocationScopeFilter((f) => (f === null || f === scope ? f : null));
+    const frame = window.requestAnimationFrame(() => {
+      const map = readOpenMap();
+      let first: HTMLElement | null = null;
+      for (const title of lightSections) {
+        const el = openSection(title, map);
+        if (el && !first) first = el;
+      }
+      writeOpenMap(map);
+      if (!first) return;
+      first.scrollIntoView({ behavior: "smooth", block: "start" });
+      // A beat of ring so it is obvious which group just answered the click.
+      first.classList.add("ring-2", "ring-emerald-400/60");
+      window.setTimeout(() => first?.classList.remove("ring-2", "ring-emerald-400/60"), 1400);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [lightSections]);
   // Clear the dirty flag when the visitor jumps to a different location - the
   // LocationCamera teleport takes over and any pending pose for the previous
   // panel is now unrelated to what's on screen.
@@ -900,6 +1087,59 @@ export default function SceneLabClient() {
                     close
                   </button>
                 </div>
+                {lightKnobs.length > 0 && (
+                  <div className="mb-3 rounded-xl border border-amber-300/25 bg-amber-400/[0.07] p-2">
+                    <div className="mb-2 text-[0.6rem] uppercase tracking-[0.2em] text-amber-200/70">
+                      Light
+                    </div>
+                    {/* Neutralised on purpose: SliderRow hides itself when it does
+                        not match the sidebar's search box, and these are not in the
+                        sidebar. Without this, typing in search would empty the
+                        drawer. */}
+                    <SearchContext.Provider value="">
+                      <div className="space-y-3">
+                        {lightKnobs.map((k) => (
+                          <SliderRow
+                            key={k.key}
+                            label={k.label}
+                            value={campfireConfig[k.key] as number}
+                            min={k.min}
+                            max={k.max}
+                            step={k.step}
+                            onChange={(value) => updateCampfire(k.key, value)}
+                          />
+                        ))}
+                      </div>
+                    </SearchContext.Provider>
+                  </div>
+                )}
+                {lightSections.length > 0 && (
+                  <div className="mb-3 rounded-xl border border-amber-300/25 bg-amber-400/10 p-2">
+                    <div className="mb-1 text-[0.6rem] uppercase tracking-[0.2em] text-amber-200/70">
+                      This one makes light
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {lightSections.map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => {
+                            const scope = scopeOfTitle(s);
+                            setLocationScopeFilter((f) => (f === null || f === scope ? f : null));
+                            window.requestAnimationFrame(() => {
+                              const map = readOpenMap();
+                              const el = openSection(s, map);
+                              writeOpenMap(map);
+                              el?.scrollIntoView({ behavior: "smooth", block: "start" });
+                            });
+                          }}
+                          className="rounded-full border border-amber-300/30 bg-amber-400/15 px-2 py-0.5 text-[0.62rem] text-amber-100 hover:border-amber-300/60 hover:bg-amber-400/25"
+                        >
+                          {s.replace(/^[123] · /, "")}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="mb-3 rounded-xl border border-sky-300/20 bg-sky-400/10 p-2">
                   <div className="mb-2 flex gap-1">
                     <button
@@ -1461,7 +1701,20 @@ export default function SceneLabClient() {
                     <SliderRow label="Spark size" value={campfireConfig.arcadeSparkSize} min={0} max={0.4} step={0.001} onChange={(value) => updateCampfire("arcadeSparkSize", value)} />
                     <SliderRow label="Spark lifetime" value={campfireConfig.arcadeSparkLifetime} min={0.1} max={6} step={0.05} onChange={(value) => updateCampfire("arcadeSparkLifetime", value)} />
                     <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Arcade TVs</div>
+                    <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Whole arcade set</div>
+                    <p className="mb-1 text-[0.6rem] leading-relaxed text-white/40">
+                      Slides the CRTs, cubs, consoles, picnic table and snacks
+                      around scene 2 as one block, keeping their layout.
+                    </p>
+                    <SliderRow label="Set X (left/right)" value={campfireConfig.arcadeSetX} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("arcadeSetX", value)} />
+                    <SliderRow label="Set Y (up/down)" value={campfireConfig.arcadeSetY} min={-3} max={5} step={0.01} onChange={(value) => updateCampfire("arcadeSetY", value)} />
+                    <SliderRow label="Set Z (toward/away)" value={campfireConfig.arcadeSetZ} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("arcadeSetZ", value)} />
+                    <SliderRow label="Zoom standoff (screens)" value={campfireConfig.crtFocusBack} min={0.6} max={6} step={0.01} onChange={(value) => updateCampfire("crtFocusBack", value)} />
+                    <SliderRow label="Zoom height (screens)" value={campfireConfig.crtFocusHeight} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("crtFocusHeight", value)} />
                     <SliderRow label="CRT glow (all 4)" value={campfireConfig.arcadeCrtGlow} min={0} max={5} step={0.02} onChange={(value) => updateCampfire("arcadeCrtGlow", value)} />
+                    <SliderRow label="Light R" value={campfireConfig.arcadeCrtLightR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightR", value)} />
+                    <SliderRow label="Light G" value={campfireConfig.arcadeCrtLightG} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightG", value)} />
+                    <SliderRow label="Light B" value={campfireConfig.arcadeCrtLightB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightB", value)} />
                     <SliderRow label="Spot intensity ×" value={campfireConfig.arcadeCrtLightIntensity} min={0} max={5} step={0.02} onChange={(value) => updateCampfire("arcadeCrtLightIntensity", value)} />
                     <SliderRow label="Spot cone angle" value={campfireConfig.arcadeCrtLightAngle} min={0.05} max={Math.PI / 2} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightAngle", value)} />
                     <SliderRow label="Spot penumbra" value={campfireConfig.arcadeCrtLightPenumbra} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightPenumbra", value)} />
@@ -1472,7 +1725,20 @@ export default function SceneLabClient() {
                     <SliderRow label="Spot offset Y" value={campfireConfig.arcadeCrtLightOffsetY} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightOffsetY", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="2 · Arcade — cabin lamp" scope="2">
+                  <ControlGroup title="3 · Cabin — whole study set" scope="3">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      Slides the table, chair, computer, books, mug, papers,
+                      boxes, toilet paper and the bear around scene 3 as one
+                      block, keeping their arrangement. Their own override rows
+                      were dialled in back when the desk lived in the camping
+                      scene, which is why they needed bringing back to the cabin.
+                    </p>
+                    <SliderRow label="Set X (left/right)" value={campfireConfig.cabinSetX} min={-16} max={16} step={0.01} onChange={(value) => updateCampfire("cabinSetX", value)} />
+                    <SliderRow label="Set Y (up/down)" value={campfireConfig.cabinSetY} min={-3} max={5} step={0.01} onChange={(value) => updateCampfire("cabinSetY", value)} />
+                    <SliderRow label="Set Z (toward/away)" value={campfireConfig.cabinSetZ} min={-20} max={20} step={0.01} onChange={(value) => updateCampfire("cabinSetZ", value)} />
+                  </ControlGroup>
+
+                  <ControlGroup title="3 · Cabin — cabin lamp" scope="3">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       The lantern on the wooden cabin. X/Y/Z are in the cabin
                       model&apos;s own space (it spans ~140 units before the
@@ -1509,7 +1775,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Owl spin" value={campfireConfig.arcadeCabinOwlRotY} min={-3.15} max={3.15} step={0.01} onChange={(value) => updateCampfire("arcadeCabinOwlRotY", value)} />
                     <SliderRow label="Owl clip (0 idle · 1 sleep · 2 headtwist)" value={campfireConfig.arcadeCabinOwlClip} min={0} max={2} step={1} onChange={(value) => updateCampfire("arcadeCabinOwlClip", value)} />
                   </ControlGroup>
-                  <ControlGroup title="2 · Arcade — lanterns" scope="2">
+                  <ControlGroup title="3 · Cabin — lanterns" scope="3">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       The two hanging lanterns, moved over from the desk
                       scene. Keys are still named deskLantern* - the objects
@@ -1638,7 +1904,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Hidden (1=off)" value={campfireConfig.truckTailLampHide} min={0} max={1} step={1} onChange={(value) => updateCampfire("truckTailLampHide", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="3 · Desk — campfire" scope="3">
+                  <ControlGroup title="2 · Arcade — campfire" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       The diorama&apos;s own fire (a flat orange blob on a log,
                       ringed by 15 stones) was deleted from camping.glb. This
@@ -1704,7 +1970,7 @@ export default function SceneLabClient() {
                   </ControlGroup>
 
 
-                  <ControlGroup title="3 · Desk — string-light bar" scope="3">
+                  <ControlGroup title="2 · Arcade — string-light bar" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       One rectangular area light over the run of 26 bulbs, which
                       stay emissive-only. Defaults are fitted to the bulbs
@@ -1730,7 +1996,7 @@ export default function SceneLabClient() {
                     <SliderRow label="B" value={campfireConfig.deskStringLightColorB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskStringLightColorB", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="3 · Desk — string bulbs (the bulbs themselves)" scope="3">
+                  <ControlGroup title="2 · Arcade — string bulbs (the bulbs themselves)" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       How the 26 bulbs <em>look at the source</em> — their own glow. The
                       bar group above is the light they cast onto the scene; these
@@ -1743,7 +2009,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Opacity" value={campfireConfig.deskStringBulbOpacity} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskStringBulbOpacity", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="3 · Desk — camp lamps" scope="3">
+                  <ControlGroup title="2 · Arcade — camp lamps" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       One block per fixture - five real lamps, each with its own
                       switch, brightness, reach, falloff and colour. The 26 string
@@ -1843,10 +2109,12 @@ export default function SceneLabClient() {
                     <SliderRow label="Move Z" value={campfireConfig.deskLampHoodOffZ} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskLampHoodOffZ", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="3 · Desk — lights" scope="3">
+                  <ControlGroup jumpKey="Prop lights" title="Prop lights · lanterns + computer (3 · Cabin), ambient + caravan (2 · Arcade)" scope="shared">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
-                      Light sources attached to the two lanterns and the
-                      computer on the desk scene. Each moves with its prop.
+                      Prop-mounted lights. The lanterns and the computer are
+                      in scene 3 (Cabin); the ambient fill and the caravan
+                      windows light scene 2 (Arcade). Each moves with its prop,
+                      so this group is shown under both scenes.
                     </p>
                     <div className="text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Lanterns</div>
                     <div className="mt-1 text-[0.6rem] text-white/40">Line the point-light up with the candle wick:</div>
@@ -1862,7 +2130,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Screen light Z" value={campfireConfig.deskComputerLightZ} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerLightZ", value)} />
                     <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Warm ambient fill</div>
                     <p className="mb-1 text-[0.6rem] leading-relaxed text-white/40">
-                      HemisphereLight scoped to the desk scene - sky color is
+                      HemisphereLight scoped to scene 2 (Arcade) - sky color is
                       the warm cast, kept dim so it never washes the lanterns.
                     </p>
                     <SliderRow label="Ambient intensity" value={campfireConfig.deskAmbientIntensity} min={0} max={5} step={0.01} onChange={(value) => updateCampfire("deskAmbientIntensity", value)} />
@@ -2013,7 +2281,7 @@ export default function SceneLabClient() {
                       "Shadows",
                       "Ground",
                       "Fire light",
-                      "Desk lights",
+                      "Prop lights",
                       "Campfire scene GLB",
                       "Flame overlay",
                       "Benches",
@@ -2029,8 +2297,10 @@ export default function SceneLabClient() {
                       "Sound",
                     ]}
                   />
-                  {/* Scope filter: treat each of the three sites (Campfire /
-                      Arcade / Desk) as its own "scene" in the sidebar. Shared
+                  {/* Scope filter: treat each of the three ring slots as its
+                      own "scene" in the sidebar - 1 Campfire, 2 Arcade (the
+                      camping diorama plus the CRTs, cubs and picnic set),
+                      3 Cabin (the wooden cabin plus the bear's study). Shared
                       groups (Camera, Locations, Atmosphere, Ground, Sound)
                       stay visible in every filter. */}
                   <div className="mb-2 flex flex-wrap items-center gap-1 rounded-2xl border border-white/10 bg-white/[0.035] px-2 py-1.5">
@@ -2039,7 +2309,7 @@ export default function SceneLabClient() {
                       { key: null, label: "All" },
                       { key: "1", label: "1 · Campfire" },
                       { key: "2", label: "2 · Arcade" },
-                      { key: "3", label: "3 · Desk" },
+                      { key: "3", label: "3 · Cabin" },
                     ] as { key: LocationScope | null; label: string }[]).map(({ key, label }) => (
                       <button
                         key={label}
@@ -2420,7 +2690,7 @@ export default function SceneLabClient() {
 
 
 
-                  <ControlGroup title="3 · Desk — terrain" scope="3">
+                  <ControlGroup title="2 · Arcade — terrain" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       Ceiling on the camping set&apos;s landscape. Any terrain or
                       rock vertex above this is pulled down to it, so the
@@ -2441,7 +2711,7 @@ export default function SceneLabClient() {
                   </ControlGroup>
 
 
-                  <ControlGroup title="3 · Desk — fish A · under the dock" scope="3">
+                  <ControlGroup title="2 · Arcade — fish A · under the dock" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       Mills about beneath the deck and spills out from under it. Twist and Scatter are what keep it from reading as one carousel: Twist turns each fish&apos;s own path, Scatter moves each path&apos;s centre off the group&apos;s. They swim under a surface at y 0.561, so if you
                       can&apos;t see them raise Y or drop <em>Water opacity</em> in the
@@ -2467,7 +2737,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Spin (PI = swim the other way)" value={campfireConfig.deskFishAYawOffset} min={-3.15} max={3.15} step={0.01} onChange={(value) => updateCampfire("deskFishAYawOffset", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="3 · Desk — fish B · loop past the lantern" scope="3">
+                  <ControlGroup title="2 · Arcade — fish B · loop past the lantern" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       One long lap that passes under the dock lantern and back out along the river. Rotate lays the ellipse along the shoreline (2.64 rad) — a round loop this big runs aground. Twist 0 keeps them all on the same lap. They swim under a surface at y 0.561, so if you
                       can&apos;t see them raise Y or drop <em>Water opacity</em> in the
@@ -2493,7 +2763,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Spin (PI = swim the other way)" value={campfireConfig.deskFishBYawOffset} min={-3.15} max={3.15} step={0.01} onChange={(value) => updateCampfire("deskFishBYawOffset", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="3 · Desk — fish C · spare" scope="3">
+                  <ControlGroup title="2 · Arcade — fish C · spare" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       A third shoal, off by default. Turn it on and give it a Count. They swim under a surface at y 0.561, so if you
                       can&apos;t see them raise Y or drop <em>Water opacity</em> in the
@@ -2519,7 +2789,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Spin (PI = swim the other way)" value={campfireConfig.deskFishCYawOffset} min={-3.15} max={3.15} step={0.01} onChange={(value) => updateCampfire("deskFishCYawOffset", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="3 · Desk — bug swarm" scope="3">
+                  <ControlGroup title="2 · Arcade — bug swarm" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       One swarm design, worn by whichever lamps have <em>Bug swarm</em>
                       switched on in the group above. They orbit the emitter, so they
@@ -2543,12 +2813,24 @@ export default function SceneLabClient() {
                     <SliderRow label="Lunge at the bulb" value={campfireConfig.deskBugDive} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugDive", value)} />
                     <SliderRow label="Size (world)" value={campfireConfig.deskBugSize} min={0.001} max={0.05} step={0.0005} onChange={(value) => updateCampfire("deskBugSize", value)} />
                     <SliderRow label="Opacity" value={campfireConfig.deskBugOpacity} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugOpacity", value)} />
+                    <SliderRow label="Seed (reshuffles the swarm)" value={campfireConfig.deskBugSeed} min={0} max={99999} step={1} onChange={(value) => updateCampfire("deskBugSeed", value)} />
+                    <SliderRow label="Speed variation" value={campfireConfig.deskBugSpeedVary} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("deskBugSpeedVary", value)} />
+                    <SliderRow label="Fraction going the other way" value={campfireConfig.deskBugTwoWay} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugTwoWay", value)} />
+                    <SliderRow label="Orbit tilt" value={campfireConfig.deskBugTilt} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("deskBugTilt", value)} />
+                    <SliderRow label="Lunge frequency" value={campfireConfig.deskBugLungeRate} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("deskBugLungeRate", value)} />
+                    <SliderRow label="Lunge sharpness" value={campfireConfig.deskBugLungeSharp} min={1} max={24} step={0.5} onChange={(value) => updateCampfire("deskBugLungeSharp", value)} />
+                    <SliderRow label="Lunge depth" value={campfireConfig.deskBugLungeDepth} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugLungeDepth", value)} />
+                    <SliderRow label="Wobble speed" value={campfireConfig.deskBugJitterSpeed} min={0} max={5} step={0.01} onChange={(value) => updateCampfire("deskBugJitterSpeed", value)} />
+                    <SliderRow label="Flicker rate" value={campfireConfig.deskBugFlickerRate} min={0} max={60} step={0.5} onChange={(value) => updateCampfire("deskBugFlickerRate", value)} />
+                    <SliderRow label="Flicker depth" value={campfireConfig.deskBugFlickerDepth} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugFlickerDepth", value)} />
+                    <SliderRow label="Vertical drift" value={campfireConfig.deskBugDrift} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("deskBugDrift", value)} />
+                    <SliderRow label="Additive glow (0/1)" value={campfireConfig.deskBugAdditive} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskBugAdditive", value)} />
                     <SliderRow label="R" value={campfireConfig.deskBugR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugR", value)} />
                     <SliderRow label="G" value={campfireConfig.deskBugG} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugG", value)} />
                     <SliderRow label="B" value={campfireConfig.deskBugB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugB", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="3 · Desk — fish swim motion (all shoals)" scope="3">
+                  <ControlGroup title="2 · Arcade — fish swim motion (all shoals)" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       How the fish move, as opposed to where they go. fish.glb&apos;s swim
                       clip only animates Spine3, the tail and the two fins — and it moves
@@ -2560,11 +2842,13 @@ export default function SceneLabClient() {
                       to tail. 1 is the clip exactly as authored; 0 holds them straight.
                     </p>
                     <SliderRow label="Wiggle (1 = clip as authored)" value={campfireConfig.deskFishWiggle} min={0} max={4} step={0.01} onChange={(value) => updateCampfire("deskFishWiggle", value)} />
+                    <SliderRow label="Waves along the body" value={campfireConfig.deskFishWaves} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("deskFishWaves", value)} />
+                    <SliderRow label="Lean into turns" value={campfireConfig.deskFishTurnBend} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("deskFishTurnBend", value)} />
                     <SliderRow label="Tail-beat rate" value={campfireConfig.deskFishBeat} min={0} max={4} step={0.01} onChange={(value) => updateCampfire("deskFishBeat", value)} />
                     <SliderRow label="Whole-body sway" value={campfireConfig.deskFishSway} min={0} max={0.5} step={0.005} onChange={(value) => updateCampfire("deskFishSway", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="3 · Desk — fish in the dock's shadow" scope="3">
+                  <ControlGroup title="2 · Arcade — fish in the dock's shadow" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       Applies to all three shoals. The dock lantern already casts a real
                       shadow on the water, but a shadow map darkens pixels — it can&apos;t
@@ -2575,6 +2859,7 @@ export default function SceneLabClient() {
                       Nothing happens while the dock lantern is off — no light, no shadow
                       to be in.
                     </p>
+                    <SliderRow label="Dim with distance from the lantern" value={campfireConfig.deskFishDark} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskFishDark", value)} />
                     <SliderRow label="Darken (1 = black)" value={campfireConfig.deskFishShade} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskFishShade", value)} />
                     <SliderRow label="Fade out too (1 = invisible)" value={campfireConfig.deskFishShadeFade} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskFishShadeFade", value)} />
                     <SliderRow label="Edge softness" value={campfireConfig.deskFishShadeSoft} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("deskFishShadeSoft", value)} />
