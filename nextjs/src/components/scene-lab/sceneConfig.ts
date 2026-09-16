@@ -416,6 +416,20 @@ export interface CampfireSceneConfig {
   deskBugDrift: number;
   /** 1 = additive blending, so they glow against the dark. 0 = normal, for bugs seen in daylight. */
   deskBugAdditive: number;
+  /** Per-bug size spread, 0..1. 0 = all motes identical. */
+  deskBugSizeVary: number;
+  /** Exponent on the height / radius scatter. 1 = even (the original). */
+  deskBugHeightBias: number;
+  deskBugRadiusBias: number;
+  /** Orbit Z radius as a fraction of X (1 = circle), and its spin about Y. */
+  deskBugOval: number;
+  deskBugRotY: number;
+  /** Vertical bob, in column heights, faster than deskBugDrift. */
+  deskBugWobbleY: number;
+  /** Nudge the swarm off the lamp it is anchored to, in world units. */
+  deskBugOffsetX: number;
+  deskBugOffsetY: number;
+  deskBugOffsetZ: number;
   deskBugCount: number;
   deskBugRadius: number;
   deskBugSpread: number;
@@ -766,21 +780,6 @@ export interface CampfireSceneConfig {
   /** Bug swarm around the cabin's lantern. Shape comes from the shared
    *  deskBug* knobs. */
   arcadeCabinLampBugs: number;
-  /** An owl on the cabin's lantern beam. X/Y/Z are in the same cabin-local
-   *  units as arcadeCabinLamp*, so they read directly against the lamp; the
-   *  defaults stand it on the beam's top face (y 38.8, centre line x 15.9)
-   *  just clear of the lantern, which occupies z 45.2 to 50.0. Y is where its
-   *  FEET go, not the model origin. Scale is its height in those units - 32.6
-   *  of them to a world unit at the cabin's current scale, so 9.8 is a 30 cm
-   *  owl, the same size as the two already on the front log.
-   *  Clip: 0 idle, 1 sleep, 2 headtwist. */
-  arcadeCabinOwlOn: number;
-  arcadeCabinOwlX: number;
-  arcadeCabinOwlY: number;
-  arcadeCabinOwlZ: number;
-  arcadeCabinOwlScale: number;
-  arcadeCabinOwlRotY: number;
-  arcadeCabinOwlClip: number;
   /** The close-up framing when crt_0 is clicked, both measured in SCREEN
    *  HEIGHTS so they hold whatever scale the tube is set to: how far out in
    *  front of the glass the camera stands, and how far above its centre.
@@ -790,6 +789,12 @@ export interface CampfireSceneConfig {
   /** Rigid offset applied to the whole arcade set inside scene 2 - CRTs,
    *  cubs, consoles, picnic table, snacks and the arcade fire. Moves them as
    *  one unit without disturbing their relative layout. */
+  /** Master fade for the arcade fire, 0..1 - scales the point lights AND the
+   *  flame, ground glow and sparks together. Those three are unlit additive
+   *  material, so before this existed the fire's "intensity" slider could
+   *  only turn off the light it cast and the fire itself stayed fully bright
+   *  at 0. */
+  arcadeFireDim: number;
   arcadeSetX: number;
   arcadeSetY: number;
   arcadeSetZ: number;
@@ -1551,6 +1556,15 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskBugFlickerDepth: 0.75,
   deskBugDrift: 0,
   deskBugAdditive: 1,
+  deskBugSizeVary: 0,
+  deskBugHeightBias: 1,
+  deskBugRadiusBias: 1,
+  deskBugOval: 1,
+  deskBugRotY: 0,
+  deskBugWobbleY: 0,
+  deskBugOffsetX: 0,
+  deskBugOffsetY: 0,
+  deskBugOffsetZ: 0,
   deskBugCount: 26,
   deskBugRadius: 0.073,
   deskBugSpread: 0.65,
@@ -1812,16 +1826,10 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   arcadeCabinLampColorB: 0.55,
   arcadeCabinLampEmissive: 3.5,
   arcadeCabinLampBugs: 1,
-  arcadeCabinOwlOn: 1,
-  arcadeCabinOwlX: 15.9,
-  arcadeCabinOwlY: 38.8,
-  arcadeCabinOwlZ: 41.5,
-  arcadeCabinOwlScale: 9.8,
-  arcadeCabinOwlRotY: 1.5708,
-  arcadeCabinOwlClip: 0,
   cabinSetX: -7.21,
   cabinSetY: 0,
   cabinSetZ: -10.15,
+  arcadeFireDim: 1,
   arcadeSetX: 0.55,
   arcadeSetY: 0.37,
   arcadeSetZ: 2.6,

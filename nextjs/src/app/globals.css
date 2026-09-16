@@ -68,10 +68,32 @@
 /*─────────────────────────────────────────────────────────────*/
 /* 4) Base-layer styling                                       */
 /*─────────────────────────────────────────────────────────────*/
-body {
+/* iOS edge cases, all of which show up as coloured bars at the edges of the
+   screen and none of which the <main> background reaches:
+
+   - `html` is what Safari paints in the rubber-band area and in anything the
+     body does not cover. Unset, it defaults to WHITE, so it has to be black
+     explicitly - `body` alone is not enough.
+   - `color-scheme: dark` stops iOS rendering its own surfaces (form controls,
+     scrollbars, the overscroll gutter) in their light-mode colours.
+   - `overscroll-behavior: none` stops the bounce that reveals that gutter in
+     the first place.
+   - The viewport is already `viewport-fit=cover` (see layout.tsx), so the page
+     runs under the notch and home indicator; `width: 100%` + `overflow-x:
+     hidden` keeps anything slightly too wide from opening a sideways scroll,
+     which is the other way a strip of page background becomes visible. */
+html {
   background-color: #000000;
+  color-scheme: dark;
+  scroll-behavior: smooth;
+  width: 100%;
+  overflow-x: hidden;
 }
 
-html {
-  scroll-behavior: smooth;
+body {
+  background-color: #000000;
+  width: 100%;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overscroll-behavior: none;
 }

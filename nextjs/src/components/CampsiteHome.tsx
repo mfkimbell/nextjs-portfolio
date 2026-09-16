@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import CampfireScene from "@/components/scene-lab/CampfireScene";
 import CampsiteTitleIntro from "@/components/scene-lab/CampsiteTitleIntro";
+import ForceLandscape from "@/components/ForceLandscape";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
 import { DEFAULT_CAMPFIRE_CONFIG, type CampfireSceneConfig } from "@/components/scene-lab/sceneConfig";
 import { useCampsiteOneShot } from "@/lib/campsiteSounds";
@@ -163,8 +164,10 @@ export default function CampsiteHome() {
   const current = PANELS[panel];
 
   return (
-    <main className="relative h-dvh w-full overflow-hidden bg-[#03040a]">
+    <ForceLandscape>
+    <main className="relative h-full w-full overflow-hidden bg-[#03040a]">
       <CampfireScene config={effectiveConfig} panel={panel} intro titleHeld={titleHeld} />
+
 
       {showTitle ? (
         <CampsiteTitleIntro
@@ -220,5 +223,6 @@ export default function CampsiteHome() {
       {ModeToggle}
       {MuteToggle}
     </main>
+    </ForceLandscape>
   );
 }

@@ -18,6 +18,44 @@ const LETTER_WIDTHS: Record<string, number> = {
   Y: 0.7535, Z: 0.7854,
 };
 
+/**
+ * Ask for the microphone, at most one prompt, as early as the browser allows.
+ *
+ * Module scope rather than component state because both callers below want the
+ * same single prompt: the mount effect fires it on load, and the click handler
+ * fires it again as a fallback.
+ *
+ * That fallback is not belt-and-braces - it is the whole story on iOS. Safari
+ * refuses getUserMedia outside a user gesture, so the load-time attempt there
+ * rejects immediately without ever showing a prompt, and the click is the only
+ * thing that can raise one. Hence `micInFlight` is cleared on failure while
+ * `micGranted` latches on success: a rejected attempt must be retryable by a
+ * later gesture, a successful one must never re-open the mic.
+ */
+let micInFlight: Promise<boolean> | null = null;
+let micGranted = false;
+
+function requestMic(): Promise<boolean> {
+  if (micGranted) return Promise.resolve(true);
+  if (micInFlight) return micInFlight;
+  micInFlight = (async () => {
+    try {
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return false;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // We only wanted the permission - drop the mic straight away so no
+      // recording indicator sits lit in the tab.
+      stream.getTracks().forEach((track) => track.stop());
+      micGranted = true;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      micInFlight = null;
+    }
+  })();
+  return micInFlight;
+}
+
 const LETTERS = Object.keys(LETTER_WIDTHS);
 const LETTER_URL = (c: string) => `/letters/${c}.glb`;
 
@@ -231,6 +269,34 @@ interface LineSpec {
  * on top of that opacity during the waiting phase for hint lines, so the
  * "(SOUND ON)" prompt breathes.
  */
+/** The placement -> mesh switch, factored out of TitleLine. */
+function renderGlyphs(
+  placements: Placement[],
+  material: THREE.Material,
+  idleAmountRef: React.MutableRefObject<number>,
+  wavinessRef: React.MutableRefObject<number>
+) {
+  return placements.map((p) => {
+    if (p.kind === "hyphen") {
+      return (
+        <HyphenBar key={p.key} x={p.x} width={p.width} material={material}
+          glyphIndex={p.glyphIndex} idleAmountRef={idleAmountRef} wavinessRef={wavinessRef} />
+      );
+    }
+    if (p.kind === "paren-left" || p.kind === "paren-right") {
+      return (
+        <ParenArc key={p.key} x={p.x} dir={p.kind === "paren-left" ? "left" : "right"}
+          material={material} glyphIndex={p.glyphIndex}
+          idleAmountRef={idleAmountRef} wavinessRef={wavinessRef} />
+      );
+    }
+    return (
+      <LetterGlyph key={p.key} char={p.char!} x={p.x} material={material}
+        glyphIndex={p.glyphIndex} idleAmountRef={idleAmountRef} wavinessRef={wavinessRef} />
+    );
+  });
+}
+
 function TitleLine({
   text,
   size,
@@ -274,45 +340,7 @@ function TitleLine({
   return (
     <group position={[0, y, 0]} scale={size}>
       <group position={[-totalWidth / 2, -0.5, 0]}>
-        {placements.map((p) => {
-          if (p.kind === "hyphen") {
-            return (
-              <HyphenBar
-                key={p.key}
-                x={p.x}
-                width={p.width}
-                material={material}
-                glyphIndex={p.glyphIndex}
-                idleAmountRef={idleAmountRef}
-                wavinessRef={wavinessRef}
-              />
-            );
-          }
-          if (p.kind === "paren-left" || p.kind === "paren-right") {
-            return (
-              <ParenArc
-                key={p.key}
-                x={p.x}
-                dir={p.kind === "paren-left" ? "left" : "right"}
-                material={material}
-                glyphIndex={p.glyphIndex}
-                idleAmountRef={idleAmountRef}
-                wavinessRef={wavinessRef}
-              />
-            );
-          }
-          return (
-            <LetterGlyph
-              key={p.key}
-              char={p.char!}
-              x={p.x}
-              material={material}
-              glyphIndex={p.glyphIndex}
-              idleAmountRef={idleAmountRef}
-              wavinessRef={wavinessRef}
-            />
-          );
-        })}
+        {renderGlyphs(placements, material, idleAmountRef, wavinessRef)}
       </group>
     </group>
   );
@@ -537,6 +565,12 @@ export default function CampsiteTitleIntro({
       if (running) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
+
+    // Ask for the mic as the page comes up rather than waiting for the click.
+    // Not in the lab's preview, which would otherwise prompt every time the
+    // intro panel re-mounts while you are tuning it.
+    if (!previewModeRef.current) void requestMic();
+
     return () => {
       running = false;
       cancelAnimationFrame(raf);
@@ -550,16 +584,12 @@ export default function CampsiteTitleIntro({
     clickedAtRef.current = performance.now() / 1000;
     setHintClickable(false);
 
-    // Request mic permission (best effort — we mainly need the user gesture
-    // for browser autoplay). Fire-and-forget so the fade-out isn't blocked.
-    (async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((track) => track.stop());
-      } catch {
-        // denied or unsupported — the gesture still counts
-      }
-    })();
+    // Second attempt at the mic. The mount effect already tried on load; this
+    // is what actually raises the prompt on iOS, where the load-time call was
+    // refused for having no user gesture behind it. requestMic() is a no-op if
+    // permission was already granted. Fire-and-forget so the fade-out is not
+    // blocked on the answer.
+    void requestMic();
 
     // Prime any ambient audio.
     try {

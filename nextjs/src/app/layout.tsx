@@ -45,9 +45,6 @@ export const metadata: Metadata = {
     description: "Software Engineer Portfolio",
     images: ["https://mitchellkimbell.com/backdrop.png"],
   },
-  other: {
-    "theme-color": "#000000",
-  },
 };
 
 export const viewport: Viewport = {

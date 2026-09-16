@@ -13,7 +13,7 @@ import * as THREE from "three";
 import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { CampfireSceneConfig, LocationView, ObjectOverride } from "@/components/scene-lab/sceneConfig";
-import { defaultLocationView, DUPLICATE_PREFIX, EMPTY_OVERRIDE } from "@/components/scene-lab/sceneConfig";
+import { defaultLocationView, DEFAULT_CAMPFIRE_CONFIG, DUPLICATE_PREFIX, EMPTY_OVERRIDE } from "@/components/scene-lab/sceneConfig";
 import banjoBearPoseRaw from "@/config/banjoBearPose.json";
 import bearPosesRaw from "@/config/bearPoses.json";
 import { useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
@@ -1082,17 +1082,17 @@ function LocationCamera({
   config,
   panel,
   active,
-  focus = null,
+  suspended = false,
   editing = false,
 }: {
   config: CampfireSceneConfig;
   panel: number;
   active: boolean;
-  /** When set, the camera flies to this shot instead of the location's own.
-   *  It is a LocationView in the SAME location-local frame, so the ring angle
-   *  is untouched and the existing turn easing carries the move both ways -
-   *  no second camera mode, just something else to aim at. */
-  focus?: LocationView | null;
+  /** While true this hands the camera to someone else (the CRT close-up) and
+   *  stops writing to it. On resume it re-seeds its interpolation state from
+   *  wherever the camera actually ended up, so control comes back as a glide
+   *  to this location's shot rather than a cut. */
+  suspended?: boolean;
   /**
    * In the lab we want to orbit a location to frame it, so this rig has to let go.
    * It keeps the camera only while moving to a new shot - after a location change or
@@ -1122,10 +1122,33 @@ function LocationCamera({
   const lastView = useRef<LocationView | null>(null);
   const holding = useRef(true);
 
+  const wasSuspended = useRef(false);
+
   useFrame((_, delta) => {
     if (!active) return;
+    if (suspended) { wasSuspended.current = true; return; }
+    if (wasSuspended.current) {
+      wasSuspended.current = false;
+      // Someone else moved the camera while we were out. Fold the pose they
+      // left it in back into this location's frame and carry on from there -
+      // otherwise the first frame after resuming snaps to the shot we were
+      // still holding from before.
+      if (view.current) {
+        const fwd = new THREE.Vector3();
+        camera.getWorldDirection(fwd);
+        const look = camera.position.clone().addScaledVector(fwd, 3);
+        Object.assign(view.current, worldToLocationView(
+          panel, config,
+          [camera.position.x, camera.position.y, camera.position.z],
+          [look.x, look.y, look.z],
+        ));
+        angle.current = LOCATION_AZIMUTH(panel, config);
+      }
+      holding.current = true;
+      lastView.current = null;
+    }
     const wantAngle = LOCATION_AZIMUTH(panel, config);
-    const wantView = focus ?? locationView(panel, config);
+    const wantView = locationView(panel, config);
 
     if (angle.current === null || !view.current) {
       angle.current = wantAngle;
@@ -1175,6 +1198,87 @@ function LocationCamera({
     camera.position.set(cur.cx, cur.cy, cur.cz).applyMatrix4(scratch);
     aim.set(cur.tx, cur.ty, cur.tz).applyMatrix4(scratch);
     camera.lookAt(aim);
+  });
+
+  return null;
+}
+
+/**
+ * Flies the camera onto crt_0's glass, and off it again.
+ *
+ * This owns the camera itself rather than going through LocationCamera, and
+ * that is the whole point: LocationCamera is mounted only when a location is
+ * selected (`panelled`), so a close-up routed through it silently did nothing
+ * in free-look - which is where the tube was actually being clicked. This
+ * mounts unconditionally.
+ *
+ * `view` arrives in LOCATION_ARCADE's local frame (that is where crt_0 lives),
+ * so it gets carried to world space through the same ring matrix the sector
+ * itself uses.
+ *
+ * Handing back:
+ *   - `handoff` true  (a location owns the camera): release the moment the
+ *     focus ends. LocationCamera re-seeds from the pose we leave behind and
+ *     glides to its own shot, so the return costs nothing here.
+ *   - `handoff` false (free-look): nobody else is driving, so ease back to the
+ *     pose we grabbed the camera at, then let go.
+ */
+function CrtFocusCamera({
+  active,
+  view,
+  config,
+  handoff,
+}: {
+  active: boolean;
+  view: LocationView | null;
+  config: CampfireSceneConfig;
+  handoff: boolean;
+}) {
+  const { camera } = useThree();
+  type Pose = { px: number; py: number; pz: number; tx: number; ty: number; tz: number };
+  const pose = useRef<Pose | null>(null);
+  const seed = useRef<Pose | null>(null);
+  const scratch = useMemo(() => new THREE.Matrix4(), []);
+  const goal = useMemo(() => new THREE.Vector3(), []);
+  const aim = useMemo(() => new THREE.Vector3(), []);
+  const fwd = useMemo(() => new THREE.Vector3(), []);
+
+  useFrame((_, delta) => {
+    const settle = Math.max(0.05, config.locationTurnSpeed);
+    const k = 1 - Math.pow(0.01, Math.min(delta, 1 / 20) / settle);
+
+    if (active && view) {
+      if (!pose.current) {
+        // Grab the camera where it stands, and remember it for the way back.
+        camera.getWorldDirection(fwd);
+        const look = camera.position.clone().addScaledVector(fwd, 3);
+        pose.current = {
+          px: camera.position.x, py: camera.position.y, pz: camera.position.z,
+          tx: look.x, ty: look.y, tz: look.z,
+        };
+        seed.current = { ...pose.current };
+      }
+      locationMatrix(LOCATION_ARCADE, config, scratch);
+      goal.set(view.cx, view.cy, view.cz).applyMatrix4(scratch);
+      aim.set(view.tx, view.ty, view.tz).applyMatrix4(scratch);
+      const p = pose.current;
+      p.px += (goal.x - p.px) * k; p.py += (goal.y - p.py) * k; p.pz += (goal.z - p.pz) * k;
+      p.tx += (aim.x - p.tx) * k;  p.ty += (aim.y - p.ty) * k;  p.tz += (aim.z - p.tz) * k;
+      camera.position.set(p.px, p.py, p.pz);
+      camera.lookAt(p.tx, p.ty, p.tz);
+      return;
+    }
+
+    if (!pose.current || !seed.current) return;
+    if (handoff) { pose.current = null; seed.current = null; return; }
+    const p = pose.current, s = seed.current;
+    p.px += (s.px - p.px) * k; p.py += (s.py - p.py) * k; p.pz += (s.pz - p.pz) * k;
+    p.tx += (s.tx - p.tx) * k;  p.ty += (s.ty - p.ty) * k;  p.tz += (s.tz - p.tz) * k;
+    camera.position.set(p.px, p.py, p.pz);
+    camera.lookAt(p.tx, p.ty, p.tz);
+    if (Math.abs(p.px - s.px) + Math.abs(p.py - s.py) + Math.abs(p.pz - s.pz) < 1e-3) {
+      pose.current = null; seed.current = null;
+    }
   });
 
   return null;
@@ -2119,11 +2223,40 @@ function CandleFlame({
   );
 }
 
+/**
+ * Makes everything inside it unclickable, without changing how it renders.
+ *
+ * A fire is one small log pile wrapped in several very large decorative
+ * layers: the ground glow is a plane up to 30 units across, the spark cloud's
+ * bounding box matches its spread and height, and the flame halo is a sphere
+ * scaled well past the logs. Raycasting hits all of them, so clicking
+ * anywhere in that footprint selected the campfire - which is the "hitbox is
+ * way too big" problem. Only the logs should be pickable.
+ *
+ * The traverse deliberately re-runs on EVERY render rather than once on
+ * mount: Sparks remounts whenever its count changes (it is keyed on it), and
+ * a freshly built Points object would come back with the default raycast.
+ */
+function NoPick({ children }: { children: ReactNode }) {
+  const ref = useRef<THREE.Group>(null);
+  useEffect(() => {
+    ref.current?.traverse((o) => {
+      o.raycast = () => {};
+    });
+  });
+  return <group ref={ref}>{children}</group>;
+}
+
 function CampfireFlame({
-  x, y, z, scale, outerScale, innerScale, haloScale,
+  x, y, z, scale, outerScale, innerScale, haloScale, dim = 1,
 }: {
   x: number; y: number; z: number; scale: number;
   outerScale: number; innerScale: number; haloScale: number;
+  /** Master fade on the flame's own emission, 0..1. The cones and halo are
+   *  unlit additive material, so scene lighting cannot touch them - without
+   *  this, turning the fire's point light to 0 left the flame just as bright
+   *  and the fire still read as fully lit. */
+  dim?: number;
 }) {
   // Individual size multipliers on top of the whole-group scale, so the
   // orange outer sheath, yellow-orange mid tongue, pale-yellow inner tip, and
@@ -2133,12 +2266,12 @@ function CampfireFlame({
   const mid = (outerScale + innerScale) * 0.5;
   return (
     <group position={[x, y, z]} scale={scale}>
-      <FlameCone color="#ff6b1a" opacity={0.82} radius={0.42 * outerScale} height={1.35 * outerScale} phase={0.3} y={0.62 * outerScale} />
-      <FlameCone color="#ffb431" opacity={0.9}  radius={0.28 * mid}         height={1.05 * mid}         phase={2.2} y={0.58 * mid} />
-      <FlameCone color="#fff06a" opacity={0.95} radius={0.17 * innerScale} height={0.78 * innerScale} phase={4.3} y={0.52 * innerScale} />
-      <mesh position={[0, 0.16 * haloScale, 0]} scale={haloScale}>
+      <FlameCone color="#ff6b1a" opacity={0.82 * dim} radius={0.42 * outerScale} height={1.35 * outerScale} phase={0.3} y={0.62 * outerScale} />
+      <FlameCone color="#ffb431" opacity={0.9 * dim}  radius={0.28 * mid}         height={1.05 * mid}         phase={2.2} y={0.58 * mid} />
+      <FlameCone color="#fff06a" opacity={0.95 * dim} radius={0.17 * innerScale} height={0.78 * innerScale} phase={4.3} y={0.52 * innerScale} />
+      <mesh position={[0, 0.16 * haloScale, 0]} scale={haloScale} visible={dim > 0.001}>
         <sphereGeometry args={[0.32, 16, 10]} />
-        <meshBasicMaterial color="#ff7a1f" transparent opacity={0.45} depthWrite={false} />
+        <meshBasicMaterial color="#ff7a1f" transparent opacity={0.45 * dim} depthWrite={false} />
       </mesh>
     </group>
   );
@@ -2757,116 +2890,6 @@ function GLBModel({ url }: { url: string }) {
  * expects, and pointer events go through the model instead of selecting it.
  */
 
-/**
- * An owl perched on the cabin's lantern beam.
- *
- * WHERE it sits comes out of the cabin, not out of guesswork. The lantern
- * hangs off a wooden bracket - Cube.004_wood_0 - which measures x[15.1, 16.7]
- * y[37.1, 38.8] z[36.6, 48.6] in the cabin's own space, and the lantern body
- * occupies z[45.2, 50.0] of it. So the beam's top face is y 38.8, its centre
- * line x 15.9, and the free run of beam beside the lantern is z 36.6 to 45.2.
- * The defaults put the owl at (15.9, 38.8, 43) - stood on the beam, just clear
- * of the lantern, right in its pool of light.
- *
- * Coordinates are in the SAME cabin-local units as arcadeCabinLampX/Y/Z, so
- * the owl's 15.9 / 38.8 / 41.5 reads directly against the lamp's 16.05 /
- * 33.04 / 47.62 - and the lamp's config lands dead on the lantern mesh's own
- * centre (16.05, 33.05, 47.65), which is how the frame was confirmed.
- *
- * One world unit is 32.6 cabin units at the cabin's current scale (0.1
- * baseScale x 0.307 override), so the default 9.8-unit owl is 30 cm tall -
- * deliberately the same size as the two owls already on the front log, which
- * sit at ANIMALS scale 0.5 against a 0.5986 bind height.
- *
- * Perched and idling it occupies 6.6 x 9.8 x 9.1 cabin units, which is why Z
- * is 41.5 rather than 43: half its depth is 4.5, so it reaches z 46 at 43 and
- * clips into the lantern. At 41.5 it spans 37.0 to 46.0... turned across the
- * beam by the default pi/2 spin it spans z 38.2 to 44.8, clear of the
- * lantern's 45.2 with room to spare, and inside the beam's 36.6 to 48.6.
- *
- * Two things this rides for free by living inside the cabin's model frame:
- * it tracks the cabin through the mirror group and every scale above it, and
- * three flips the winding for the mirror's negative determinant on its own
- * (WebGLRenderer.js:1100), so no DoubleSide fixup is needed - unlike
- * MirroredGLBModel, which forces it for RAYCASTING, which Mesh.raycast does
- * not compensate for.
- */
-const CABIN_OWL_CLIPS = ["idle", "sleep", "headtwist"] as const;
-/*
- * Sizing a SKINNED mesh: do NOT measure the POSITION attribute.
- *
- * white_owl.glb's raw POSITION data, with every node transform applied, boxes
- * up at 0.015006 x 0.006080 x 0.006450. That number is meaningless. The mesh
- * is skinned, so what actually reaches the screen is each vertex pushed
- * through sum(w_j * boneWorld_j * inverseBind_j) - and for this file the bind
- * matrices carry a ~98x scale. Skinning the vertices properly gives a bind
- * pose of 1.32912 x 0.59861 x 0.76330. Normalising against the raw box made
- * the owl ninety-eight times too big.
- *
- * And the bind pose is wings-OUT, which is not how it will ever be seen. The
- * numbers below come from evaluating the idle clip itself across its 9.13s
- * cycle, which folds the wings:
- *
- *            width    height   depth    feet y
- *   bind     1.3291   0.5986   0.7633   -0.0633
- *   idle     0.4459   0.6579   0.6079   -0.0219 .. -0.0086
- *
- * So: normalise to one unit tall on the IDLE height, and lift by the lowest
- * the feet get in the cycle, so they never sink into the beam. The Y knob then
- * means "the surface it stands on" and Scale means "how tall it is", both in
- * cabin units.
- */
-const CABIN_OWL_NORMALIZE = 1 / 0.6579;
-const CABIN_OWL_FEET_LIFT = 0.0219 / 0.6579;
-
-function CabinOwl({ config }: { config: CampfireSceneConfig }) {
-  const gltf = useGLTF(WHITE_OWL_URL) as unknown as {
-    scene: THREE.Group; animations: THREE.AnimationClip[];
-  };
-  // skeletonClone, not the cached scene: this same white owl is already
-  // perched on the front log by CampfireAnimals, and a plain reference would
-  // leave both birds sharing one skeleton - whichever mixer ran last would
-  // pose them together. No new download either, the file is already preloaded.
-  const owl = useMemo(() => skeletonClone(gltf.scene), [gltf.scene]);
-  const { actions } = useAnimations(gltf.animations, owl);
-
-  useEffect(() => {
-    owl.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (mesh.isMesh) { mesh.castShadow = true; mesh.receiveShadow = true; }
-    });
-  }, [owl]);
-
-  const clip = CABIN_OWL_CLIPS[
-    Math.max(0, Math.min(CABIN_OWL_CLIPS.length - 1, Math.round(config.arcadeCabinOwlClip)))
-  ];
-  useEffect(() => {
-    // The two owl files prefix their clips with different rig names -
-    // "EagleOwl_Rig|EagleOwl_Rig|idle" here, "Bird1009_Rig|..." in the red one
-    // - so match the verb at the end rather than the whole key.
-    const key = Object.keys(actions).find((k) => k.toLowerCase().endsWith(clip));
-    const action = key ? actions[key] : undefined;
-    if (!action) return;
-    action.reset().setLoop(THREE.LoopRepeat, Infinity).play();
-    return () => { action.stop(); };
-  }, [actions, clip]);
-
-  return (
-    <group
-      position={[config.arcadeCabinOwlX, config.arcadeCabinOwlY, config.arcadeCabinOwlZ]}
-      rotation={[0, config.arcadeCabinOwlRotY, 0]}
-      scale={config.arcadeCabinOwlScale}
-    >
-      {/* Feet on the beam. The lift is in owl-heights, so the outer scale
-          carries it into cabin units along with everything else. */}
-      <group position={[0, CABIN_OWL_FEET_LIFT, 0]}>
-        <group scale={CABIN_OWL_NORMALIZE}>
-          <primitive object={owl} />
-        </group>
-      </group>
-    </group>
-  );
-}
 
 /**
  * The arcade's wooden cabin, with its lantern actually lit.
@@ -2986,7 +3009,6 @@ function LitWoodenCabin({ config }: { config: CampfireSceneConfig }) {
   return (
     <>
       <primitive object={model} />
-      {config.arcadeCabinOwlOn >= 0.5 && <CabinOwl config={config} />}
       {/* Moths at the porch light. Same swarm as the camp lamps, in the
           cabin's frame: baseScale 0.1 on the Selectable times its override, so
           the world-unit knobs come out the same size here as they do out at
@@ -4243,9 +4265,25 @@ type BugSwarmProps = {
   // --- shape: these regenerate the per-bug constants when they change -------
   seed: number; speedVary: number; twoWay: number; tilt: number;
   lungeRate: number; flickerRate: number;
+  /** Per-bug size spread. 0 = every mote identical (what PointsMaterial gives
+   *  you on its own); 1 = sizes range from half to one-and-a-half. Needs the
+   *  shader tweak below, because pointsMaterial.size is a single global. */
+  sizeVary: number;
   // --- motion: read live every frame ---------------------------------------
   lungeSharp: number; lungeDepth: number; jitterSpeed: number;
   flickerDepth: number; drift: number; additive: number;
+  /** Exponent on where bugs sit in the column / the radius band. 1 is the
+   *  even scatter this always had; >1 crowds them low / inward, <1 high /
+   *  outward. Applied per frame off the raw random, so dragging re-shapes the
+   *  swarm instead of reshuffling which bug is which. */
+  heightBias: number; radiusBias: number;
+  /** Orbit shape: Z radius as a fraction of X, so 1 is the circle it was and
+   *  0.3 is a flattened ellipse. `swarmRotY` spins that ellipse. */
+  oval: number; swarmRotY: number;
+  /** A faster vertical bob than `drift`, in column heights. */
+  wobbleY: number;
+  /** Nudge the whole swarm off its anchor, in the frame's own units. */
+  offsetX: number; offsetY: number; offsetZ: number;
 };
 
 /** Everything the two mounting points hand a swarm, built once from config. */
@@ -4262,6 +4300,12 @@ function bugSwarmProps(config: CampfireSceneConfig, color: THREE.Color) {
     lungeSharp: config.deskBugLungeSharp, lungeDepth: config.deskBugLungeDepth,
     jitterSpeed: config.deskBugJitterSpeed, flickerDepth: config.deskBugFlickerDepth,
     drift: config.deskBugDrift, additive: config.deskBugAdditive,
+    sizeVary: config.deskBugSizeVary,
+    heightBias: config.deskBugHeightBias, radiusBias: config.deskBugRadiusBias,
+    oval: config.deskBugOval, swarmRotY: config.deskBugRotY,
+    wobbleY: config.deskBugWobbleY,
+    offsetX: config.deskBugOffsetX, offsetY: config.deskBugOffsetY,
+    offsetZ: config.deskBugOffsetZ,
   };
 }
 
@@ -4269,6 +4313,8 @@ function BugSwarm({
   origin, frameScale, count, radius, spread, height, speed, jitter, dive,
   size, opacity, color, seed, speedVary, twoWay, tilt, lungeRate, flickerRate,
   lungeSharp, lungeDepth, jitterSpeed, flickerDepth, drift, additive,
+  sizeVary, heightBias, radiusBias, oval, swarmRotY, wobbleY,
+  offsetX, offsetY, offsetZ,
 }: BugSwarmProps) {
   // Radius and Height are authored in world units; the orbit is built in the
   // parent's units, so divide the frame's scale back out.
@@ -4282,16 +4328,16 @@ function BugSwarm({
   // One fixed set of per-bug constants, from a seeded generator: a reload
   // gives back the same swarm, and dragging a slider re-shapes it rather than
   // reshuffling which bug is which.
-  const { positions, alphas, bugs } = useMemo(() => {
+  const { positions, alphas, sizes, bugs } = useMemo(() => {
     const rand = seededRandom(Math.round(seed));
     const made = Array.from({ length: N }, () => ({
-      rf: 0.35 + rand(),                                    // where it sits in the radius band
+      ru: rand(),                                           // raw draw; radiusBias shapes it per frame
       phase: rand() * Math.PI * 2,
       // Orbit speed, and which way round. TwoWay is the probability of going
       // the other way, so 0 is a carousel, 0.5 a cloud, 1 a carousel again in
       // reverse - the interesting values are in the middle.
       w: (1 - speedVary * 0.5 + rand() * speedVary) * (rand() < twoWay ? -1 : 1),
-      yf: rand() - 0.5,                                     // height within the column
+      yu: rand(),                                           // raw draw; heightBias shapes it per frame
       tilt: (rand() - 0.5) * 2 * tilt,                      // how tipped its orbit plane is
       tiltPhase: rand() * Math.PI * 2,
       jp: rand() * Math.PI * 2,                             // wobble phase
@@ -4299,17 +4345,24 @@ function BugSwarm({
       dphase: rand() * Math.PI * 2,
       ff: flickerRate * (0.6 + rand() * 0.9),               // wing flicker rate
       fp: rand() * Math.PI * 2,
+      // Drawn LAST on purpose: appending keeps every draw above it unchanged,
+      // so adding per-bug size did not reshuffle anyone's existing swarm.
+      su: rand(),
     }));
     // These six decide who each bug IS, so changing one has to regenerate the
     // set - unlike radius or speed, which only reshape a swarm that already
     // exists. Reshuffling on a Radius drag would be maddening; not reshuffling
     // on a Seed drag would make the knob do nothing.
-    return { positions: new Float32Array(N * 3), alphas: new Float32Array(N), bugs: made };
-  }, [N, seed, speedVary, twoWay, tilt, lungeRate, flickerRate]);
+    const sizes = new Float32Array(N);
+    for (let i = 0; i < N; i += 1) sizes[i] = 1 - sizeVary * 0.5 + made[i].su * sizeVary;
+    return { positions: new Float32Array(N * 3), alphas: new Float32Array(N), sizes, bugs: made };
+  }, [N, seed, speedVary, twoWay, tilt, lungeRate, flickerRate, sizeVary]);
 
   const live = {
     origin, radius: localRadius, spread, height: localHeight, speed, jitter, dive,
     lungeSharp, lungeDepth, jitterSpeed, flickerDepth, drift,
+    heightBias, radiusBias, oval, swarmRotY, wobbleY,
+    offsetX: offsetX / s, offsetY: offsetY / s, offsetZ: offsetZ / s,
   };
   const p = useRef(live);
   p.current = live;
@@ -4323,7 +4376,11 @@ function BugSwarm({
     const c = p.current;
     for (let i = 0; i < N; i += 1) {
       const b = bugs[i];
-      const r0 = c.radius * (1 - c.spread * 0.5 + c.spread * b.rf);
+      // Bias 1 reproduces the even scatter exactly (pow(x,1) === x), so these
+      // knobs default to the swarm this always drew.
+      const rf = 0.35 + Math.pow(b.ru, c.radiusBias);
+      const yf = Math.pow(b.yu, c.heightBias) - 0.5;
+      const r0 = c.radius * (1 - c.spread * 0.5 + c.spread * rf);
       // Brief lunge at the bulb, not a pulse - see the note above about ^8.
       // LungeSharp is the exponent: high holds near zero and spikes, low
       // rounds it out into the whole swarm breathing together.
@@ -4332,14 +4389,19 @@ function BugSwarm({
       const a = b.phase + t * b.w * c.speed;
       const j = c.jitter * r0;
       const js = c.jitterSpeed;
-      P[i * 3] = c.origin[0] + Math.cos(a) * r
+      // Ellipse, then spin it about Y. oval 1 + swarmRotY 0 is the old circle.
+      const ex = Math.cos(a) * r;
+      const ez = Math.sin(a) * r * c.oval;
+      const cy = Math.cos(c.swarmRotY), sy = Math.sin(c.swarmRotY);
+      P[i * 3] = c.origin[0] + c.offsetX + ex * cy + ez * sy
         + j * 0.5 * Math.sin(t * 7.3 * js + b.jp);
-      P[i * 3 + 1] = c.origin[1] + c.height * b.yf
+      P[i * 3 + 1] = c.origin[1] + c.offsetY + c.height * yf
         + Math.sin(a + b.tiltPhase) * c.height * 0.5 * b.tilt
         - d * c.height * 0.55 * c.lungeDepth
         + c.height * c.drift * Math.sin(t * 0.23 + b.jp * 1.3)
+        + c.height * c.wobbleY * Math.sin(t * 1.9 * js + b.jp * 2.1)
         + j * 0.35 * Math.sin(t * 9.1 * js + b.jp * 1.7);
-      P[i * 3 + 2] = c.origin[2] + Math.sin(a) * r
+      P[i * 3 + 2] = c.origin[2] + c.offsetZ - ex * sy + ez * cy
         + j * 0.5 * Math.cos(t * 6.1 * js + b.jp * 2.3);
       const flick = 0.5 + 0.5 * Math.sin(t * b.ff + b.fp);
       // FlickerDepth 0 is a steady mote; 1 blinks all the way to dark.
@@ -4354,6 +4416,8 @@ function BugSwarm({
       <bufferGeometry>
         <bufferAttribute ref={posRef} attach="attributes-position" args={[positions, 3]} />
         <bufferAttribute ref={alphaRef} attach="attributes-alpha" args={[alphas, 1]} />
+        {/* Static per-bug size multiplier - never rewritten per frame, so no ref. */}
+        <bufferAttribute attach="attributes-ascale" args={[sizes, 1]} />
       </bufferGeometry>
       <pointsMaterial
         color={color}
@@ -4365,10 +4429,15 @@ function BugSwarm({
         blending={additive >= 0.5 ? THREE.AdditiveBlending : THREE.NormalBlending}
         toneMapped={false}
         onBeforeCompile={(shader) => {
-          shader.vertexShader = shader.vertexShader.replace(
-            "void main() {",
-            "attribute float alpha;\nvarying float vAlpha;\nvoid main() {\n  vAlpha = alpha;"
-          );
+          shader.vertexShader = shader.vertexShader
+            .replace(
+              "void main() {",
+              "attribute float alpha;\nattribute float ascale;\nvarying float vAlpha;\nvoid main() {\n  vAlpha = alpha;"
+            )
+            // three sets gl_PointSize from the material's single `size`, then
+            // applies attenuation to it - folding the per-bug multiplier in
+            // here keeps sizeAttenuation working on top.
+            .replace("gl_PointSize = size;", "gl_PointSize = size * ascale;");
           shader.fragmentShader = shader.fragmentShader
             .replace("void main() {", "varying float vAlpha;\nvoid main() {")
             .replace(
@@ -7211,6 +7280,25 @@ function ArcadeCampfire({ config }: { config: CampfireSceneConfig }) {
     return clone;
   }, [gltf.scene]);
 
+  /*
+   * How lit this fire is, 0..1.
+   *
+   * "Intensity is as low as it goes and the fire is still too bright" was not
+   * a tuning problem - it was five independent brightness sources with only
+   * one of them on that slider. arcadeFireIntensity drove the point light
+   * ONLY; the flame cones, ground glow and sparks are unlit additive material
+   * that no light setting can reach, so at intensity 0 the fire cast nothing
+   * and still burned at full opacity.
+   *
+   * Normalising against the config's own default (not a magic number) makes
+   * the slider mean "how lit is this fire": at the default it looks the way
+   * it always did, and at 0 the fire is actually out. arcadeFireDim rides on
+   * top as a master fade.
+   */
+  const lit = Math.max(0, Math.min(1,
+    config.arcadeFireIntensity / Math.max(1e-4, DEFAULT_CAMPFIRE_CONFIG.arcadeFireIntensity)));
+  const fireVis = lit * config.arcadeFireDim;
+
   // Arcade fire lights are separate from the campfire's — its own flicker,
   // its own intensity, its own reach, its own color. Kept as refs so slider
   // scrubs update in place without unmounting the lights.
@@ -7222,7 +7310,7 @@ function ArcadeCampfire({ config }: { config: CampfireSceneConfig }) {
       Math.sin(t * 8.1) * 0.12 + Math.sin(t * 15.7) * 0.08 + Math.sin(t * 23.3) * 0.035
     );
     if (arcadeFire.current) {
-      arcadeFire.current.intensity = config.arcadeFireIntensity * flicker;
+      arcadeFire.current.intensity = config.arcadeFireIntensity * flicker * config.arcadeFireDim;
       arcadeFire.current.decay = config.arcadeFireDecay;
       arcadeFire.current.distance = config.arcadeFireLightReach;
       arcadeFire.current.position.set(config.arcadeFireLightX, config.arcadeFireLightY, config.arcadeFireLightZ);
@@ -7230,7 +7318,9 @@ function ArcadeCampfire({ config }: { config: CampfireSceneConfig }) {
     }
     if (arcadeFarGlow.current) {
       const slow = 1 + config.arcadeFlickerAmount * (Math.sin(t * 2.3) * 0.06 + Math.sin(t * 4.1) * 0.03);
-      arcadeFarGlow.current.intensity = config.arcadeFarGlowIntensity * slow;
+      // The far glow is the fire's ambient spill, so it dies with the fire -
+      // otherwise a fire at intensity 0 still washed the whole sector.
+      arcadeFarGlow.current.intensity = config.arcadeFarGlowIntensity * slow * fireVis;
       arcadeFarGlow.current.decay = config.arcadeFarGlowDecay;
       arcadeFarGlow.current.distance = config.arcadeFarGlowReach;
       arcadeFarGlow.current.position.set(config.arcadeFireLightX, config.arcadeFireLightY, config.arcadeFireLightZ);
@@ -7239,16 +7329,21 @@ function ArcadeCampfire({ config }: { config: CampfireSceneConfig }) {
 
   return (
     <group>
+      {/* Only the log pile is clickable - everything below is decoration
+          spread over tens of units, and picking it is what made the fire's
+          hitbox swallow the scene. */}
       {bonfire && <primitive object={bonfire} />}
+      <NoPick>
       <CampfireFlame
         x={config.arcadeFlameX} y={config.arcadeFlameY} z={config.arcadeFlameZ}
         scale={config.arcadeFlameScale}
         outerScale={config.arcadeFlameOuterScale}
         innerScale={config.arcadeFlameInnerScale}
         haloScale={config.arcadeFlameHaloScale}
+        dim={fireVis}
       />
       <FireGlowDisc
-        opacity={config.arcadeGlowOpacity}
+        opacity={config.arcadeGlowOpacity * fireVis}
         x={config.arcadeFlameX}
         y={config.arcadeGlowY}
         z={config.arcadeFlameZ}
@@ -7265,7 +7360,7 @@ function ArcadeCampfire({ config }: { config: CampfireSceneConfig }) {
       />
       <Sparks
         key={`arcade-sparks-${Math.max(1, Math.round(config.arcadeSparkCount))}`}
-        opacity={config.arcadeSparkOpacity}
+        opacity={config.arcadeSparkOpacity * fireVis}
         x={config.arcadeFlameX}
         z={config.arcadeFlameZ}
         count={config.arcadeSparkCount}
@@ -7277,10 +7372,11 @@ function ArcadeCampfire({ config }: { config: CampfireSceneConfig }) {
         size={config.arcadeSparkSize}
         lifetime={config.arcadeSparkLifetime}
       />
+      </NoPick>
       <pointLight ref={arcadeFire}
         position={[config.arcadeFireLightX, config.arcadeFireLightY, config.arcadeFireLightZ]}
         color={new THREE.Color(config.arcadeFireLightColorR, config.arcadeFireLightColorG, config.arcadeFireLightColorB)}
-        intensity={config.arcadeFireIntensity}
+        intensity={config.arcadeFireIntensity * config.arcadeFireDim}
         distance={config.arcadeFireLightReach}
         decay={config.arcadeFireDecay}
       />
@@ -7372,7 +7468,9 @@ function DeskCampfire({ config }: { config: CampfireSceneConfig }) {
 
   return (
     <group>
+      {/* Logs are the only clickable part - see NoPick. */}
       {bonfire && config.deskCampfirePileVisible >= 0.5 && <primitive object={bonfire} />}
+      <NoPick>
       <CampfireFlame
         x={config.deskFlameX} y={config.deskFlameY} z={config.deskFlameZ}
         scale={config.deskFlameScale}
@@ -7417,6 +7515,7 @@ function DeskCampfire({ config }: { config: CampfireSceneConfig }) {
         size={config.deskSparkSize}
         lifetime={config.deskSparkLifetime}
       />
+      </NoPick>
       <pointLight ref={deskFire}
         position={[config.deskFireLightX, config.deskFireLightY, config.deskFireLightZ]}
         color={new THREE.Color(config.deskFireLightColorR, config.deskFireLightColorG, config.deskFireLightColorB)}
@@ -8543,7 +8642,7 @@ function CampfireWorld({
   const [crtIndex, setCrtIndex] = useState(0);
 
   const crtFocusView = useMemo<LocationView | null>(() => {
-    if (!crtFocus || editing || panel !== LOCATION_ARCADE) return null;
+    if (!crtFocus) return null;
     const o = config.objectOverrides?.["crt_0"] ?? EMPTY_OVERRIDE;
     const s = CRT_BASE_SCALE * o.scale;
 
@@ -8570,7 +8669,7 @@ function CampfireWorld({
       cz: tz + c * d,
       tx, ty, tz,
     };
-  }, [crtFocus, editing, panel, config.objectOverrides, config.crtFocusHeight, config.crtFocusBack,
+  }, [crtFocus, config.objectOverrides, config.crtFocusHeight, config.crtFocusBack,
       config.arcadeSetX, config.arcadeSetY, config.arcadeSetZ]);
 
   // Ringing away to another campsite drops the close-up. Without this the
@@ -8588,9 +8687,9 @@ function CampfireWorld({
   ), [crtFocus, crtIndex]);
 
   const onCrtClick = useCallback((uv: { x: number; y: number } | null) => {
-    // In the lab a click on the tube means "select it", not "fly at it" -
-    // otherwise the camera runs off every time you go to nudge the thing.
-    if (editing) return;
+    // This fires in the lab too. The click still bubbles to the Selectable, so
+    // the object drawer opens at the same time as the camera flies in - both
+    // happen, which is what was asked for.
     // The menu's own plates are the buttons: the click is hit-tested against
     // the same layout the canvas draws with, so pointing at a plate picks that
     // plate rather than just stepping to the next one.
@@ -8606,7 +8705,7 @@ function CampfireWorld({
     if (hit === null) return;            // missed the plates - leave it alone
     if (hit >= back) { setCrtFocus(false); setCrtIndex(0); return; }  // Back
     setCrtIndex(hit);
-  }, [crtFocus, editing]);
+  }, [crtFocus]);
   // Track the last named object under the cursor. r3f fires onPointerMove for
   // every hovered mesh; we only want a sound when the resolved "top-level
   // named ancestor" actually changes.
@@ -8672,8 +8771,10 @@ function CampfireWorld({
       })()}
       <CameraRig config={config} paused={flying || panelled} />
       {panelled ? (
-        <LocationCamera config={config} panel={panel} active={!flying} editing={editing} focus={crtFocusView} />
+        <LocationCamera config={config} panel={panel} active={!flying} editing={editing} suspended={crtFocus} />
       ) : null}
+      {/* Mounted whether or not a location owns the camera - see CrtFocusCamera. */}
+      <CrtFocusCamera active={crtFocus} view={crtFocusView} config={config} handoff={panelled} />
       {flying ? (
         <IntroFlight
           to={intro.to}
@@ -8700,7 +8801,10 @@ function CampfireWorld({
             onCameraChange(pos, tgt);
           }
         }}
-        enabled={!flying && !selectedObject && (!panelled || editing)}
+        // !crtFocus: while the CRT close-up holds the camera, orbiting would
+        // both fight it and - because onEnd writes the pose back - overwrite
+        // this location's saved shot with the close-up. Back releases it.
+        enabled={!flying && !selectedObject && !crtFocus && (!panelled || editing)}
         livePoseRef={cameraLivePoseRef}
         snapTo={(() => {
           // Reset target is per-campsite: in panelled mode, snap to that
@@ -9076,6 +9180,13 @@ function CampfireWorld({
             {/* Inside the campfire group so the fire light and the shadow light
                 ride along with the log, flame, sparks and glow on every drag. */}
             <CampfireLights config={config} />
+            {/* The group's onClick above used to be reachable by clicking any
+                of these, which meant the glow disc - a plane up to 30 units
+                across - was the campfire's hitbox. The bonfire LOG is routed
+                to onSelect("campfire") from inside CampfireSceneModel, so
+                selection still works; only the oversized decoration stops
+                being a click target. */}
+            <NoPick>
             <FireGlowDisc
               opacity={config.glowOpacity} x={config.flameX} y={config.glowY} z={config.flameZ}
               scale={config.glowScale}
@@ -9106,6 +9217,7 @@ function CampfireWorld({
               size={config.sparkSize}
               lifetime={config.sparkLifetime}
             />
+            </NoPick>
           </group>
         </Location>
 
