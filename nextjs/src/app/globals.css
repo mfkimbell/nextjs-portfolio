@@ -97,3 +97,37 @@ body {
   overflow-x: hidden;
   overscroll-behavior: none;
 }
+
+/*─────────────────────────────────────────────────────────────*/
+/* Landscape-only layout (see components/ForceLandscape.tsx)   */
+/*─────────────────────────────────────────────────────────────*/
+/* One view, always landscape. In portrait the BOX is rotated, not the device -
+   iOS gives a web page no way to turn the phone itself.
+
+   Sized in dvh/dvw rather than measured pixels on purpose: the dynamic units
+   follow iOS Safari's address bar as it collapses, whereas a value read once
+   from window.innerHeight is captured while the chrome is still expanded and
+   then never grows - which showed up as a black band along the bottom edge
+   after rotation.
+
+   Note the swap: in portrait the box's WIDTH is a viewport HEIGHT, because
+   after the 90deg turn the box's x-axis runs down the screen. Rotating about
+   the top-left corner swings it off-screen to the left, so it is pushed back
+   across by exactly one viewport width. */
+.force-landscape {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+@media (orientation: portrait) {
+  .force-landscape {
+    width: 100dvh;
+    height: 100dvw;
+    transform-origin: top left;
+    transform: translateX(100dvw) rotate(90deg);
+  }
+}
