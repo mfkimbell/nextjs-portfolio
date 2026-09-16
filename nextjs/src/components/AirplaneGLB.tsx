@@ -30,10 +30,13 @@ const CONFIG = {
   idleRPM: 0.25,
 
   /* fly-off + comeback */
-  exitThreshold: -0.95,
+  exitTopThreshold: 0.92,
+  exitBottomThreshold: -0.92,
+  returnTopThreshold: 0.76,
+  returnBottomThreshold: -0.76,
   exitSpeed: 8,
-  exitBank: -Math.PI / 10,
-  returnThreshold: -0.9,
+  exitVerticalDriftSpeed: 1.4,
+  exitBank: Math.PI / 10,
   returnX: -6,
 } as const;
 /* ============================================= */
@@ -43,7 +46,10 @@ useGLTF.preload(CONFIG.modelPath);
 export default function AirplaneGLB() {
   const planeRef = useRef<THREE.Group>(null);
   const exitMode = useRef(false);
-  const { camera } = useThree();
+  const exitVerticalDrift = useRef(0);
+  const { camera, gl } = useThree();
+  const pointer = useRef(new THREE.Vector2(-1.4, 0));
+  const pointerInsideCanvas = useRef(false);
   const { scene: airplane } = useGLTF(CONFIG.modelPath);
 
   // CLEANUP: dispose geometries & materials on unmount
@@ -83,6 +89,43 @@ export default function AirplaneGLB() {
     }
   }, [airplane]);
 
+  useEffect(() => {
+    const updatePointer = (event: PointerEvent) => {
+      const rect = gl.domElement.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      const wasInside = pointerInsideCanvas.current;
+      const inside =
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom;
+
+      pointerInsideCanvas.current = inside;
+
+      // If the mouse leaves through the top/bottom of the Experience section,
+      // trigger the same rightward fly-off instead of freezing at the edge.
+      if (!inside) {
+        if (wasInside && event.clientY < rect.top) {
+          exitMode.current = true;
+          exitVerticalDrift.current = 1;
+        } else if (wasInside && event.clientY > rect.bottom) {
+          exitMode.current = true;
+          exitVerticalDrift.current = -1;
+        }
+        return;
+      }
+
+      pointer.current.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -(((event.clientY - rect.top) / rect.height) * 2 - 1)
+      );
+    };
+
+    window.addEventListener("pointermove", updatePointer, { passive: true });
+    return () => window.removeEventListener("pointermove", updatePointer);
+  }, [gl]);
+
   /* ───── HELPERS ───── */
   const target    = useMemo(() => new THREE.Vector3(), []);
   const tmpMat    = useMemo(() => new THREE.Matrix4(), []);
@@ -95,30 +138,45 @@ export default function AirplaneGLB() {
 
   useFrame((state, delta) => {
     if (!planeRef.current) return;
-    const { x: mx, y: my } = state.pointer;
+    const isPointerHere = pointerInsideCanvas.current;
+    const { x: mx, y: my } = pointer.current;
 
     /* ---- exit / comeback ---- */
-    if (!exitMode.current && my < CONFIG.exitThreshold) {
+    const tooHigh = my > CONFIG.exitTopThreshold;
+    const tooLow = my < CONFIG.exitBottomThreshold;
+    if (isPointerHere && !exitMode.current && (tooHigh || tooLow)) {
       exitMode.current = true;
+      exitVerticalDrift.current = tooHigh ? 1 : -1;
     }
     if (exitMode.current) {
-      // fly right offscreen
+      // Fly right offscreen, with a small upward/downward drift matching the
+      // edge that triggered the exit. It never comes back from the right.
       planeRef.current.position.x += CONFIG.exitSpeed * delta;
+      planeRef.current.position.y += exitVerticalDrift.current * CONFIG.exitVerticalDriftSpeed * delta;
       planeRef.current.quaternion.slerp(
         new THREE.Quaternion().setFromEuler(
-          new THREE.Euler(0, 0, CONFIG.exitBank)
+          new THREE.Euler(0, 0, -exitVerticalDrift.current * CONFIG.exitBank)
         ),
         CONFIG.rotateSmooth
       );
-      // reset when pointer back up
-      if (my > CONFIG.returnThreshold) {
+
+      // Re-enter only when the pointer is back inside the safe middle band;
+      // respawn from the left every time.
+      const safeToReturn =
+        isPointerHere &&
+        my < CONFIG.returnTopThreshold &&
+        my > CONFIG.returnBottomThreshold;
+      if (safeToReturn) {
         exitMode.current = false;
+        exitVerticalDrift.current = 0;
         planeRef.current.position.set(
           CONFIG.returnX,
           0,
           CONFIG.zLayer
         );
         prevPos.current.copy(planeRef.current.position);
+        prevMouse.current.copy(pointer.current);
+        idleTimer.current = 0;
       }
       return;
     }
@@ -126,8 +184,8 @@ export default function AirplaneGLB() {
     /* ---- normal follow / idle ---- */
     const dx = mx - prevMouse.current.x;
     const dy = my - prevMouse.current.y;
-    const moved = dx * dx + dy * dy > 1e-6;
-    prevMouse.current.set(mx, my);
+    const moved = isPointerHere && dx * dx + dy * dy > 1e-6;
+    if (isPointerHere) prevMouse.current.set(mx, my);
     idleTimer.current = moved ? 0 : idleTimer.current + delta;
 
     // project pointer into world at zLayer

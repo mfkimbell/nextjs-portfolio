@@ -3,10 +3,12 @@
 
 import React from "react";
 import ToucanScene from "./ToucanScene";
+import type { VoiceState } from "./ToucanGLB";
 import { useToucanVoiceAgent } from "@/hooks/useToucanVoiceAgent";
 
 export default function TalkToTheBirds() {
   const {
+    agentAudioLevel,
     callSid,
     error,
     identity,
@@ -22,10 +24,22 @@ export default function TalkToTheBirds() {
   const isConnecting = status === "connecting";
   const isActive = status === "active";
 
+  // The birds read the voice state from a ref instead of props. The hook
+  // updates agentAudioLevel on every animation frame, so passing it down as a
+  // value would re-render the 3D canvas 60 times a second. Mutating a stable
+  // ref during render is safe here: it's a plain mirror of values we already
+  // hold, and only useFrame ever reads it.
+  const voiceRef = React.useRef<VoiceState>({
+    isAgentSpeaking: false,
+    agentAudioLevel: 0,
+  });
+  voiceRef.current.isAgentSpeaking = isAgentSpeaking;
+  voiceRef.current.agentAudioLevel = agentAudioLevel;
+
   return (
     <section
       id="talk-to-the-birds"
-      className="relative z-20 w-full overflow-hidden py-12 sm:py-16"
+      className="relative z-20 w-full overflow-hidden py-10 sm:py-14"
     >
       <h2 className="text-4xl font-bold neon-text text-center mb-4">
         Talk To The Birds
@@ -98,7 +112,7 @@ export default function TalkToTheBirds() {
         )}
       </div>
 
-      <ToucanScene />
+      <ToucanScene voiceRef={voiceRef} />
     </section>
   );
 }

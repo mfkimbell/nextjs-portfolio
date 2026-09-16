@@ -7,8 +7,6 @@
 -------------------------------------------------------------------*/
 "use client";
 
-import { useEffect, useRef } from "react";
-import Image from "next/image";
 import { roles, Role } from "@/lib/experience";
 
 // === Configuration ===
@@ -20,193 +18,80 @@ const BADGE_SM_PX = BADGE_FULL_PX / 2; // 64px on sm
 const GAP_PX = 32; // spacing from badge center to card
 
 export default function Experience() {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const badges =
-      containerRef.current!.querySelectorAll<HTMLImageElement>(".badge");
-    badges.forEach((img, idx) => {
-      const anim = img.animate(
-        [
-          { transform: "translateY(0)" },
-          { transform: `translateY(-${BOB_AMPLITUDE_PX}px)` },
-          { transform: "translateY(0)" },
-        ],
-        {
-          duration: BOB_DURATION_MS,
-          iterations: Infinity,
-          easing: "ease-in-out",
-        }
-      );
-      anim.currentTime = idx * BOB_STAGGER_MS;
-    });
-  }, []);
-
   return (
     <section
       id="experience"
-      className="overflow-x-hidden py-0 text-white relative"
+      className="relative overflow-visible py-12 text-white sm:py-16"
     >
-      {/* Mobile Clouds (< 768px) */}
-      <Image
-        src="/clouds/cloud2.png"
-        alt=""
-        width={65}
-        height={65}
-        priority
-        className="absolute left-[8%] top-[25%] opacity-45 pointer-events-none cloud md:hidden"
-        style={
-          {
-            "--float-distance": "7px",
-            animationDuration: "8.3s",
-            animationDelay: "-1.5s",
-          } as React.CSSProperties
-        }
-      />
-      <Image
-        src="/clouds/cloud4.png"
-        alt=""
-        width={50}
-        height={50}
-        priority
-        className="absolute right-[12%] top-[40%] opacity-50 pointer-events-none cloud md:hidden"
-        style={
-          {
-            "--float-distance": "5px",
-            animationDuration: "7.1s",
-            animationDelay: "-3.8s",
-          } as React.CSSProperties
-        }
-      />
-      <Image
-        src="/clouds/cloud3.png"
-        alt=""
-        width={60}
-        height={60}
-        priority
-        className="absolute left-[85%] top-[80%] opacity-40 pointer-events-none cloud md:hidden"
-        style={
-          {
-            "--float-distance": "6px",
-            animationDuration: "8.7s",
-            animationDelay: "-2.2s",
-          } as React.CSSProperties
-        }
-      />
-
-      {/* Desktop Clouds (≥ 768px) */}
-      <Image
-        src="/clouds/cloud5.png"
-        alt=""
-        width={150}
-        height={150}
-        priority
-        className="absolute left-[8%] top-[20%] opacity-65 pointer-events-none cloud hidden md:block"
-        style={
-          {
-            "--float-distance": "15px",
-            animationDuration: "11.5s",
-            animationDelay: "-2.8s",
-          } as React.CSSProperties
-        }
-      />
-      <Image
-        src="/clouds/cloud1.png"
-        alt=""
-        width={130}
-        height={130}
-        priority
-        className="absolute right-[10%] top-[35%] opacity-60 pointer-events-none cloud hidden md:block"
-        style={
-          {
-            "--float-distance": "12px",
-            animationDuration: "9.7s",
-            animationDelay: "-4.2s",
-          } as React.CSSProperties
-        }
-      />
-      <Image
-        src="/clouds/cloud4.png"
-        alt=""
-        width={120}
-        height={120}
-        priority
-        className="absolute left-[85%] top-[75%] opacity-55 pointer-events-none cloud hidden md:block"
-        style={
-          {
-            "--float-distance": "10px",
-            animationDuration: "10.3s",
-            animationDelay: "-1.5s",
-          } as React.CSSProperties
-        }
-      />
-
-      <h2 className="text-center text-4xl font-bold neon-text mb-12">
+      <h2 className="relative z-30 mb-8 text-center text-4xl font-bold neon-text">
         Experience
       </h2>
 
-      <div className="flex justify-center w-full">
+      <div className="relative z-30 flex w-full justify-center">
         <div
-          ref={containerRef}
           className={`
             relative mx-auto w-full max-w-[950px]
             px-4 md:pl-[${BADGE_FULL_PX + GAP_PX}px] md:pr-4
           `}
         >
-          <ul className="space-y-14">
+          <ul className="space-y-10">
             {roles.map((role: Role, idx: number) => (
               <li
                 key={`${role.company}-${role.dates}-${idx}`}
                 className="relative flex flex-col items-start sm:items-center"
               >
                 {/* Small badge: visible for <lg (mobile, sm, md) */}
-                <img
-                  src={role.logo}
-                  alt={`${role.company} badge`}
-                  width={BADGE_SM_PX}
-                  height={BADGE_SM_PX}
-                  className={`
-                    absolute top-4 right-4 select-none pointer-events-none rounded-md badge z-10
-                    block lg:hidden
-                    w-[${BADGE_SM_PX}px] h-[${BADGE_SM_PX}px]
-                  `}
-                />
+                <div
+                  className="absolute top-4 right-4 z-10 block select-none pointer-events-none lg:hidden"
+                  style={{ animationDelay: `${idx * -BOB_STAGGER_MS}ms` }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={role.logo}
+                    alt={`${role.company} badge`}
+                    width={BADGE_SM_PX}
+                    height={BADGE_SM_PX}
+                    className="experience-badge-float rounded-md w-16 h-16"
+                  />
+                </div>
                 {/* Large badge: visible for lg+ */}
-                <img
-                  src={role.logo}
-                  alt={`${role.company} badge`}
-                  width={BADGE_FULL_PX}
-                  height={BADGE_FULL_PX}
-                  className={`
-                    hidden lg:block select-none pointer-events-none rounded-md badge
-                    absolute left-0 top-1/2 -translate-x-full -translate-y-1/2 z-10
-                    w-[${BADGE_FULL_PX}px] h-[${BADGE_FULL_PX}px]
-                  `}
-                />
+                <div
+                  className="absolute left-0 top-1/2 z-10 hidden -translate-x-full -translate-y-1/2 select-none pointer-events-none lg:block"
+                  style={{ animationDelay: `${idx * -BOB_STAGGER_MS}ms` }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={role.logo}
+                    alt={`${role.company} badge`}
+                    width={BADGE_FULL_PX}
+                    height={BADGE_FULL_PX}
+                    className="experience-badge-float rounded-md w-32 h-32"
+                  />
+                </div>
 
                 <article className="relative flex-1 bg-black/10 backdrop-blur-md rounded-xl px-6 py-4 w-full sm:pl-[96px]">
                   <header className="mb-2">
-                    {/* Mobile header: title, then company, then date */}
-                    <div className="block sm:hidden ">
-                      <h3 className="font-semibold text-lg leading-tight">
+                    {/* Mobile header: title, then company · date */}
+                    <div className="block sm:hidden">
+                      <h3 className="font-semibold text-lg leading-tight pr-14">
                         {role.title}
                       </h3>
                       <p className="text-sm text-gray-300 mt-1">
                         @ {role.company}
-                      </p>
-                      <p className="text-xs text-blue-200/80 mt-1">
-                        {role.dates}
+                        <span className="ml-2 text-xs text-blue-200/80">
+                          {role.dates}
+                        </span>
                       </p>
                     </div>
-                    {/* Desktop header: title & company inline, date below */}
-                    <div className="hidden sm:block">
+                    {/* Desktop header: title @ company on left, dates on right */}
+                    <div className="hidden sm:flex sm:items-baseline sm:justify-between sm:gap-4">
                       <h3 className="font-semibold text-lg leading-tight">
                         {role.title}
                         <span className="ml-1 text-sm text-gray-300">
                           @ {role.company}
                         </span>
                       </h3>
-                      <p className="text-xs text-blue-200/80 mt-1">
+                      <p className="text-xs text-blue-200/80 whitespace-nowrap">
                         {role.dates}
                       </p>
                     </div>
@@ -226,10 +111,14 @@ export default function Experience() {
 
       {/* Cloud Animation Styles */}
       <style jsx global>{`
-        .cloud {
-          animation-name: float;
-          animation-timing-function: ease-in-out;
-          animation-iteration-count: infinite;
+        .experience-badge-float {
+          animation: experienceBadgeFloat ${BOB_DURATION_MS}ms ease-in-out infinite;
+          animation-delay: inherit;
+        }
+
+        @keyframes experienceBadgeFloat {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-${BOB_AMPLITUDE_PX}px); }
         }
       `}</style>
     </section>

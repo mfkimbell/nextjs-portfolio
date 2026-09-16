@@ -301,15 +301,7 @@ export const projects: Project[] = [
     github: 'https://github.com/mfkimbell/ai-rag-pdf',
     gradient: 'from-green-400 to-green-600',
   },
-  {
-    name: 'Cloud File Upload Service',
-    description:
-      'AWS-backed file-sharing platform: a Flask webserver lets users upload files, Lambda & SNS handle processing and email delivery of download links, and user data is stored in a MySQL RDS instance.',
-    logo: '/projects/cloud.png',
-    tech: ['AWS', 'Lambda', 'SNS', 'Flask', 'MySQL'],
-    github: 'https://github.com/mfkimbell/cloud-file-upload-service',
-    gradient: 'from-yellow-400 to-yellow-600',
-  },
+  
   {
     name: 'S3 Website Hosting Custom Action',
     description:
@@ -326,33 +318,7 @@ export const projects: Project[] = [
     github: 'https://github.com/mfkimbell/github-actions-custom-actions',
     gradient: 'from-purple-400 to-purple-600',
   },
-  {
-    name: 'React Movie Database GUI',
-    description:
-      'C#/.NET 6 + React front-end connected to Microsoft SQL Server via Entity Framework Core, enabling full CRUD operations on movie data with real-time GUI updates.',
-    logo: '/projects/movie.png',
-    tech: ['C#', 'React JS', 'SQL Server', '.NET 6', 'Entity Framework Core'],
-    github: 'https://github.com/mfkimbell/react-movie-database',
-    gradient: 'from-red-400 to-red-600',
-  },
-  {
-    name: 'NLP Sentiment Analysis for SQL Database',
-    description:
-      'Python batch-processing pipeline that benchmarks HuggingFace Transformers and NLTK, then uses spaCy to calculate sentiment polarity for thousands of posts and write the results back to a PostgreSQL table.',
-    logo: '/projects/sentiment.png',
-    tech: ['Python', 'spaCy', 'HuggingFace', 'NLTK', 'PostgreSQL'],
-    github: 'https://github.com/mfkimbell/reviews-nlp-sentiment-analysis',
-    gradient: 'from-rose-400 to-rose-600',
-  },
-  {
-    name: 'Golang GraphQL Server',
-    description:
-      'Lightweight GraphQL API built with Go and gqlgen, backed by MongoDB. Provides queries & mutations to create and list dogs, illustrating schema-first development and strongly-typed resolvers.',
-    logo: '/projects/graphql.png',
-    tech: ['Go', 'GraphQL', 'gqlgen', 'MongoDB'],
-    github: 'https://github.com/mfkimbell/go-graphql-server',
-    gradient: 'from-emerald-500 to-emerald-700',
-  },
+  
   {
     name: 'Agriculture Monitoring Drone',
     description:
@@ -362,15 +328,7 @@ export const projects: Project[] = [
     github: 'https://github.com/mfkimbell/agricultural-monitoring-drone',
     gradient: 'from-lime-400 to-lime-600',
   },
-  {
-    name: 'GitHub Actions CI/CD Tutorial',
-    description:
-      'Hands-on tutorial repo showcasing composite, JavaScript, and Docker actions. Demonstrates automated issue replies and a full S3-deploy workflow while teaching students core GitHub Actions concepts.',
-    logo: '/projects/actions.png',
-    tech: ['GitHub Actions', 'CI/CD', 'Docker', 'JavaScript'],
-    github: 'https://github.com/mfkimbell/github-actions-pipeline',
-    gradient: 'from-violet-500 to-violet-700',
-  },
+  
   {
     name: 'Azure Blob / Container Manager',
     description:
@@ -389,33 +347,8 @@ export const projects: Project[] = [
     github: 'https://github.com/mfkimbell/aws-amplify-file-dashboard',
     gradient: 'from-orange-400 to-orange-600',
   },
-  {
-    name: 'Thrift Store E-Commerce Site',
-    description:
-      'Full-stack MERN storefront using JWT authentication and CryptoJS encryption. Express REST APIs drive product listings, cart management, and secure checkout against a MongoDB database.',
-    logo: '/projects/thrift.png',
-    tech: [
-      'React',
-      'Express',
-      'MongoDB',
-      'Mongoose',
-      'JWT',
-      'CryptoJS',
-      'JavaScript',
-    ],
-    github: 'https://github.com/mfkimbell/ecommerce-thrift-website/tree/main',
-    gradient: 'from-amber-500 to-amber-700',
-  },
-
-  {
-    name: 'SongStitch',
-    description:
-      'React + FastAPI tool that calls the Spotify API, stitches selected album covers into a single wallpaper with Pillow, and lets users download custom mosaics sized for their phone.',
-    logo: '/projects/stitch.png',
-    tech: ['React', 'FastAPI', 'Pillow', 'Spotify API', 'Python'],
-    github: 'https://github.com/mfkimbell/album-stitcher',
-    gradient: 'from-teal-400 to-teal-600',
-  },
+  
+  
   {
     name: 'Legends of Pygame',
     description:
@@ -425,52 +358,6 @@ export const projects: Project[] = [
     github: 'https://github.com/mfkimbell/legends-of-pygame',
     gradient: 'from-green-700 to-green-900',
   },
-  {
-    name: 'Rust S-Notation Parser',
-    description:
-      'Recursive-descent parser in Rust that converts Polish-notation S-expressions into an abstract syntax tree supporting +, −, *, and ^ operators with arbitrary arity.',
-    logo: '/projects/parse.png',
-    tech: ['Rust', 'Parsing'],
-    github: 'https://github.com/mfkimbell/rust-s-notation-parser',
-    gradient: 'from-gray-500 to-gray-700',
-  },
-
-  {
-    name: 'AI Image Generator',
-    description:
-      'Serverless Lambda (invoked via API Gateway) that calls AWS Bedrock to run Stable Diffusion. Generates an image, stores it in S3, and returns a presigned URL; also supports text-summarization tasks.',
-    logo: '/projects/image.png',
-    tech: ['API Gateway', 'Bedrock', 'Stable Diffusion', 'Lambda', 'S3'],
-    github:
-      'https://github.com/mfkimbell/aws-basic-ai-image-generation-and-text-summarization',
-    gradient: 'from-fuchsia-500 to-fuchsia-700',
-  },
-  {
-    name: 'Rust Quadtree Area Calculator',
-    description:
-      'Rust implementation of a QuadTree that recursively partitions space to compute the exact covered area of overlapping rectangles without double-counting.',
-    logo: '/projects/quad.png',
-    tech: ['Rust', 'Recursion'],
-    github: 'https://github.com/mfkimbell/quad-tree-area-calculator',
-    gradient: 'from-cyan-700 to-cyan-900',
-  },
-
-  {
-    name: 'SQLAlchemy Postgres ORM',
-    description:
-      'Example project showing modern repository-pattern data access with SQLAlchemy, providing a full CRUD layer over a PostgreSQL movies table.',
-    logo: '/projects/alchemy.png',
-    tech: ['Python', 'SQLAlchemy', 'PostgreSQL', 'PDM'],
-    github: 'https://github.com/mfkimbell/python-orm-setup',
-    gradient: 'from-purple-600 to-purple-800',
-  },
-  {
-    name: 'Personal Website',
-    description:
-      'My portfolio website built with NextJS and TailwindCSS. It keeps track of total page views, clicks, and mouse miles. It features a live canvas that users can draw on and update. It also features ThreeJS models that react to the user, tracking mouse movement and following the mouse.',
-    logo: '/projects/website.png',
-    tech: ['NextJS', 'ThreeJS', 'TailwindCSS', 'Vercel', 'Prisma'],
-    github: 'https://github.com/mfkimbell/nextjs-portfolio',
-    gradient: 'from-gray-700 to-gray-900',
-  },
+ 
+ 
 ];

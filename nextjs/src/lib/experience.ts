@@ -10,7 +10,7 @@ export const roles: Role[] = [
     {
       company: "Twilio",
       logo: "/gifs/twilio.gif",
-      title: "Senior Software Engineer GTM (Go To Market) Innovation",
+      title: "Staff Software Engineer GTMI (Go To Market Innovation)",
       dates: "May 2025 – Present",
       bullets: [
         "Developing Conversational Agentic AI Solutions",
@@ -26,7 +26,7 @@ export const roles: Role[] = [
       dates: "May 2023 – May 2025",
       bullets: [
         "Overhauled legacy check processing systems leveraging serverless AWS cloud technology.",
-        "Lead Developer for a client-facing React/.NET app for 1800+ companies with a yearly revenue of over $3,000,000",
+        "Lead development for a client-facing React/.NET app for 1800+ companies with a yearly revenue of over $3,000,000",
         "Implemented scalable infrastructure with Harness and Terraform for seamless deployments.",
         "Decreased closed-account handling time by 75 %."
       ],
@@ -58,8 +58,8 @@ export const roles: Role[] = [
       title: "Data Analyst",
       dates: "Feb 2022 – Sep 2022",
       bullets: [
-        "Automated Tecan-driven assays with Python.",
-        "Migrated research data from PDF → Excel using Pandas.",
+        "Automated Tecan-driven biochemical assays with Python.",
+        "Used python to enrich and automate existing data pipelines",
       ],
     },
   ];

@@ -27,6 +27,24 @@ model Drawing {
   createdAt DateTime @default(now())
 }
 
+/// Public gallery submissions created from the canvas Save button.
+/// Hidden submissions are retained as moderation history/backups but are not shown.
+model DrawingSubmission {
+  id         String   @id @default(cuid())
+  name       String
+  strokes      Json
+  canvasSize   Int      @default(384)
+  canvasHeight Int?
+  upvotes      Int      @default(0)
+  downvotes  Int      @default(0)
+  hidden     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([hidden, createdAt])
+  @@index([hidden, upvotes, createdAt])
+}
+
 /// ───────── Taiwan trip planner ─────────
 
 model TaipeiSettings {

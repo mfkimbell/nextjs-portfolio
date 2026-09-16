@@ -50,15 +50,50 @@
     to   { transform: rotateY(360deg); }
   }
   .spin-slow { animation: spin-slow 20s linear infinite; }
+
+  /* Footer peek animation: an animal periodically slides out from behind an
+     occluder (e.g. the bulletin board) and back. The `--peek-translate`
+     variable carries the offset for the peeked pose; timing % is fixed to
+     roughly (hidden 54%, slide-out 14%, hold 20%, slide-back 12%) which
+     matches the default FooterAnimalPeek in config/footerAnimals.ts. */
+  @keyframes footer-peek {
+      0%   { transform: translateX(0); }
+     54%   { transform: translateX(0); }
+     68%   { transform: translateX(var(--peek-translate, -100%)); }
+     88%   { transform: translateX(var(--peek-translate, -100%)); }
+    100%   { transform: translateX(0); }
+  }
 }
 
 /*─────────────────────────────────────────────────────────────*/
 /* 4) Base-layer styling                                       */
 /*─────────────────────────────────────────────────────────────*/
-body {
-  background-color: #8AD2FC;
+/* iOS edge cases, all of which show up as coloured bars at the edges of the
+   screen and none of which the <main> background reaches:
+
+   - `html` is what Safari paints in the rubber-band area and in anything the
+     body does not cover. Unset, it defaults to WHITE, so it has to be black
+     explicitly - `body` alone is not enough.
+   - `color-scheme: dark` stops iOS rendering its own surfaces (form controls,
+     scrollbars, the overscroll gutter) in their light-mode colours.
+   - `overscroll-behavior: none` stops the bounce that reveals that gutter in
+     the first place.
+   - The viewport is already `viewport-fit=cover` (see layout.tsx), so the page
+     runs under the notch and home indicator; `width: 100%` + `overflow-x:
+     hidden` keeps anything slightly too wide from opening a sideways scroll,
+     which is the other way a strip of page background becomes visible. */
+html {
+  background-color: #000000;
+  color-scheme: dark;
+  scroll-behavior: smooth;
+  width: 100%;
+  overflow-x: hidden;
 }
 
-html {
-  scroll-behavior: smooth;
+body {
+  background-color: #000000;
+  width: 100%;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overscroll-behavior: none;
 }

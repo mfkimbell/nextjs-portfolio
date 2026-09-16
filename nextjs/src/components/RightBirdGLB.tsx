@@ -1,15 +1,14 @@
 // components/RightBirdGLB.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, RefObject } from "react";
+import React, { useEffect, useRef, RefObject } from "react";
 import { useFrame } from "@react-three/fiber";
-import { useGLTF, useHelper, useAnimations } from "@react-three/drei";
+import { useGLTF, useHelper } from "@react-three/drei";
 import * as THREE from "three";
 import { RIGHT_BIRD } from "@/config/animals";
 
 interface GLTFResult {
   scene: THREE.Group;
-  animations: THREE.AnimationClip[];
 }
 
 interface RightBirdGLBProps {
@@ -18,24 +17,7 @@ interface RightBirdGLBProps {
 
 export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
   /* ─── load model ─── */
-  const { scene, animations } = useGLTF("/models/RightBird.glb") as GLTFResult;
-
-  // Strip the leftover Head/Body "hold" tracks baked into the clip so only
-  // the LowerBeak track plays — otherwise the mixer fights the mouse-tracking
-  // rotation every frame.
-  const beakOnlyClips = useMemo(
-    () =>
-      animations.map(
-        (clip) =>
-          new THREE.AnimationClip(
-            clip.name,
-            clip.duration,
-            clip.tracks.filter((t) => t.name.startsWith("LowerBeak"))
-          )
-      ),
-    [animations]
-  );
-  const { actions } = useAnimations(beakOnlyClips, scene);
+  const { scene } = useGLTF("/models/RightBird.glb") as GLTFResult;
 
   /* ─── refs ─── */
   const sceneRef = useRef<THREE.Object3D>(null!);
@@ -74,20 +56,6 @@ export default function RightBirdGLB({ containerRef }: RightBirdGLBProps) {
       console.error("[RightBirdGLB] Head bone not found");
     }
   }, [scene, BASE_PITCH, BASE_YAW]);
-
-  /* ─── play the baked beak-talk animation on an endless loop ─── */
-  useEffect(() => {
-    const clipName = actions["BeakTalkLoopRight"] ? "BeakTalkLoopRight" : Object.keys(actions)[0];
-    const talkAction = clipName ? actions[clipName] : null;
-    if (!talkAction) {
-      console.warn("[RightBirdGLB] no beak-talk animation found on RightBird.glb");
-      return;
-    }
-    talkAction.reset().setLoop(THREE.LoopRepeat, Infinity).play();
-    return () => {
-      talkAction.stop();
-    };
-  }, [actions]);
 
   /* ─── cursor listener (viewport-wide) ─── */
   useEffect(() => {

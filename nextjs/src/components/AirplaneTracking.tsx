@@ -4,11 +4,23 @@ import { Canvas } from "@react-three/fiber";
 import { Suspense } from "react";
 import AirplaneGLB from "./AirplaneGLB";
 
-export default function AirplaneTracking() {
+import Matte from "@/components/Matte";
+interface AirplaneTrackingProps {
+  className?: string;
+}
+
+export default function AirplaneTracking({
+  className = "pointer-events-none relative h-screen w-full overflow-hidden z-1",
+}: AirplaneTrackingProps) {
   return (
-    <section className="relative w-full h-screen overflow-hidden z-1">
+    <div className={className} aria-hidden="true">
       {/* 1) 3D scene */}
-      <Canvas shadows camera={{ position: [0, 0, 5], fov: 50 }}>
+      <Canvas
+        shadows
+        camera={{ position: [0, 0, 5], fov: 50 }}
+        className="pointer-events-none"
+      >
+        <Matte />
         {/* Ambient fill */}
         <ambientLight intensity={1.6} />
 
@@ -36,6 +48,6 @@ export default function AirplaneTracking() {
           <AirplaneGLB />
         </Suspense>
       </Canvas>     
-    </section>
+    </div>
   );
 }

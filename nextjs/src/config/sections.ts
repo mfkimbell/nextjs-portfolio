@@ -13,6 +13,18 @@ export const sectionConfigs: SectionConfig[] = [
     headingSizeMobile: 'text-3xl',
   },
   {
+    id: 'talk-to-the-birds',
+    offset: -20,
+    headingSize: 'text-4xl',
+    headingSizeMobile: 'text-2xl',
+  },
+  {
+    id: 'experience',
+    offset: 0,
+    headingSize: 'text-3xl',
+    headingSizeMobile: 'text-xl',
+  },
+  {
     id: 'skills',
     offset: -50,
     headingSize: 'text-6xl',
@@ -21,12 +33,6 @@ export const sectionConfigs: SectionConfig[] = [
   {
     id: 'projects',
     offset: -90,
-    headingSize: 'text-3xl',
-    headingSizeMobile: 'text-xl',
-  },
-  {
-    id: 'experience',
-    offset: 0,
     headingSize: 'text-3xl',
     headingSizeMobile: 'text-xl',
   },

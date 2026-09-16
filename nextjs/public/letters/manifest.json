@@ -1,0 +1,132 @@
+{
+  "A": {
+    "depth": 0.3995,
+    "height": 1.0,
+    "width": 0.9283
+  },
+  "B": {
+    "depth": 0.3986,
+    "height": 1.0,
+    "width": 0.7235
+  },
+  "C": {
+    "depth": 0.3973,
+    "height": 1.0,
+    "width": 0.7754
+  },
+  "D": {
+    "depth": 0.3976,
+    "height": 1.0,
+    "width": 0.7541
+  },
+  "E": {
+    "depth": 0.4065,
+    "height": 1.0,
+    "width": 0.7035
+  },
+  "F": {
+    "depth": 0.398,
+    "height": 1.0,
+    "width": 0.6799
+  },
+  "G": {
+    "depth": 0.3934,
+    "height": 1.0,
+    "width": 0.8095
+  },
+  "H": {
+    "depth": 0.3976,
+    "height": 1.0,
+    "width": 0.8271
+  },
+  "I": {
+    "depth": 0.3999,
+    "height": 1.0,
+    "width": 0.3877
+  },
+  "J": {
+    "depth": 0.3998,
+    "height": 1.0,
+    "width": 0.8007
+  },
+  "K": {
+    "depth": 0.3955,
+    "height": 1.0,
+    "width": 0.8278
+  },
+  "L": {
+    "depth": 0.3991,
+    "height": 1.0,
+    "width": 0.6947
+  },
+  "M": {
+    "depth": 0.3962,
+    "height": 1.0,
+    "width": 1.1188
+  },
+  "N": {
+    "depth": 0.3958,
+    "height": 1.0,
+    "width": 0.8807
+  },
+  "O": {
+    "depth": 0.3884,
+    "height": 1.0,
+    "width": 0.7677
+  },
+  "P": {
+    "depth": 0.3963,
+    "height": 1.0,
+    "width": 0.731
+  },
+  "Q": {
+    "depth": 0.3621,
+    "height": 1.0,
+    "width": 0.7296
+  },
+  "R": {
+    "depth": 0.3987,
+    "height": 1.0,
+    "width": 0.7643
+  },
+  "S": {
+    "depth": 0.3944,
+    "height": 1.0,
+    "width": 0.6939
+  },
+  "T": {
+    "depth": 0.3972,
+    "height": 1.0,
+    "width": 0.8147
+  },
+  "U": {
+    "depth": 0.3921,
+    "height": 1.0,
+    "width": 0.8737
+  },
+  "V": {
+    "depth": 0.3945,
+    "height": 1.0,
+    "width": 1.0351
+  },
+  "W": {
+    "depth": 0.3916,
+    "height": 1.0,
+    "width": 1.2705
+  },
+  "X": {
+    "depth": 0.3943,
+    "height": 1.0,
+    "width": 0.9308
+  },
+  "Y": {
+    "depth": 0.3963,
+    "height": 1.0,
+    "width": 0.7535
+  },
+  "Z": {
+    "depth": 0.3906,
+    "height": 1.0,
+    "width": 0.7854
+  }
+}

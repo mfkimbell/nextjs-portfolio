@@ -1,0 +1,139 @@
+{
+  "_comment": "Single source of truth for the left-tree GLB geometry. Edited by hand, consumed by blender/build_left_tree.py. After editing, run: python3 blender/build_left_tree.py",
+
+  "trunk": {
+    "height": 9.20,
+    "radius_base": 0.12,
+    "radius_top": 0.06,
+    "radial_segments": 14,
+    "height_segments": 60,
+    "base_flare_radius": 0.50,
+    "base_flare_fraction": 0.035,
+    "y_jitter_fraction": 0.22,
+    "r_jitter_fraction": 0.11,
+    "knot_ys": [
+      [0.09, 0],
+      [0.20, 1],
+      [0.34, 0],
+      [0.57, 0],
+      [0.72, 1],
+      [0.84, 1],
+      [0.90, 0]
+    ]
+  },
+
+  "_branch_field_docs": {
+    "name": "Human-readable label. Not used by the mesh, just for reading the config.",
+    "t": "Height along the trunk, 0.0 = base, 1.0 = top of trunk (trunk.height above origin).",
+    "side": "+1 = branch points to +X (rightward on the page), -1 = -X (leftward).",
+    "tilt_deg": "Angle above horizontal. 0 = horizontal, 90 = straight up. Slightly negative allowed (points down).",
+    "length": "Branch length in world units. Trunk diameter is ~0.24 for scale — stubs should be short (0.10-0.35).",
+    "r_base_frac": "Currently ignored — base ring is determined by the 3x3 trunk patch.",
+    "segments": "Number of ring cross-sections along the branch (more = smoother taper).",
+    "radial": "Ignored — forced to 8 to match the 3x3 patch boundary count.",
+    "droop": "Parabolic gravitational sag: -droop * t^2 at the tip. 0 = perfectly straight.",
+    "twist_deg": "Small azimuthal offset so the branch isn't perfectly axis-aligned."
+  },
+
+  "_design_note": "Matching public/fauna/left_tree.png — the tree is a tall thin trunk with SHORT stubby branches (broken-twig style). Branch lengths should stay small (0.10-0.35 world units) so the tree silhouette stays inside the PNG column. The raccoon branch is a slightly larger stub as a visual marker for the Projects section — the raccoon scene itself lives elsewhere.",
+
+  "branches": [
+    {
+      "name": "top_stub_R",
+      "t": 0.95,
+      "side": 1,
+      "tilt_deg": -12,
+      "length": 0.20,
+      "r_base_frac": 0.70,
+      "segments": 5,
+      "radial": 8,
+      "droop": 0.03,
+      "twist_deg": 5
+    },
+    {
+      "name": "top_stub_L",
+      "t": 0.93,
+      "side": -1,
+      "tilt_deg": -8,
+      "length": 0.16,
+      "r_base_frac": 0.65,
+      "segments": 4,
+      "radial": 8,
+      "droop": 0.02,
+      "twist_deg": -4
+    },
+    {
+      "name": "upper_stub_R",
+      "t": 0.72,
+      "side": 1,
+      "tilt_deg": -15,
+      "length": 0.28,
+      "r_base_frac": 0.72,
+      "segments": 6,
+      "radial": 8,
+      "droop": 0.05,
+      "twist_deg": 4
+    },
+    {
+      "name": "upper_stub_L",
+      "t": 0.62,
+      "side": -1,
+      "tilt_deg": -10,
+      "length": 0.18,
+      "r_base_frac": 0.65,
+      "segments": 5,
+      "radial": 8,
+      "droop": 0.03,
+      "twist_deg": -3
+    },
+    {
+      "name": "raccoons_projects_section",
+      "t": 0.48,
+      "side": 1,
+      "tilt_deg": -8,
+      "length": 0.34,
+      "r_base_frac": 0.80,
+      "segments": 6,
+      "radial": 8,
+      "droop": 0.04,
+      "twist_deg": 2,
+      "_comment": "Visual marker for the Projects (raccoons) section. Slightly bigger stub. The actual raccoon scene lives in ProjectorRaccoonScene."
+    },
+    {
+      "name": "mid_stub_L",
+      "t": 0.36,
+      "side": -1,
+      "tilt_deg": -12,
+      "length": 0.22,
+      "r_base_frac": 0.70,
+      "segments": 5,
+      "radial": 8,
+      "droop": 0.03,
+      "twist_deg": -5
+    },
+    {
+      "name": "lower_stub_R",
+      "t": 0.22,
+      "side": 1,
+      "tilt_deg": -10,
+      "length": 0.22,
+      "r_base_frac": 0.68,
+      "segments": 5,
+      "radial": 8,
+      "droop": 0.03,
+      "twist_deg": 3
+    },
+    {
+      "name": "lower_stub_L",
+      "t": 0.14,
+      "side": -1,
+      "tilt_deg": -8,
+      "length": 0.18,
+      "r_base_frac": 0.62,
+      "segments": 4,
+      "radial": 8,
+      "droop": 0.02,
+      "twist_deg": -4
+    }
+  ]
+}

@@ -6,7 +6,7 @@ const prisma = new PrismaClient();
 const BOARD_ID = 'shared-board';
 
 // Fix: Match the frontend types exactly
-type Point = { x: number; y: number };
+type Point = { x: number; y: number; pressure?: number };
 type Stroke = { pts: Point[]; color: string; width: number; erase?: boolean };
 
 export async function GET() {

@@ -1,9 +1,9 @@
 // BirdGLB.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
-import { useGLTF, useAnimations } from "@react-three/drei";
+import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { LEFT_BIRD } from "@/config/animals";
 
@@ -13,28 +13,10 @@ interface Props {
 
 interface GLTFResult {
   scene: THREE.Group;
-  animations: THREE.AnimationClip[];
 }
 
 export default function BirdGLB({ containerRef }: Props) {
-  const { scene, animations } = useGLTF("/models/Bird.glb") as GLTFResult;
-
-  // The baked clip also carries "hold" tracks on Head/Body left over from the
-  // Blender export. Strip those out so only the LowerBeak track plays —
-  // otherwise the mixer fights the mouse-tracking rotation every frame.
-  const beakOnlyClips = useMemo(
-    () =>
-      animations.map(
-        (clip) =>
-          new THREE.AnimationClip(
-            clip.name,
-            clip.duration,
-            clip.tracks.filter((t) => t.name.startsWith("LowerBeak"))
-          )
-      ),
-    [animations]
-  );
-  const { actions } = useAnimations(beakOnlyClips, scene);
+  const { scene } = useGLTF("/models/Bird.glb") as GLTFResult;
   const head = useRef<THREE.Object3D>(null!);
 
   /* --------------------------------------------------
@@ -74,21 +56,7 @@ export default function BirdGLB({ containerRef }: Props) {
   useEffect(() => {
     head.current = scene.getObjectByName("Head")!;
     head.current.rotation.set(BASE_PITCH, BASE_YAW, BASE_ROLL);
-  }, [scene, BASE_YAW]);
-
-  /* play the baked beak-talk animation on an endless loop */
-  useEffect(() => {
-    const clipName = actions["BeakTalkLoop"] ? "BeakTalkLoop" : Object.keys(actions)[0];
-    const talkAction = clipName ? actions[clipName] : null;
-    if (!talkAction) {
-      console.warn("[BirdGLB] no beak-talk animation found on Bird.glb");
-      return;
-    }
-    talkAction.reset().setLoop(THREE.LoopRepeat, Infinity).play();
-    return () => {
-      talkAction.stop();
-    };
-  }, [actions]);
+  }, [scene, BASE_PITCH, BASE_YAW, BASE_ROLL]);
 
   /* pointer tracking with pixel-based dead zone and center offset */
   useEffect(() => {
@@ -158,7 +126,7 @@ export default function BirdGLB({ containerRef }: Props) {
       window.removeEventListener("scroll", onScrollResize);
       window.removeEventListener("resize", onScrollResize);
     };
-  }, [containerRef, INVERT_Y]);
+  }, [containerRef, INVERT_Y, INVERT_X, DEAD_ZONE, SENSITIVITY, CENTER_OFFSET_X, CENTER_OFFSET_Y]);
 
   /* per-frame smoothing toward target rotations */
   useFrame(() => {

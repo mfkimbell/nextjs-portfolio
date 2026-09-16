@@ -4,11 +4,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  Send,
   Award,
   Folder,
   Briefcase,
-  Palette,      // ← added palette icon
+  Bird,
   Github,
   Download,
   Mail,
@@ -19,21 +18,15 @@ import { sectionConfigs } from "@/config/sections";
 // ——— NavIcons sub‑component ———
 function NavIcons({ scrolled }: { scrolled: boolean }) {
   const navItems = [
-    { href: "#home", Icon: Send, label: "Home" },
+    { href: "#talk-to-the-birds", Icon: Bird, label: "Talk to the Birds" },
+    { href: "#experience", Icon: Briefcase, label: "Experience" },
     { href: "#skills", Icon: Award, label: "Skills" },
     { href: "#projects", Icon: Folder, label: "Projects" },
-    { href: "#experience", Icon: Briefcase, label: "Experience" },
-    { href: "#metrics", Icon: Palette, label: "Canvas" },
+    { href: "#metrics", Icon: Mail, label: "Contact Me" },
   ];
 
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
     e.preventDefault();
-
-    // If the user clicked the paper-airplane ("Home") icon, just scroll to the very top
-    if (href === "#home") {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
 
     const targetId = href.replace('#', '');
     const element = document.getElementById(targetId);
@@ -81,7 +74,11 @@ function SocialIcons({ scrolled }: { scrolled: boolean }) {
   const socialItems = [
     { href: "https://github.com/mfkimbell", Icon: Github, label: "GitHub", external: true },
     { href: "/resume.pdf", Icon: Download, label: "Resume", download: true },
-    { href: "mailto:mfkimbell@gmail.com?subject=Job%20Offer", Icon: Mail, label: "Email" },
+    {
+      href: "mailto:mfkimbell@gmail.com?subject=Portfolio%20contact&body=Hi%20Michael%2C%0D%0A%0D%0AI%20saw%20your%20portfolio%20and%20wanted%20to%20reach%20out.%0D%0A%0D%0AI%20also%20left%20a%20sketch%20on%20your%20site.%0D%0A%0D%0A",
+      Icon: Mail,
+      label: "Email",
+    },
     { href: "https://www.linkedin.com/in/kimbell151/", Icon: Linkedin, label: "LinkedIn", external: true },
   ];
 
