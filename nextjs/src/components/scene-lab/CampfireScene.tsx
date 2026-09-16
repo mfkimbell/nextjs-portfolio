@@ -9320,9 +9320,18 @@ export default function CampfireScene({
     selectHandler(name);
   };
 
+  // `resize={{ offsetSize: true }}` below: the landscape wrapper rotates this
+  // canvas's container 90deg in portrait, and R3F measures with
+  // getBoundingClientRect(), which returns the SCREEN-ALIGNED bounding box of a
+  // rotated element - 375x812 where the container is really 812x375. It then
+  // sized the canvas to those swapped axes and left the rest of the container
+  // empty, which showed up as a black band across the bottom of the phone.
+  // offsetSize switches the measurement to offsetWidth/offsetHeight, which are
+  // untransformed layout dimensions and so come back the right way round.
   return (
     <Canvas
       className="absolute inset-0"
+      resize={{ offsetSize: true }}
       dpr={[1, 2]}
       shadows
       camera={{ position: [config.cameraX, config.cameraY, config.cameraZ], fov: config.fov, near: 0.01, far: 500 }}

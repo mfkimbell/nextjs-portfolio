@@ -630,8 +630,10 @@ export default function CampsiteTitleIntro({
         className="pointer-events-none absolute inset-0"
         style={{ pointerEvents: "none" }}
       >
+        {/* offsetSize - see the note on the scene canvas in CampfireScene. */}
         <Canvas
           style={{ pointerEvents: "none" }}
+          resize={{ offsetSize: true }}
           dpr={[1, 2]}
           camera={{ position: [0, 0, 17], fov: 50 }}
           gl={{ antialias: true, alpha: true }}
