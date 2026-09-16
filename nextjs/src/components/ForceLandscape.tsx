@@ -69,21 +69,23 @@ export default function ForceLandscape({ children }: { children: React.ReactNode
     };
   }, []);
 
-  // Before the first measure (server render and first paint) render plainly, so
-  // the markup matches what the server sent and hydration stays quiet.
-  if (!box) return <>{children}</>;
-
+  // The wrapper is ALWAYS rendered, never swapped in after measuring. Two
+  // reasons: <main> inside is h-full, so a missing wrapper would give it a
+  // percentage height of nothing and collapse the scene to zero on first
+  // paint; and rendering a different tree before/after the effect is a
+  // hydration mismatch. Server and first client paint both get the same
+  // viewport-unit fallback, then the effect swaps in measured pixels.
   return (
     <div
       style={{
         position: "fixed",
         top: 0,
         left: 0,
-        width: box.w,
-        height: box.h,
+        width: box ? box.w : "100%",
+        height: box ? box.h : "100dvh",
         overflow: "hidden",
         transformOrigin: "top left",
-        transform: box.rotate ? `translateX(${box.tx}px) rotate(90deg)` : undefined,
+        transform: box?.rotate ? `translateX(${box.tx}px) rotate(90deg)` : undefined,
       }}
     >
       {children}
