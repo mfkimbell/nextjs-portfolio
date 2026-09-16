@@ -547,7 +547,6 @@ function drawMeleeMenu(
     : Math.floor(t / dwell) % n;
 
   const YELLOW = "#f2c53a";
-  const YELLOW_HI = "#ffd85a";
   const CYAN = "#7fdcff";
   const INK = "#eaf6ff";
   const BG_TOP = "#0b1a3a";
@@ -753,7 +752,7 @@ function drawMeleeMenu(
     } else {
       ctx.fillStyle = "rgba(0,0,0,0.9)";
       ctx.fillText(items[i].label, px + 11, y + MELEE_PLATE_H / 2 + 2);
-      ctx.fillStyle = "#f2c53a";
+      ctx.fillStyle = YELLOW;
       ctx.fillText(items[i].label, px + 10, y + MELEE_PLATE_H / 2 + 1);
     }
 
