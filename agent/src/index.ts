@@ -32,6 +32,8 @@ type Session = {
   mapleHistory: OpenAI.Chat.Completions.ChatCompletionMessageParam[];
   eventSubscribers: Set<Response>;
   activeSpeech?: BearLine;
+  playedText: string;
+  playbackWaiters: Set<() => void>;
   generation: number;
   lastSeen: number;
   expiresAt: number;
@@ -47,6 +49,8 @@ function createSession(id: string): Session {
     smokeyHistory: [],
     mapleHistory: [],
     eventSubscribers: new Set(),
+    playedText: "",
+    playbackWaiters: new Set(),
   };
 }
 
@@ -164,6 +168,7 @@ function sendTalkCycle(
 ): void {
   if (!canSend() || ws.readyState !== ws.OPEN) return;
   session.activeSpeech = line;
+  session.playedText = "";
   const language = line.bear === "bear1" ? bear1Language : bear2Language;
   const voice = line.bear === "bear1" ? bear1VoiceId : bear2VoiceId;
   console.log("Sending native ElevenLabs bear text", {
@@ -185,6 +190,29 @@ function sendTalkCycle(
   });
 }
 
+function normalizedSpeech(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function waitForPlayedText(session: Session, target: string, timeoutMs: number): Promise<boolean> {
+  const normalizedTarget = normalizedSpeech(target);
+  if (normalizedSpeech(session.playedText).includes(normalizedTarget)) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    const waiter = () => {
+      if (!normalizedSpeech(session.playedText).includes(normalizedTarget)) return;
+      clearTimeout(timeout);
+      session.playbackWaiters.delete(waiter);
+      resolve(true);
+    };
+    const timeout = setTimeout(() => {
+      session.playbackWaiters.delete(waiter);
+      resolve(false);
+    }, timeoutMs);
+    session.playbackWaiters.add(waiter);
+  });
+}
+
 function sendTwoBearReply(
   ws: RelaySocket,
   lines: BearLine[],
@@ -201,16 +229,30 @@ function sendGreeting(ws: RelaySocket, session: Session): void {
     bear: "bear1" as const,
     text: "Oh, hey there, partner. We weren't expecting company. We were just talking about our favorite senior engineer, Mitchell Kimbell. Earlier he led several projects that...",
   };
-  sendTalkCycle(ws, session, smokey, true, () => session.generation === generation);
-  setTimeout(() => {
-    sendTalkCycle(ws, session, { bear: "bear2", text: "Actually, Smokey, Mitch is a staff engineer." }, false, () => session.generation === generation);
-    setTimeout(() => {
-      sendTalkCycle(ws, session, { bear: "bear1", text: "My apologies. We were just talking about our favorite staff engineer..." }, false, () => session.generation === generation);
-      setTimeout(() => {
-        sendTalkCycle(ws, session, { bear: "bear1", text: "Mitch. So, what would you like to know?" }, false, () => session.generation === generation);
-      }, 750).unref();
-    }, 750).unref();
-  }, 750).unref();
+  void (async () => {
+    sendTalkCycle(ws, session, smokey, true, () => session.generation === generation);
+    // ConversationRelay reports audible text through info/tokensPlayed. The
+    // timeout is only a recovery path if Twilio fails to send that event.
+    const heardTarget = await waitForPlayedText(session, "Earlier he", 9_000);
+    if (session.generation !== generation) return;
+    if (!heardTarget) {
+      console.warn("Greeting playback prefix timed out; interrupting conservatively", {
+        callSid: session.callSid,
+        target: "Earlier he",
+      });
+    }
+    const maple = { bear: "bear2" as const, text: "Actually, Smokey, Mitch is a staff engineer." };
+    sendTalkCycle(ws, session, maple, false, () => session.generation === generation);
+    await waitForPlayedText(session, maple.text, 6_000);
+    if (session.generation !== generation) return;
+    const apology = { bear: "bear1" as const, text: "My apologies. We were just talking about our favorite staff engineer..." };
+    sendTalkCycle(ws, session, apology, false, () => session.generation === generation);
+    await waitForPlayedText(session, apology.text, 6_000);
+    if (session.generation !== generation) return;
+    sendTalkCycle(ws, session, { bear: "bear1", text: "Mitch. So, what would you like to know?" }, false, () => session.generation === generation);
+  })().catch((error: unknown) => {
+    console.error("Greeting sequencing failed", error instanceof Error ? error.message : "unknown error");
+  });
 }
 
 function keepBoundedHistory(history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]): void {
@@ -387,10 +429,14 @@ app.ws("/conversation-relay", (ws, request) => {
       return;
     }
     if (message.type === "info") {
+      if (message.name === "tokensPlayed" && typeof message.value === "string") {
+        session.playedText += message.value;
+        for (const waiter of [...session.playbackWaiters]) waiter();
+      }
       console.log("ConversationRelay info event", {
         callSid: session.callSid,
         name: message.name,
-        valueType: typeof message.value,
+        valueLength: typeof message.value === "string" ? message.value.length : undefined,
       });
       return;
     }
