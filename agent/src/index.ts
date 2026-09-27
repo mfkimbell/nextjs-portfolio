@@ -210,7 +210,9 @@ app.post("/call", (request, response) => {
     voice: bear1Voice,
     transcriptionLanguage: bear1Language,
     interruptible: "any",
-    reportInputDuringAgentSpeech: "speech",
+    // Twilio's current ConversationRelay API accepts "speech" here, while
+    // the installed SDK version still types this property as boolean.
+    reportInputDuringAgentSpeech: "speech" as unknown as boolean,
   });
   relay.language({ code: bear1Language, ttsProvider: bear1Provider, voice: bear1Voice });
   relay.language({ code: bear2Language, ttsProvider: bear2Provider, voice: bear2Voice });
