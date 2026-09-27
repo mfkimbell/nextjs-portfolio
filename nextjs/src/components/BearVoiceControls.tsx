@@ -3,10 +3,10 @@
 import type { BearVoiceAgent } from "@/hooks/useBearVoiceAgent";
 
 export default function BearVoiceControls({ agent }: { agent: BearVoiceAgent }) {
-  const { error, isMuted, isRemoteSpeaking, start, status, stop, toggleMute } = agent;
+  const { activeSpeakerName, error, isMuted, isRemoteSpeaking, start, status, stop, toggleMute } = agent;
   const isConnecting = status === "connecting";
   const isActive = status === "active";
-  const statusText = error || (isActive ? (isRemoteSpeaking ? "Bear is speaking" : "Listening") : status);
+  const statusText = error || (isActive ? (activeSpeakerName ? `${activeSpeakerName} speaking` : isRemoteSpeaking ? "Bear is speaking" : "Listening") : status);
 
   return (
     <section

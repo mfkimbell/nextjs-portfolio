@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     const agentBaseUrl = required("PROD_AGENT_BASE_URL").replace(/\/$/, "");
     if (!agentBaseUrl.startsWith("https://")) throw new Error("PROD_AGENT_BASE_URL must use HTTPS");
     const smokeyLanguage = process.env.SMOKEY_TTS_LANGUAGE || "en-US";
-    const smokeyVoice = process.env.SMOKEY_ELEVENLABS_VOICE_ID || "Cb8NLd0sUB8jI4MW2f9M";
+    const smokeyVoice = process.env.SMOKEY_ELEVENLABS_VOICE_ID || "75DchiXtNUXnu3lra8pV";
     const mapleLanguage = process.env.MAPLE_TTS_LANGUAGE || "en-GB";
     const mapleVoice = process.env.MAPLE_ELEVENLABS_VOICE_ID || "oubi7HGxNVjXMnWLgwBT";
 

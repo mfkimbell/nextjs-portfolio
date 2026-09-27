@@ -19,6 +19,7 @@ import type { CampfireSceneConfig, LocationView, ObjectOverride } from "@/compon
 import { defaultLocationView, DEFAULT_CAMPFIRE_CONFIG, DUPLICATE_PREFIX, EMPTY_OVERRIDE, BUG_SWARM_TWEAK_DEFAULTS } from "@/components/scene-lab/sceneConfig";
 import type { BugSwarmScope, BugSwarmTweak } from "@/components/scene-lab/sceneConfig";
 import banjoBearPoseRaw from "@/config/banjoBearPose.json";
+import rockingChairBearPoseRaw from "@/config/rockingChairBearPose.json";
 import bearPosesRaw from "@/config/bearPoses.json";
 import { useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
 import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
@@ -80,6 +81,45 @@ const BANJO_BEAR_POSE = banjoBearPoseRaw as {
 /** Frames-per-second the banjo bear lab uses to convert its `frame` slider
  *  into clip time. Must match BanjoBearLab (`clip.time = frame / 24`). */
 const BANJO_BEAR_FPS = 24;
+
+// Rocking-chair bear's full-body pose, authored in /scene-lab/rocking-chair-bear
+// (rockingChairBearPose.json) - every posable bone in the rig (torso, both
+// arms, both legs, tail), each with rotation AND scale. Scale is what gives
+// "length": a bone's children sit at a fixed translation along its own local
+// +Y (see the bind-pose dump this rig was built from - every child joint's
+// translation is ~[0, length, 0] in its parent's local space), so scaling a
+// bone's Y stretches that whole downstream chain with it - shoulder_L's sy
+// lengthens the entire arm, not just the shoulder stub. sx/sz thicken it.
+//
+// Applied as a RELATIVE layer on top of whatever the sit_log mixer already
+// wrote that frame (quaternion.multiply, not "replace with bind*delta"), so
+// all-zero-rotation + scale-1 is a true no-op that leaves the site's existing
+// motion (head bob, breathing, etc.) untouched - only bones you actually move
+// off their defaults change anything. `enabled` still exists as a single
+// kill switch for the whole layer.
+type RockingChairBoneName =
+  | "center" | "spine" | "chest" | "pelvis" | "head"
+  | "shoulder_L" | "upperarm_L" | "arm_L" | "hand_L" | "fingers_L"
+  | "shoulder_R" | "upperarm_R" | "arm_R" | "hand_R" | "fingers_R"
+  | "thigh_L" | "leg_L" | "foot_L" | "toe_L"
+  | "thigh_R" | "leg_R" | "foot_R" | "toe_R"
+  | "tail_01";
+
+type BonePose = { rx: number; ry: number; rz: number; sx: number; sy: number; sz: number };
+
+const ROCKING_CHAIR_BEAR_POSE = rockingChairBearPoseRaw as {
+  enabled: boolean;
+  parts: Record<RockingChairBoneName, BonePose>;
+};
+
+const ROCKING_CHAIR_BONE_NAMES: RockingChairBoneName[] = [
+  "center", "spine", "chest", "pelvis", "head",
+  "shoulder_L", "upperarm_L", "arm_L", "hand_L", "fingers_L",
+  "shoulder_R", "upperarm_R", "arm_R", "hand_R", "fingers_R",
+  "thigh_L", "leg_L", "foot_L", "toe_L",
+  "thigh_R", "leg_R", "foot_R", "toe_R",
+  "tail_01",
+];
 
 // Per-bear bone/prop overrides authored in /scene-lab/bear-pose. Each key is
 // a bear id (front_log / back_left_log / back_right_log / table) referenced
@@ -949,7 +989,7 @@ function boneBasis(fwd: THREE.Vector3, up: THREE.Vector3) {
 /** how far a bear will crane its head off neutral before it stops trying, radians */
 const MAX_GLANCE = 1.0;
 
-type HeadRegistry = Map<string, THREE.Vector3>;
+type HeadRegistry = Map<string, { bearId?: AnimalPlacement["bearId"]; position: THREE.Vector3 }>;
 
 /**
  * Live world positions the wires need: where each controller's cord leaves its shell,
@@ -1085,6 +1125,10 @@ interface AnimalPlacement {
   /** key into bearPoses.json - the bear-pose lab writes bone deltas and prop
    *  transforms under this key, and this Animal applies them every frame. */
   bearId?: "front_log" | "back_left_log" | "back_right_log" | "table";
+  /** runtime-animate arms + legs into the rocking-chair pose authored in
+   *  /scene-lab/rocking-chair-bear (rockingChairBearPose.json), the same
+   *  hard-override technique banjoPlayer uses for its arms. */
+  rockingChairPose?: boolean;
 }
 
 const ANIMALS: AnimalPlacement[] = [
@@ -1284,7 +1328,7 @@ const CONTACT_BEAR: AnimalPlacement = {
 const ROCKING_CHAIR_BEAR: AnimalPlacement = {
   url: BEAR_URL, position: [0, 0.4, 0], rotationY: 0, scale: 0.5,
   label: "bear in the rocking chair", animation: "sit_log", animationOffset: 5.6, animationSpeed: 1,
-  accessories: ["glasses"], bearId: "table",
+  accessories: ["glasses"], bearId: "table", rockingChairPose: true,
 };
 
 const seededRandom = (seed: number) => {
@@ -7322,13 +7366,21 @@ function Animal({
   const cubEarRRestQ = useRef<THREE.Quaternion | null>(null);
   const cubIdleTime = useRef(seed * 0.73);
   const mouthBoneRef = useRef<THREE.Bone | null>(null);
-  const mouthRestQRef = useRef<THREE.Quaternion | null>(null);
+  const mouthMixerQRef = useRef(new THREE.Quaternion());
+  const mouthJawQRef = useRef(new THREE.Quaternion());
+  const mouthEnvelopeRef = useRef(0);
 
   // Banjo-bear arm override: eight arm bones + their rest quaternions, so the
   // picking loop can compose `rest * userEuler` each frame and hard-replace
   // whatever the base clip wrote for arms.
   const banjoBonesRef = useRef<Partial<Record<string, THREE.Bone>>>({});
   const banjoRestQRef = useRef<Partial<Record<string, THREE.Quaternion>>>({});
+  // Rocking-chair bear: whole-skeleton pose cache (rotation AND scale rest
+  // values, so scale sliders can stretch/shrink a bone relative to its own
+  // authored length rather than to an arbitrary 1).
+  const chairBonesRef = useRef<Partial<Record<string, THREE.Bone>>>({});
+  const chairRestQRef = useRef<Partial<Record<string, THREE.Quaternion>>>({});
+  const chairRestSRef = useRef<Partial<Record<string, THREE.Vector3>>>({});
   // Banjo-bear Food-socket freeze: sit_log animates Food to trace the right paw
   // over the loop. The lab pauses the clip at a single frame so Food (and any
   // parented banjo) stays put; on the site the clip runs unpaused, so we sample
@@ -7374,18 +7426,16 @@ function Animal({
     handRRef.current = null;
     handRRestQRef.current = null;
     mouthBoneRef.current = null;
-    mouthRestQRef.current = null;
 
     // The model has no shared skeleton between placements; cache its jaw once
-    // so voice motion can layer over the mixer without a per-frame traversal.
+    // so voice motion can layer over the mixer's current jaw pose each frame.
     if (placement.bearId === "back_left_log" || placement.bearId === "back_right_log") {
       model.traverse((o) => {
         const bone = o as THREE.Bone;
-        const normalizedName = o.name.toLowerCase().replace(/[^a-z0-9]/g, "");
-        if (!mouthBoneRef.current && bone.isBone && (normalizedName.includes("jaw") || normalizedName.includes("mouth"))) {
-          mouthBoneRef.current = bone;
-          mouthRestQRef.current = bone.quaternion.clone();
-        }
+          const normalizedName = o.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+          if (!mouthBoneRef.current && bone.isBone && (normalizedName.includes("jaw") || normalizedName.includes("mouth"))) {
+            mouthBoneRef.current = bone;
+          }
       });
     }
 
@@ -7479,7 +7529,19 @@ function Animal({
         cubEarRRestQ.current = b.quaternion.clone();
       }
     });
-  }, [model, placement.url, placement.bearId, placement.banjoPlayer, gltf.animations, seed]);
+    if (placement.rockingChairPose) {
+      const partNames = new Set<string>(ROCKING_CHAIR_BONE_NAMES);
+      model.traverse((o) => {
+        const b = o as THREE.Bone;
+        if (b.isBone && partNames.has(o.name)) {
+          chairBonesRef.current[o.name] = b;
+          chairRestQRef.current[o.name] = b.quaternion.clone();
+          chairRestSRef.current[o.name] = b.scale.clone();
+        }
+      });
+    }
+
+  }, [model, placement.url, placement.bearId, placement.banjoPlayer, placement.rockingChairPose, gltf.animations, seed]);
 
   const { actions, names: actionNames } = useAnimations(gltf.animations || [], groupRef);
 
@@ -7628,7 +7690,7 @@ function Animal({
     return () => { unregisterDuplicateAnimation(name); };
   }, [name, gltf.animations, placement.animation, placement.animationOffset, placement.animationSpeed]);
 
-  useFrame((state) => {
+  useFrame((_, delta) => {
     if (!groupRef.current) return;
     const c = configRef.current;
     const o = c.objectOverrides?.[name] ?? EMPTY_OVERRIDE;
@@ -7746,23 +7808,56 @@ function Animal({
       applyArm("hand_R");
     }
 
+    // Rocking-chair bear full-body pose. Unlike the banjo arms above (which
+    // hard-replace, freezing those bones dead still), this layers a RELATIVE
+    // delta on top of whatever sit_log's mixer already wrote this frame:
+    // quaternion.multiply (not copy-then-multiply-from-rest), so a bone left
+    // at rx=ry=rz=0 keeps animating normally. Scale is set directly against
+    // this bone's own rest scale (component-wise, so scale-1 is also a true
+    // no-op) - sy is the one that actually changes a limb's LENGTH, since
+    // every child joint in this rig sits at a fixed offset along its parent's
+    // local +Y; sx/sz just thicken it. Gated on the JSON's own `enabled` flag
+    // so flipping it off in rockingChairBearPose.json (or from the lab) drops
+    // straight back to whatever sit_log does natively, no code change needed.
+    if (placement.rockingChairPose && ROCKING_CHAIR_BEAR_POSE.enabled) {
+      const applyPart = (name: RockingChairBoneName) => {
+        const b = chairBonesRef.current[name];
+        const restS = chairRestSRef.current[name];
+        const r = ROCKING_CHAIR_BEAR_POSE.parts[name];
+        if (!b || !restS || !r) return;
+        const eu = new THREE.Euler(r.rx, r.ry, r.rz, "XYZ");
+        const dq = new THREE.Quaternion().setFromEuler(eu);
+        b.quaternion.multiply(dq);
+        b.scale.set(restS.x * r.sx, restS.y * r.sy, restS.z * r.sz);
+      };
+      for (const name of ROCKING_CHAIR_BONE_NAMES) applyPart(name);
+    }
+
     const mouth = mouthBoneRef.current;
-    const mouthRest = mouthRestQRef.current;
     const voice = bearVoiceRef?.current;
-    if (mouth && mouthRest) {
+    if (mouth) {
       const isActiveSpeaker = voice?.isRemoteSpeaking && placement.bearId === voice.activeBearId;
-      const level = Math.min(1, Math.max(0, (voice?.remoteAudioLevel ?? 0) * 18));
-      const opening = isActiveSpeaker
-        ? (0.018 + level * 0.065) * (0.45 + 0.55 * Math.sin(state.clock.elapsedTime * 19) ** 2)
+      const rms = voice?.remoteAudioLevel ?? 0;
+      const target = isActiveSpeaker && rms > 0.01
+        ? Math.min(1, (rms - 0.01) / 0.045)
         : 0;
-      mouth.quaternion.copy(mouthRest).multiply(new THREE.Quaternion().setFromAxisAngle(FACE_RIGHT_LOCAL, opening));
+      const envelope = mouthEnvelopeRef.current;
+      const rate = target > envelope ? 20 : 16;
+      const nextEnvelope = envelope + (target - envelope) * (1 - Math.exp(-rate * Math.min(delta, 0.1)));
+      mouthEnvelopeRef.current = nextEnvelope < 0.001 ? 0 : nextEnvelope;
+
+      // Capture the mixer result first, then apply the jaw delta. This preserves
+      // any baked/clip mouth pose instead of snapping back to a static rest pose.
+      mouthMixerQRef.current.copy(mouth.quaternion);
+      mouthJawQRef.current.setFromAxisAngle(FACE_RIGHT_LOCAL, mouthEnvelopeRef.current * 0.075);
+      mouth.quaternion.copy(mouthMixerQRef.current).multiply(mouthJawQRef.current);
     }
   });
 
   // Runs after drei's mixer update - useAnimations subscribes its useFrame before
   // this one, and R3F runs same-priority callbacks in subscription order - so this
   // layers on top of the clip instead of being overwritten by it.
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
     if (!social || !groupRef.current || !headRef.current || !heads?.current) return;
     const head = headRef.current;
     const reg = heads.current;
@@ -7770,23 +7865,44 @@ function Animal({
 
     groupRef.current.updateMatrixWorld(true);
     head.getWorldPosition(tmpV);
-    reg.set(name, (reg.get(name) ?? new THREE.Vector3()).copy(tmpV));
+    const entry = reg.get(name) ?? { position: new THREE.Vector3() };
+    entry.bearId = placement.bearId;
+    entry.position.copy(tmpV);
+    reg.set(name, entry);
 
     const g = glance.current;
-    g.t += dt;
-    if (g.phase === "wait" && g.t >= g.next) {
-      const others = [...reg.keys()].filter((k) => k !== name);
-      if (others.length) {
-        g.target = others[Math.floor(rng() * others.length)];
-        g.phase = "turn";
-        g.t = 0;
-      } else {
-        g.t = 0;
+    const voice = bearVoiceRef?.current;
+    const isVoiceBear = placement.bearId === "back_left_log" || placement.bearId === "back_right_log";
+    const remoteConversation = Boolean(voice?.isRemoteSpeaking && isVoiceBear);
+    const isActiveSpeaker = remoteConversation && placement.bearId === voice?.activeBearId;
+    const activeBearHead = remoteConversation && !isActiveSpeaker
+      ? [...reg.values()].find((candidate) => candidate.bearId === voice?.activeBearId)?.position
+      : undefined;
+
+    if (remoteConversation) {
+      // Voice bears own their conversational pose while the mixed remote segment
+      // is active; resume the ordinary social glance state once it ends.
+      g.phase = "wait";
+      g.t = 0;
+      g.w = 0;
+      g.target = "";
+    } else {
+      g.t += dt;
+      if (g.phase === "wait" && g.t >= g.next) {
+        const others = [...reg.keys()].filter((k) => k !== name);
+        if (others.length) {
+          g.target = others[Math.floor(rng() * others.length)];
+          g.phase = "turn";
+          g.t = 0;
+        } else {
+          g.t = 0;
+        }
       }
-    } else if (g.phase === "turn" && g.t >= 0.85) { g.phase = "hold"; g.t = 0; }
-    else if (g.phase === "hold" && g.t >= 1.6 + rng() * 2.2) { g.phase = "back"; g.t = 0; }
-    else if (g.phase === "back" && g.t >= 1.1) {
-      g.phase = "wait"; g.t = 0; g.next = 4 + rng() * 6; g.target = "";
+      else if (g.phase === "turn" && g.t >= 0.85) { g.phase = "hold"; g.t = 0; }
+      else if (g.phase === "hold" && g.t >= 1.6 + rng() * 2.2) { g.phase = "back"; g.t = 0; }
+      else if (g.phase === "back" && g.t >= 1.1) {
+        g.phase = "wait"; g.t = 0; g.next = 4 + rng() * 6; g.target = "";
+      }
     }
 
     const smooth = (u: number) => u * u * (3 - 2 * u);
@@ -7796,8 +7912,9 @@ function Animal({
       g.phase === "back" ? 1 - smooth(Math.min(g.t / 1.1, 1)) : 0;
     g.w += (want - g.w) * Math.min(1, dt * 8);
 
-    const tgt = g.target ? reg.get(g.target) : undefined;
-    if (tgt && g.w > 0.001) {
+    const tgt = activeBearHead ?? (g.target ? reg.get(g.target)?.position : undefined);
+    const targetWeight = activeBearHead ? 0.16 : g.w;
+    if (tgt && targetWeight > 0.001) {
       // Rotate the face-forward vector onto the target, done in the head's PARENT
       // space so it is independent of however the clip has posed the head.
       const parent = head.parent;
@@ -7817,8 +7934,14 @@ function Animal({
           tmpV2.copy(cur).lerp(tmpV2, MAX_GLANCE / ang).normalize();
         }
         tmpQ2.setFromUnitVectors(cur, tmpV2).multiply(head.quaternion);
-        head.quaternion.slerp(tmpQ2, g.w);
+        head.quaternion.slerp(tmpQ2, targetWeight);
       }
+    }
+    if (isActiveSpeaker) {
+      // A small additive nod keeps the speaker alive without competing with the
+      // mixer, social-glance rotation, or the banjo/pose bone overrides.
+      tmpQ.setFromAxisAngle(FACE_RIGHT_LOCAL, Math.sin(state.clock.elapsedTime * 2.4) * 0.028);
+      head.quaternion.multiply(tmpQ);
     }
   });
 

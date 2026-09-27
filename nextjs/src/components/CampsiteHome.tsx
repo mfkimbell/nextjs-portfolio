@@ -50,13 +50,17 @@ const PANELS = [
  * the left to move round the fire.
  */
 export default function CampsiteHome() {
-  const bearVoiceAgent = useBearVoiceAgent();
   const [mode, setMode] = useState<Mode>("config");
   const [panel, setPanel] = useState(0);
   // Config is immutable in this component - all live tuning happens in the
   // full scene-lab under /scene-lab, which reads/writes the JSON directly.
   // No setter needed here; keeping it triggers a no-unused-vars error.
   const config: CampfireSceneConfig = DEFAULT_CAMPFIRE_CONFIG;
+  const bearVoiceAgent = useBearVoiceAgent({
+    speechVolume: config.speechVolume,
+    smokeySpeechVolume: config.smokeySpeechVolume,
+    mapleSpeechVolume: config.mapleSpeechVolume,
+  });
   // Title screen gate for site mode. Fresh every time you enter preview - the
   // cinematic is part of the vibe, so returning visitors see it too.
   const [showTitle, setShowTitle] = useState(true);

@@ -11,6 +11,7 @@ type VoiceCall = {
   isMuted(): boolean;
   mute(muted: boolean): void;
   on(event: string, callback: (...args: unknown[]) => void): void;
+  parameters?: { CallSid?: string };
 };
 
 type VoiceDevice = {
@@ -21,6 +22,7 @@ type VoiceDevice = {
 };
 
 export type BearVoiceAgent = {
+  activeSpeakerName: string | null;
   error: string | null;
   isMuted: boolean;
   isRemoteSpeaking: boolean;
@@ -33,24 +35,90 @@ export type BearVoiceAgent = {
 };
 
 const DEFAULT_DESTINATION = "portfolio-bears";
+const DEV_AGENT_BASE_URL = "https://mkimbell.ngrok.dev";
 
-export function useBearVoiceAgent(): BearVoiceAgent {
+const bearNameForId = (bearId: BearVoiceState["activeBearId"]) =>
+  bearId === "back_left_log" ? "Smokey" : "Maple";
+
+const isBearId = (value: unknown): value is BearVoiceState["activeBearId"] =>
+  value === "back_left_log" || value === "back_right_log";
+
+type TwilioMediaHandler = {
+  _masterAudio?: HTMLAudioElement;
+  outputs?: Map<string, { audio?: HTMLAudioElement }>;
+};
+
+function clampVolume(value: number): number {
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
+}
+
+function applyRemoteVolume(call: VoiceCall | null, volume: number): void {
+  const handler = (call as unknown as { _mediaHandler?: TwilioMediaHandler } | null)?._mediaHandler;
+  const audio = handler?._masterAudio ?? handler?.outputs?.get("default")?.audio;
+  if (audio) audio.volume = clampVolume(volume);
+}
+
+const parseEventData = (event: MessageEvent<string>) => {
+  try {
+    const parsed: unknown = JSON.parse(event.data);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const payload = parsed as { bearId?: unknown; data?: { bearId?: unknown }; type?: unknown };
+    return {
+      bearId: payload.bearId ?? payload.data?.bearId,
+      type: payload.type,
+    };
+  } catch {
+    return null;
+  }
+};
+
+export function useBearVoiceAgent({
+  speechVolume = 1,
+  smokeySpeechVolume = 1,
+  mapleSpeechVolume = 1,
+}: {
+  speechVolume?: number;
+  smokeySpeechVolume?: number;
+  mapleSpeechVolume?: number;
+} = {}): BearVoiceAgent {
   const callRef = useRef<VoiceCall | null>(null);
   const deviceRef = useRef<VoiceDevice | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioFrameRef = useRef<number | null>(null);
   const audioSetupTimerRef = useRef<number | null>(null);
-  const activeBearTimerRef = useRef<number | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const speechVolumeRef = useRef({
+    master: clampVolume(speechVolume),
+    smokey: clampVolume(smokeySpeechVolume),
+    maple: clampVolume(mapleSpeechVolume),
+  });
   const voiceRef = useRef<BearVoiceState>({
     activeBearId: "back_left_log",
     isRemoteSpeaking: false,
     remoteAudioLevel: 0,
+    phase: "idle",
+    segmentId: 0,
+    speakerSource: "default",
+    isInterrupted: false,
   });
   const [error, setError] = useState<string | null>(null);
+  const [activeSpeakerName, setActiveSpeakerName] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isRemoteSpeaking, setIsRemoteSpeaking] = useState(false);
   const [remoteAudioLevel, setRemoteAudioLevel] = useState(0);
   const [status, setStatus] = useState<VoiceStatus>("idle");
+
+  useEffect(() => {
+    speechVolumeRef.current = {
+      master: clampVolume(speechVolume),
+      smokey: clampVolume(smokeySpeechVolume),
+      maple: clampVolume(mapleSpeechVolume),
+    };
+    const trim = voiceRef.current.activeBearId === "back_left_log"
+      ? speechVolumeRef.current.smokey
+      : speechVolumeRef.current.maple;
+    applyRemoteVolume(callRef.current, speechVolumeRef.current.master * trim);
+  }, [mapleSpeechVolume, smokeySpeechVolume, speechVolume]);
 
   const cleanupAudioMonitor = useCallback(() => {
     if (audioFrameRef.current !== null) {
@@ -61,10 +129,6 @@ export function useBearVoiceAgent(): BearVoiceAgent {
       window.clearTimeout(audioSetupTimerRef.current);
       audioSetupTimerRef.current = null;
     }
-    if (activeBearTimerRef.current !== null) {
-      window.clearInterval(activeBearTimerRef.current);
-      activeBearTimerRef.current = null;
-    }
     if (audioContextRef.current) {
       void audioContextRef.current.close();
       audioContextRef.current = null;
@@ -72,11 +136,22 @@ export function useBearVoiceAgent(): BearVoiceAgent {
     voiceRef.current.isRemoteSpeaking = false;
     voiceRef.current.remoteAudioLevel = 0;
     voiceRef.current.activeBearId = "back_left_log";
+    voiceRef.current.segmentId = 0;
+    voiceRef.current.speakerSource = "default";
+    voiceRef.current.phase = "interrupted";
+    voiceRef.current.isInterrupted = true;
     setIsRemoteSpeaking(false);
     setRemoteAudioLevel(0);
   }, []);
 
+  const cleanupAgentEvents = useCallback(() => {
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    setActiveSpeakerName(null);
+  }, []);
+
   const cleanup = useCallback(() => {
+    cleanupAgentEvents();
     cleanupAudioMonitor();
     try {
       deviceRef.current?.destroy();
@@ -86,7 +161,58 @@ export function useBearVoiceAgent(): BearVoiceAgent {
     callRef.current = null;
     deviceRef.current = null;
     setIsMuted(false);
-  }, [cleanupAudioMonitor]);
+  }, [cleanupAgentEvents, cleanupAudioMonitor]);
+
+  const subscribeToAgentEvents = useCallback((callSid: string) => {
+    cleanupAgentEvents();
+
+    const configuredBaseUrl = process.env.NEXT_PUBLIC_BEAR_AGENT_BASE_URL?.trim();
+    const agentBaseUrl =
+      process.env.NODE_ENV === "production" ? configuredBaseUrl : DEV_AGENT_BASE_URL;
+    if (!agentBaseUrl) {
+      console.warn("[BearVoice] Bear event URL is not configured.");
+      return;
+    }
+
+    const url = new URL(`/events/${encodeURIComponent(callSid)}`, agentBaseUrl);
+    const eventToken = process.env.NEXT_PUBLIC_BEAR_EVENT_TOKEN?.trim();
+    // Temporary browser-visible token until the event endpoint uses authenticated sessions.
+    if (process.env.NODE_ENV === "production" && eventToken) {
+      url.searchParams.set("token", eventToken);
+    }
+
+    const eventSource = new EventSource(url);
+    eventSourceRef.current = eventSource;
+
+    const handleStarted = (event: Event) => {
+      const data = parseEventData(event as MessageEvent<string>);
+      if (!data || !isBearId(data.bearId)) return;
+      voiceRef.current.activeBearId = data.bearId;
+      voiceRef.current.segmentId = (voiceRef.current.segmentId ?? 0) + 1;
+      voiceRef.current.speakerSource = "backend";
+      voiceRef.current.phase = "remote-speaking";
+      voiceRef.current.isInterrupted = false;
+      const trim = data.bearId === "back_left_log"
+        ? speechVolumeRef.current.smokey
+        : speechVolumeRef.current.maple;
+      applyRemoteVolume(callRef.current, speechVolumeRef.current.master * trim);
+      setActiveSpeakerName(bearNameForId(data.bearId));
+    };
+
+    const handleInterrupted = () => {
+      voiceRef.current.phase = "interrupted";
+      voiceRef.current.isInterrupted = true;
+      setActiveSpeakerName(null);
+    };
+
+    eventSource.addEventListener("bear.speech.started", handleStarted);
+    eventSource.addEventListener("bear.speech.interrupted", handleInterrupted);
+    eventSource.onmessage = (event) => {
+      const data = parseEventData(event);
+      if (data?.type === "bear.speech.started") handleStarted(event);
+      if (data?.type === "bear.speech.interrupted") handleInterrupted();
+    };
+  }, [cleanupAgentEvents]);
 
   const monitorRemoteAudio = useCallback(
     (call: VoiceCall) => {
@@ -100,6 +226,10 @@ export function useBearVoiceAgent(): BearVoiceAgent {
         }
 
         const audioContext = new AudioContext();
+        const trim = voiceRef.current.activeBearId === "back_left_log"
+          ? speechVolumeRef.current.smokey
+          : speechVolumeRef.current.maple;
+        applyRemoteVolume(call, speechVolumeRef.current.master * trim);
         const source = audioContext.createMediaStreamSource(stream);
         const analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
@@ -107,6 +237,7 @@ export function useBearVoiceAgent(): BearVoiceAgent {
         audioContextRef.current = audioContext;
         const samples = new Float32Array(analyser.fftSize);
         let lastAudibleAt = 0;
+        let lastStatePublishAt = 0;
 
         const measure = () => {
           analyser.getFloatTimeDomainData(samples);
@@ -117,27 +248,26 @@ export function useBearVoiceAgent(): BearVoiceAgent {
           if (rms > 0.012) lastAudibleAt = now;
           const speaking = now - lastAudibleAt < 350;
           const wasSpeaking = voiceRef.current.isRemoteSpeaking;
-          if (speaking && !wasSpeaking) {
+          if (speaking && !wasSpeaking && voiceRef.current.segmentId === 0) {
+            // Until the backend identifies a speaker, the first audible segment is Smokey.
             voiceRef.current.activeBearId = "back_left_log";
-            // The voice backend currently reports only mixed remote audio, not a
-            // speaker identity. Alternate predictably so exactly one bear speaks.
-            activeBearTimerRef.current = window.setInterval(() => {
-              voiceRef.current.activeBearId =
-                voiceRef.current.activeBearId === "back_left_log"
-                  ? "back_right_log"
-                  : "back_left_log";
-            }, 2000);
-          } else if (!speaking && wasSpeaking) {
-            if (activeBearTimerRef.current !== null) {
-              window.clearInterval(activeBearTimerRef.current);
-              activeBearTimerRef.current = null;
-            }
-            voiceRef.current.activeBearId = "back_left_log";
+            voiceRef.current.segmentId = (voiceRef.current.segmentId ?? 0) + 1;
+            voiceRef.current.speakerSource = "default";
+            voiceRef.current.phase = "remote-speaking";
+            voiceRef.current.isInterrupted = false;
+          } else if (!speaking && wasSpeaking && voiceRef.current.speakerSource !== "backend") {
+            voiceRef.current.phase = "idle";
+            voiceRef.current.isInterrupted = false;
           }
           voiceRef.current.remoteAudioLevel = rms;
           voiceRef.current.isRemoteSpeaking = speaking;
-          setRemoteAudioLevel(rms);
-          setIsRemoteSpeaking(speaking);
+          // The scene reads RMS from the ref at display rate. Controls only need a
+          // coarse meter/status update, except for immediate speaking transitions.
+          if (speaking !== wasSpeaking || now - lastStatePublishAt >= 120) {
+            lastStatePublishAt = now;
+            setRemoteAudioLevel(rms);
+            setIsRemoteSpeaking(speaking);
+          }
           audioFrameRef.current = requestAnimationFrame(measure);
         };
 
@@ -182,9 +312,12 @@ export function useBearVoiceAgent(): BearVoiceAgent {
         params: { To: process.env.NEXT_PUBLIC_BEAR_AGENT_TO || DEFAULT_DESTINATION },
       });
       callRef.current = call;
-      call.on("accept", () => {
+      call.on("accept", (acceptedCall?: unknown) => {
+        const accepted = (acceptedCall || call) as VoiceCall;
+        const callSid = accepted.parameters?.CallSid || call.parameters?.CallSid;
         setStatus("active");
-        monitorRemoteAudio(call);
+        monitorRemoteAudio(accepted);
+        if (callSid) subscribeToAgentEvents(callSid);
       });
       call.on("disconnect", () => {
         cleanup();
@@ -208,7 +341,7 @@ export function useBearVoiceAgent(): BearVoiceAgent {
       setError(startError instanceof Error ? startError.message : "Unable to start a voice session.");
       setStatus("error");
     }
-  }, [cleanup, monitorRemoteAudio]);
+  }, [cleanup, monitorRemoteAudio, subscribeToAgentEvents]);
 
   const toggleMute = useCallback(() => {
     const call = callRef.current;
@@ -223,5 +356,16 @@ export function useBearVoiceAgent(): BearVoiceAgent {
     cleanup();
   }, [cleanup]);
 
-  return { error, isMuted, isRemoteSpeaking, remoteAudioLevel, start, status, stop, toggleMute, voiceRef };
+  return {
+    activeSpeakerName,
+    error,
+    isMuted,
+    isRemoteSpeaking,
+    remoteAudioLevel,
+    start,
+    status,
+    stop,
+    toggleMute,
+    voiceRef,
+  };
 }

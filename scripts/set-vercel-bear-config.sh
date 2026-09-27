@@ -26,6 +26,7 @@ set +a
 : "${TWILIO_API_KEY_SECRET_PROD:?Missing TWILIO_API_KEY_SECRET_PROD in nextjs/.env}"
 : "${TWILIO_TWIML_APP_SID_PROD:?Missing TWILIO_TWIML_APP_SID_PROD in nextjs/.env}"
 : "${PROD_AGENT_BASE_URL:?Missing PROD_AGENT_BASE_URL in nextjs/.env}"
+: "${BEAR_EVENT_TOKEN:?Missing BEAR_EVENT_TOKEN in nextjs/.env}"
 
 cd "$VERCEL_DIR"
 
@@ -44,6 +45,8 @@ vercel whoami >/dev/null
 set_value APP_ENV PROD
 set_value NEXT_PUBLIC_BASE_URL https://mitchellkimbell.com
 set_value PROD_AGENT_BASE_URL "$PROD_AGENT_BASE_URL"
+set_value NEXT_PUBLIC_BEAR_AGENT_BASE_URL "$PROD_AGENT_BASE_URL"
+set_value NEXT_PUBLIC_BEAR_EVENT_TOKEN "$BEAR_EVENT_TOKEN"
 set_value PRODUCTION_BASE_URL https://mitchellkimbell.com
 set_value TWILIO_ACCOUNT_SID "$TWILIO_ACCOUNT_SID"
 set_value TWILIO_AUTH_TOKEN "$TWILIO_AUTH_TOKEN"

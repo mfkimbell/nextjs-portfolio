@@ -1483,6 +1483,12 @@ export default function SceneLabClient() {
           >
             Truck Editor
           </a>
+          <a
+            href="/scene-lab/rocking-chair-bear"
+            className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/15 sm:px-4"
+          >
+            Rocking Chair Bear
+          </a>
           <span className="hidden border-l border-white/10 pl-3 pr-2 text-xs text-white/55 md:inline">
             {detail.eyebrow}
           </span>
@@ -3309,6 +3315,9 @@ export default function SceneLabClient() {
                       one against another; zero mutes just that sound.
                     </p>
                     <SliderRow label="Master volume" value={campfireConfig.masterVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("masterVolume", value)} />
+                    <SliderRow label="Bear speech" value={campfireConfig.speechVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("speechVolume", value)} />
+                    <SliderRow label="Smokey speech" value={campfireConfig.smokeySpeechVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("smokeySpeechVolume", value)} />
+                    <SliderRow label="Maple speech" value={campfireConfig.mapleSpeechVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("mapleSpeechVolume", value)} />
                     <SliderRow label="Fire crackling" value={campfireConfig.fireCracklingVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("fireCracklingVolume", value)} />
                     <SliderRow label="Banjo" value={campfireConfig.banjoVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("banjoVolume", value)} />
                     <SliderRow label="Swoosh (panel switch)" value={campfireConfig.swooshVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("swooshVolume", value)} />

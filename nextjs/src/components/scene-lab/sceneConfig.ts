@@ -1429,8 +1429,14 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
    * Ambient loops (fire crackling, banjo) and one-shots (swoosh between
    * panels, hover chime, click) share one master multiplier, so a single
    * knob quiets the whole scene. Per-track values still let you rebalance. */
-  masterVolume: number;
-  fireCracklingVolume: number;
+   masterVolume: number;
+   /** Incoming Twilio bear speech only. This does not affect campsite ambience. */
+   speechVolume: number;
+   /** Per-character trim applied after speechVolume. */
+   smokeySpeechVolume: number;
+   /** Per-character trim applied after speechVolume. */
+   mapleSpeechVolume: number;
+   fireCracklingVolume: number;
   banjoVolume: number;
   /* --- banjo prop (held by the back-left log bear) -------------------------
    * Offsets in the "Food" socket frame, applied on top of the prop's baseline
@@ -2476,6 +2482,9 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   ],
 
   masterVolume: 0.7,
+  speechVolume: 1,
+  smokeySpeechVolume: 1,
+  mapleSpeechVolume: 1,
   fireCracklingVolume: 0.55,
   banjoVolume: 0.32,
   banjoPropX: 0,

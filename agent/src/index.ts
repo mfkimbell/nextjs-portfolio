@@ -88,7 +88,7 @@ if (!Number.isFinite(sessionTtlMs) || sessionTtlMs < 1_000) {
 const sessions = new Map<string, Session>();
 const { app } = expressWs(express());
 
-const bear1VoiceId = process.env.SMOKEY_ELEVENLABS_VOICE_ID?.trim() || "Cb8NLd0sUB8jI4MW2f9M";
+const bear1VoiceId = process.env.SMOKEY_ELEVENLABS_VOICE_ID?.trim() || "75DchiXtNUXnu3lra8pV";
 const bear1Language = process.env.SMOKEY_TTS_LANGUAGE?.trim() || "en-US";
 const bear2VoiceId = process.env.MAPLE_ELEVENLABS_VOICE_ID?.trim() || "oubi7HGxNVjXMnWLgwBT";
 const bear2Language = process.env.MAPLE_TTS_LANGUAGE?.trim() || "en-GB";
