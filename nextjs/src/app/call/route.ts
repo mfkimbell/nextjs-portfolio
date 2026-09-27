@@ -9,7 +9,7 @@ function required(name: string): string {
   return value;
 }
 
-function publicCallUrl(request: Request): string {
+function publicCallUrl(): string {
   const configured = process.env.PRODUCTION_BASE_URL?.trim() || "https://mitchellkimbell.com";
   return `${configured.replace(/\/$/, "")}/call`;
 }
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     Array.from(form.entries()).map(([key, value]) => [key, String(value)])
   );
   const signature = request.headers.get("x-twilio-signature");
-  if (!signature || !twilio.validateRequest(authToken, signature, publicCallUrl(request), params)) {
+  if (!signature || !twilio.validateRequest(authToken, signature, publicCallUrl(), params)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 
