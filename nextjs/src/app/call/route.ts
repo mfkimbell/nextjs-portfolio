@@ -30,29 +30,41 @@ export async function POST(request: Request) {
   try {
     const agentBaseUrl = required("PROD_AGENT_BASE_URL").replace(/\/$/, "");
     if (!agentBaseUrl.startsWith("https://")) throw new Error("PROD_AGENT_BASE_URL must use HTTPS");
-
     const smokeyLanguage = process.env.SMOKEY_TTS_LANGUAGE || "en-US";
+    const smokeyVoice = process.env.SMOKEY_ELEVENLABS_VOICE_ID || "Cb8NLd0sUB8jI4MW2f9M";
     const mapleLanguage = process.env.MAPLE_TTS_LANGUAGE || "en-GB";
-    const smokeyProvider = process.env.SMOKEY_TTS_PROVIDER || "Google";
-    const mapleProvider = process.env.MAPLE_TTS_PROVIDER || "Google";
-    const smokeyVoice = process.env.SMOKEY_TTS_VOICE || "en-US-Journey-D";
-    const mapleVoice = process.env.MAPLE_TTS_VOICE || "en-GB-Neural2-B";
+    const mapleVoice = process.env.MAPLE_ELEVENLABS_VOICE_ID || "oubi7HGxNVjXMnWLgwBT";
 
     const response = new twilio.twiml.VoiceResponse();
     const connect = response.connect();
     const relay = connect.conversationRelay({
       url: `${agentBaseUrl.replace(/^https:/, "wss:")}/conversation-relay`,
+      transcriptionLanguage: "en-US",
       ttsLanguage: smokeyLanguage,
-      ttsProvider: smokeyProvider,
+      ttsProvider: "ElevenLabs",
       voice: smokeyVoice,
-      transcriptionLanguage: smokeyLanguage,
-      interruptible: "any",
+      interruptible: "speech",
       // Current ConversationRelay accepts "speech"; this SDK type is stale.
       reportInputDuringAgentSpeech: "speech" as unknown as boolean,
       events: "speaker-events tokens-played",
     });
-    relay.language({ code: smokeyLanguage, ttsProvider: smokeyProvider, voice: smokeyVoice });
-    relay.language({ code: mapleLanguage, ttsProvider: mapleProvider, voice: mapleVoice });
+    relay.language({
+      code: smokeyLanguage,
+      ttsProvider: "ElevenLabs",
+      voice: smokeyVoice,
+    });
+    relay.language({
+      code: mapleLanguage,
+      ttsProvider: "ElevenLabs",
+      voice: mapleVoice,
+    });
+    console.log("Created production native ElevenLabs ConversationRelay TwiML", {
+      agentHost: new URL(agentBaseUrl).host,
+      smokeyLanguage,
+      smokeyVoice: `${smokeyVoice.slice(0, 4)}...${smokeyVoice.slice(-4)}`,
+      mapleLanguage,
+      mapleVoice: `${mapleVoice.slice(0, 4)}...${mapleVoice.slice(-4)}`,
+    });
 
     return new NextResponse(response.toString(), {
       status: 200,

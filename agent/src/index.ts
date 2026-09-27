@@ -1,26 +1,37 @@
 import { config as loadEnv } from "dotenv";
-import express, { type Request } from "express";
+import express, { type Request, type Response } from "express";
 import expressWs from "express-ws";
 import OpenAI from "openai";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import twilio from "twilio";
-import type WebSocket from "ws";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(sourceDirectory, "../../nextjs/.env") });
 
 type BearLine = { bear: "bear1" | "bear2"; text: string };
+type RelaySocket = {
+  readonly OPEN: number;
+  readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  on(event: string, callback: (...args: unknown[]) => void): void;
+};
 type RelayMessage =
   | { type: "setup"; sessionId: string; callSid?: string; customParameters?: Record<string, string> }
   | { type: "prompt"; voicePrompt: string; last: boolean }
   | { type: "interrupt" }
+  | { type: "info"; name?: string; value?: unknown }
   | { type: "error"; description?: string };
 
 type Session = {
   id: string;
-  history: OpenAI.Chat.Completions.ChatCompletionMessageParam[];
+  callSid?: string;
+  smokeyHistory: OpenAI.Chat.Completions.ChatCompletionMessageParam[];
+  mapleHistory: OpenAI.Chat.Completions.ChatCompletionMessageParam[];
+  eventSubscribers: Set<Response>;
+  activeSpeech?: BearLine;
   generation: number;
   lastSeen: number;
   expiresAt: number;
@@ -33,10 +44,9 @@ function createSession(id: string): Session {
     generation: 0,
     lastSeen: now,
     expiresAt: now + sessionTtlMs,
-    history: [{
-      role: "system",
-      content: "You are two friendly portfolio bears. Return exactly a JSON object with a 'lines' array containing exactly two objects: first {bear:'bear1',text:string}, then {bear:'bear2',text:string}. Both bears must answer the user concisely, safely, and naturally. No markdown.",
-    }],
+    smokeyHistory: [],
+    mapleHistory: [],
+    eventSubscribers: new Set(),
   };
 }
 
@@ -62,6 +72,11 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT m
 const openaiApiKey = process.env.OPENAI_API_KEY?.trim();
 const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : undefined;
 const openaiModel = process.env.OPENAI_MODEL?.trim() || "gpt-4.1-mini";
+const portfolioOrigin = process.env.PORTFOLIO_ORIGIN?.trim() || "http://localhost:3000";
+const bearEventToken = process.env.BEAR_EVENT_TOKEN?.trim();
+if (appEnv === "PROD" && !bearEventToken) {
+  throw new Error("BEAR_EVENT_TOKEN is required in PROD");
+}
 const sessionTtlMs = Number(process.env.SESSION_IDLE_TTL_MS ?? 900_000);
 if (!Number.isFinite(sessionTtlMs) || sessionTtlMs < 1_000) {
   throw new Error("SESSION_IDLE_TTL_MS must be at least 1000 milliseconds");
@@ -69,17 +84,23 @@ if (!Number.isFinite(sessionTtlMs) || sessionTtlMs < 1_000) {
 const sessions = new Map<string, Session>();
 const { app } = expressWs(express());
 
-const bear1Language = process.env.SMOKEY_TTS_LANGUAGE ?? "en-US";
-const bear2Language = process.env.MAPLE_TTS_LANGUAGE ?? "en-GB";
-const bear1Provider = process.env.SMOKEY_TTS_PROVIDER ?? "Google";
-const bear2Provider = process.env.MAPLE_TTS_PROVIDER ?? "Google";
-const bear1Voice = process.env.SMOKEY_TTS_VOICE ?? "en-US-Journey-D";
-const bear2Voice = process.env.MAPLE_TTS_VOICE ?? "en-GB-Neural2-B";
-const greetingInterjectionDelayMs = 750;
+const bear1VoiceId = process.env.SMOKEY_ELEVENLABS_VOICE_ID?.trim() || "Cb8NLd0sUB8jI4MW2f9M";
+const bear1Language = process.env.SMOKEY_TTS_LANGUAGE?.trim() || "en-US";
+const bear2VoiceId = process.env.MAPLE_ELEVENLABS_VOICE_ID?.trim() || "oubi7HGxNVjXMnWLgwBT";
+const bear2Language = process.env.MAPLE_TTS_LANGUAGE?.trim() || "en-GB";
 
-function asRelayMessage(raw: WebSocket.RawData): RelayMessage | undefined {
+function redactId(value: string): string {
+  return value.length > 8 ? `${value.slice(0, 4)}...${value.slice(-4)}` : "[configured]";
+}
+
+function asRelayMessage(raw: unknown): RelayMessage | undefined {
   try {
-    const value: unknown = JSON.parse(raw.toString());
+    const text = Buffer.isBuffer(raw)
+      ? raw.toString()
+      : Array.isArray(raw)
+        ? Buffer.concat(raw.map((part) => Buffer.from(part))).toString()
+        : String(raw);
+    const value: unknown = JSON.parse(text);
     if (!value || typeof value !== "object" || !("type" in value) || typeof value.type !== "string") return undefined;
     return value as RelayMessage;
   } catch {
@@ -87,80 +108,133 @@ function asRelayMessage(raw: WebSocket.RawData): RelayMessage | undefined {
   }
 }
 
-function send(ws: WebSocket, message: object): void {
+function send(ws: RelaySocket, message: object): void {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
 }
 
-function sendTalkCycle(ws: WebSocket, line: BearLine, preemptible = false): void {
+function bearSpeaker(bear: BearLine["bear"]): "back_left_log" | "back_right_log" {
+  return bear === "bear1" ? "back_left_log" : "back_right_log";
+}
+
+function publishSpeechEvent(session: Session, event: "bear.speech.started" | "bear.speech.ended" | "bear.speech.interrupted", line: BearLine): void {
+  if (!session.callSid) return;
+  const payload = JSON.stringify({
+    callSid: session.callSid,
+    bear: line.bear,
+    bearId: bearSpeaker(line.bear),
+    speaker: bearSpeaker(line.bear),
+    text: line.text,
+  });
+  for (const response of session.eventSubscribers) {
+    response.write(`event: ${event}\ndata: ${payload}\n\n`);
+  }
+}
+
+function closeEventSubscribers(session: Session): void {
+  for (const response of session.eventSubscribers) response.end();
+  session.eventSubscribers.clear();
+}
+
+function matchingSession(callSid: string): Session | undefined {
+  for (const session of sessions.values()) {
+    if (session.callSid === callSid && session.expiresAt >= Date.now()) return session;
+  }
+  return undefined;
+}
+
+function allowPortfolioOrigin(request: Request, response: Response): boolean {
+  const origin = request.header("origin");
+  if (origin && origin !== portfolioOrigin) return false;
+  if (origin === portfolioOrigin) {
+    response.set({
+      "Access-Control-Allow-Origin": portfolioOrigin,
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      Vary: "Origin",
+    });
+  }
+  return true;
+}
+
+function sendTalkCycle(
+  ws: RelaySocket,
+  session: Session,
+  line: BearLine,
+  preemptible = false,
+  canSend: () => boolean = () => true,
+): void {
+  if (!canSend() || ws.readyState !== ws.OPEN) return;
+  session.activeSpeech = line;
+  const language = line.bear === "bear1" ? bear1Language : bear2Language;
+  const voice = line.bear === "bear1" ? bear1VoiceId : bear2VoiceId;
+  console.log("Sending native ElevenLabs bear text", {
+    bear: line.bear,
+    callSid: session.callSid,
+    language,
+    preemptible,
+    textLength: line.text.length,
+    voice: redactId(voice),
+  });
+  publishSpeechEvent(session, "bear.speech.started", line);
   send(ws, {
     type: "text",
     token: line.text,
-    lang: line.bear === "bear1" ? bear1Language : bear2Language,
+    lang: language,
     last: true,
     interruptible: true,
     preemptible,
   });
 }
 
-function sendTwoBearReply(ws: WebSocket, lines: BearLine[]): void {
-  for (const line of lines) sendTalkCycle(ws, line);
+function sendTwoBearReply(
+  ws: RelaySocket,
+  lines: BearLine[],
+  generation: number,
+  session: Session,
+  preemptible = false,
+): void {
+  for (const line of lines) sendTalkCycle(ws, session, line, preemptible, () => session.generation === generation);
 }
 
-function sendGreeting(ws: WebSocket, session: Session): void {
+function sendGreeting(ws: RelaySocket, session: Session): void {
   const generation = ++session.generation;
-  // Queue the suffix before Maple starts a separate cycle that can preempt it.
-  const smokeyTokens = [
-    "Oh, hey there, partner. We weren't expecting company. ",
-    "We were just talking about our favorite senior engineer, Mitchell Kimbell. ",
-    "Earlier he",
-    " led several projects that...",
-  ];
-  for (const [index, token] of smokeyTokens.entries()) {
-    send(ws, {
-      type: "text",
-      token,
-      lang: bear1Language,
-      last: index === smokeyTokens.length - 1,
-      interruptible: true,
-      preemptible: true,
-    });
-  }
+  const smokey = {
+    bear: "bear1" as const,
+    text: "Oh, hey there, partner. We weren't expecting company. We were just talking about our favorite senior engineer, Mitchell Kimbell. Earlier he led several projects that...",
+  };
+  sendTalkCycle(ws, session, smokey, true, () => session.generation === generation);
   setTimeout(() => {
-    if (session.generation !== generation) return;
-    // This is a new cycle, so it preempts Smokey only if his greeting is still playing.
-    sendTalkCycle(ws, { bear: "bear2", text: "Actually, Smokey, Mitch is a staff engineer." });
+    sendTalkCycle(ws, session, { bear: "bear2", text: "Actually, Smokey, Mitch is a staff engineer." }, false, () => session.generation === generation);
     setTimeout(() => {
-      if (session.generation === generation) {
-        sendTalkCycle(ws, { bear: "bear1", text: "My apologies. We were just talking about our favorite staff engineer..." });
-        setTimeout(() => {
-          if (session.generation === generation) {
-            sendTalkCycle(ws, { bear: "bear1", text: "Mitch. So, what would you like to know?" });
-          }
-        }, greetingInterjectionDelayMs).unref();
-      }
-    }, greetingInterjectionDelayMs).unref();
-  }, greetingInterjectionDelayMs).unref();
+      sendTalkCycle(ws, session, { bear: "bear1", text: "My apologies. We were just talking about our favorite staff engineer..." }, false, () => session.generation === generation);
+      setTimeout(() => {
+        sendTalkCycle(ws, session, { bear: "bear1", text: "Mitch. So, what would you like to know?" }, false, () => session.generation === generation);
+      }, 750).unref();
+    }, 750).unref();
+  }, 750).unref();
 }
 
-function parseBearLines(content: string): BearLine[] | undefined {
-  try {
-    const value: unknown = JSON.parse(content);
-    if (!value || typeof value !== "object" || !("lines" in value) || !Array.isArray(value.lines) || value.lines.length !== 2) {
-      return undefined;
-    }
-    const lines = value.lines.map((item) => {
-      if (!item || typeof item !== "object" || !("bear" in item) || !("text" in item)) return undefined;
-      const { bear, text } = item as { bear?: unknown; text?: unknown };
-      return (bear === "bear1" || bear === "bear2") && typeof text === "string" && text.trim()
-        ? { bear, text: text.trim().slice(0, 600) } as BearLine
-        : undefined;
-    });
-    return lines.every((line): line is BearLine => Boolean(line)) && new Set(lines.map((line) => line.bear)).size === 2
-      ? lines
-      : undefined;
-  } catch {
-    return undefined;
-  }
+function keepBoundedHistory(history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]): void {
+  history.splice(0, Math.max(0, history.length - 12));
+}
+
+async function completePersona(
+  history: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+  system: string,
+  prompt: string,
+): Promise<string> {
+  if (!openai) throw new Error("OpenAI is not configured");
+  history.push({ role: "user", content: prompt });
+  keepBoundedHistory(history);
+  const completion = await openai.chat.completions.create({
+    model: openaiModel,
+    temperature: 0.7,
+    messages: [{ role: "system", content: system }, ...history],
+  });
+  const text = completion.choices[0]?.message.content?.trim().slice(0, 600);
+  if (!text) throw new Error("OpenAI returned an empty bear response");
+  history.push({ role: "assistant", content: text });
+  keepBoundedHistory(history);
+  return text;
 }
 
 async function generateReply(session: Session, prompt: string): Promise<BearLine[]> {
@@ -170,19 +244,17 @@ async function generateReply(session: Session, prompt: string): Promise<BearLine
       { bear: "bear2", text: "Please set OPENAI_API_KEY to enable answers to your questions." },
     ];
   }
-  session.history.push({ role: "user", content: prompt });
-  session.history.splice(1, Math.max(0, session.history.length - 13));
-  const completion = await openai.chat.completions.create({
-    model: openaiModel,
-    temperature: 0.7,
-    messages: session.history,
-    response_format: { type: "json_object" },
-  });
-  const content = completion.choices[0]?.message.content ?? "";
-  const lines = parseBearLines(content);
-  if (!lines) throw new Error("OpenAI returned an invalid bear response");
-  session.history.push({ role: "assistant", content });
-  return lines;
+  const smokey = await completePersona(
+    session.smokeyHistory,
+    "You are Smokey, a friendly portfolio bear. Give a concise, helpful lead answer to the user's question. Speak naturally, safely, and without markdown.",
+    prompt,
+  );
+  const maple = await completePersona(
+    session.mapleHistory,
+    "You are Maple, a friendly portfolio bear. Give a concise follow-up that adds useful detail or gently corrects Smokey when needed. Speak naturally, safely, and without markdown.",
+    `User prompt: ${prompt}\n\nSmokey's lead: ${smokey}`,
+  );
+  return [{ bear: "bear1", text: smokey }, { bear: "bear2", text: maple }];
 }
 
 function publicUrl(request: Request, protocol: "https" | "wss"): string {
@@ -201,7 +273,11 @@ function validTwilioRequest(request: Request, protocol: "https" | "wss"): boolea
     ? request.body as Record<string, string>
     : {};
   try {
-    return Boolean(signature && twilio.validateRequest(authToken, signature, publicUrl(request, protocol), params));
+    if (!signature) return false;
+    const urls = protocol === "wss"
+      ? [publicUrl(request, "wss"), publicUrl(request, "https")]
+      : [publicUrl(request, "https")];
+    return urls.some((url) => twilio.validateRequest(authToken, signature, url, params));
   } catch {
     return false;
   }
@@ -210,33 +286,64 @@ function validTwilioRequest(request: Request, protocol: "https" | "wss"): boolea
 app.disable("x-powered-by");
 app.use(express.urlencoded({ extended: false }));
 app.get("/health", (_request, response) => response.status(200).json({ ok: true, environment: appEnv }));
-
+app.options("/events/:callSid", (request, response) => {
+  if (!allowPortfolioOrigin(request, response)) return response.sendStatus(403);
+  return response.sendStatus(204);
+});
+app.get("/events/:callSid", (request, response) => {
+  if (!allowPortfolioOrigin(request, response)) return response.sendStatus(403);
+  if (appEnv === "PROD" && request.query.token !== bearEventToken) return response.sendStatus(401);
+  const session = matchingSession(request.params.callSid);
+  if (!session) return response.sendStatus(404);
+  response.set({
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Content-Type": "text/event-stream",
+    "X-Accel-Buffering": "no",
+  });
+  response.flushHeaders();
+  response.write(": connected\n\n");
+  session.eventSubscribers.add(response);
+  request.on("close", () => session.eventSubscribers.delete(response));
+});
 app.post("/call", (request, response) => {
   if (!validTwilioRequest(request, "https")) return response.sendStatus(403);
   const callReference = randomUUID();
   const relayUrl = `${agentBaseUrl.replace(/^https:/, "wss:")}/conversation-relay`;
   const voiceResponse = new twilio.twiml.VoiceResponse();
   const connect = voiceResponse.connect();
-  const relay = connect.conversationRelay({
+  const relayOptions: Parameters<typeof connect.conversationRelay>[0] & { events: string } = {
     url: relayUrl,
     ttsLanguage: bear1Language,
-    ttsProvider: bear1Provider,
-    voice: bear1Voice,
-    transcriptionLanguage: bear1Language,
-    interruptible: "any",
+    ttsProvider: "ElevenLabs",
+    voice: bear1VoiceId,
+    transcriptionLanguage: "en-US",
+    interruptible: "speech",
     // Twilio's current ConversationRelay API accepts "speech" here, while
     // the installed SDK version still types this property as boolean.
     reportInputDuringAgentSpeech: "speech" as unknown as boolean,
-  });
-  relay.language({ code: bear1Language, ttsProvider: bear1Provider, voice: bear1Voice });
-  relay.language({ code: bear2Language, ttsProvider: bear2Provider, voice: bear2Voice });
+    events: "speaker-events tokens-played",
+  };
+  const relay = connect.conversationRelay(relayOptions);
+  relay.language({ code: bear1Language, ttsProvider: "ElevenLabs", voice: bear1VoiceId });
+  relay.language({ code: bear2Language, ttsProvider: "ElevenLabs", voice: bear2VoiceId });
   relay.parameter({ name: "callReference", value: callReference });
+  console.log("Created native ElevenLabs ConversationRelay TwiML", {
+    smokey: { language: bear1Language, voice: redactId(bear1VoiceId) },
+    maple: { language: bear2Language, voice: redactId(bear2VoiceId) },
+  });
   sessions.set(callReference, createSession(callReference));
   response.type("text/xml").send(voiceResponse.toString());
 });
 
 app.ws("/conversation-relay", (ws, request) => {
-  if (!validTwilioRequest(request, "wss")) return ws.close(1008, "Unauthorized");
+  if (!validTwilioRequest(request, "wss")) {
+    console.warn("Rejected ConversationRelay WebSocket signature", {
+      path: request.originalUrl,
+      environment: appEnv,
+    });
+    return ws.close(1008, "Unauthorized");
+  }
   let session: Session | undefined;
 
   ws.on("message", (raw) => {
@@ -254,6 +361,11 @@ app.ws("/conversation-relay", (ws, request) => {
         sessions.set(setupId, session);
       }
       if (session.expiresAt < Date.now()) return ws.close(1008, "Unknown session");
+      if (message.callSid) session.callSid = message.callSid;
+      console.log("ConversationRelay setup accepted", {
+        sessionId: message.sessionId,
+        callSid: message.callSid,
+      });
       session.lastSeen = Date.now();
       session.expiresAt = session.lastSeen + sessionTtlMs;
       sendGreeting(ws, session);
@@ -264,13 +376,40 @@ app.ws("/conversation-relay", (ws, request) => {
     session.expiresAt = session.lastSeen + sessionTtlMs;
     if (message.type === "interrupt") {
       session.generation += 1;
+      if (session.activeSpeech) {
+        console.log("ConversationRelay caller interruption", {
+          callSid: session.callSid,
+          activeBear: session.activeSpeech.bear,
+        });
+        publishSpeechEvent(session, "bear.speech.interrupted", session.activeSpeech);
+        session.activeSpeech = undefined;
+      }
+      return;
+    }
+    if (message.type === "info") {
+      console.log("ConversationRelay info event", {
+        callSid: session.callSid,
+        name: message.name,
+        valueType: typeof message.value,
+      });
+      return;
+    }
+    if (message.type === "error") {
+      console.error("ConversationRelay reported an error", {
+        callSid: session.callSid,
+        description: message.description,
+      });
       return;
     }
     if (message.type !== "prompt" || !message.last || !message.voicePrompt.trim()) return;
+    console.log("ConversationRelay final prompt", {
+      callSid: session.callSid,
+      characters: message.voicePrompt.trim().length,
+    });
     const generation = ++session.generation;
     void generateReply(session, message.voicePrompt.trim())
       .then((lines) => {
-        if (session?.generation === generation) sendTwoBearReply(ws, lines);
+        if (session?.generation === generation) sendTwoBearReply(ws, lines, generation, session);
       })
       .catch((error: unknown) => {
         console.error("OpenAI response failed", error instanceof Error ? error.message : "unknown error");
@@ -278,20 +417,32 @@ app.ws("/conversation-relay", (ws, request) => {
           sendTwoBearReply(ws, [
             { bear: "bear1", text: "I am sorry, I missed that." },
             { bear: "bear2", text: "Please try asking us again in a moment." },
-          ]);
+          ], generation, session);
         }
       });
   });
 
   ws.on("close", () => {
-    if (session) sessions.delete(session.id);
+    if (session) {
+      closeEventSubscribers(session);
+      sessions.delete(session.id);
+    }
   });
   ws.on("error", (error) => console.error("ConversationRelay WebSocket error", error.message));
 });
 
 setInterval(() => {
   const now = Date.now();
-  for (const [id, session] of sessions) if (session.expiresAt < now) sessions.delete(id);
+  for (const [id, session] of sessions) {
+    if (session.expiresAt < now) {
+      closeEventSubscribers(session);
+      sessions.delete(id);
+    }
+  }
 }, Math.min(sessionTtlMs, 60_000)).unref();
 
 app.listen(port, () => console.log(`Bear agent listening on port ${port} (${appEnv})`));
+console.log("Native ElevenLabs voice configuration", {
+  smokey: { language: bear1Language, voice: redactId(bear1VoiceId) },
+  maple: { language: bear2Language, voice: redactId(bear2VoiceId) },
+});
