@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "twilio:setup": "node scripts/setup-twilio.mjs",
     "postinstall": "prisma generate"
   },
   "dependencies": {

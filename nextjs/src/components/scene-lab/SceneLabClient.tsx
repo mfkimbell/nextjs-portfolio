@@ -12,6 +12,8 @@ import {
   defaultLocationView,
   EMPTY_DUPLICATE,
   LOCATION_VIEW_FIELDS,
+  type BugSwarmScope,
+  type BugSwarmTweak,
   type CampfireSceneConfig,
   type LocationView,
   type ObjectDuplicate,
@@ -150,6 +152,59 @@ function matchesSearch(label: string, query: string, groupTitle?: string) {
   if (!query) return true;
   const q = query.toLowerCase();
   return label.toLowerCase().includes(q) || (groupTitle?.toLowerCase().includes(q) ?? false);
+}
+
+/**
+ * One lamp's own bug-swarm block.
+ *
+ * Rendered under whichever fixture it belongs to rather than in the swarm
+ * group, because these are properties of THAT lamp - and they only appear
+ * once its swarm is switched on, since 11 dead sliders under every dark lamp
+ * is how a panel becomes unreadable.
+ *
+ * The x knobs multiply the shared design, so the global sliders still move
+ * every swarm together and this block is the deviation from them.
+ */
+function BugSwarmRows({
+  scope,
+  config,
+  onChange,
+}: {
+  scope: BugSwarmScope;
+  config: CampfireSceneConfig;
+  onChange: (key: keyof CampfireSceneConfig, value: number) => void;
+}) {
+  const key = (knob: BugSwarmTweak) => `${scope}${knob}` as `${BugSwarmScope}${BugSwarmTweak}`;
+  const row = (knob: BugSwarmTweak, label: string, min: number, max: number, step: number) => (
+    <SliderRow
+      key={knob}
+      label={label}
+      value={config[key(knob)]}
+      min={min}
+      max={max}
+      step={step}
+      onChange={(value) => onChange(key(knob) as keyof CampfireSceneConfig, value)}
+    />
+  );
+  return (
+    <>
+      <div className="mt-1 text-[0.6rem] text-white/40">
+        This swarm only. The x knobs multiply the shared design in <em>Arcade — bug
+        swarm</em>, so 1 is &quot;as designed&quot;.
+      </div>
+      {row("BugCountMul", "Swarm · how many x", 0, 3, 0.05)}
+      {row("BugRadiusMul", "Swarm · orbit radius x", 0, 3, 0.05)}
+      {row("BugSpreadMul", "Swarm · spread x", 0, 3, 0.05)}
+      {row("BugHeightMul", "Swarm · height x", 0, 3, 0.05)}
+      {row("BugSizeMul", "Swarm · bug size x", 0, 3, 0.05)}
+      {row("BugSpeedMul", "Swarm · speed x", 0, 3, 0.05)}
+      {row("BugOpacityMul", "Swarm · brightness x", 0, 2, 0.05)}
+      {row("BugSeedShift", "Swarm · reshuffle (differs from other lamps)", 0, 20, 1)}
+      {row("BugOffX", "Swarm · move X", -3, 3, 0.01)}
+      {row("BugOffY", "Swarm · move Y", -3, 3, 0.01)}
+      {row("BugOffZ", "Swarm · move Z", -3, 3, 0.01)}
+    </>
+  );
 }
 
 function SliderRow({
@@ -401,6 +456,8 @@ const LIGHT_CONTROLS: Record<string, readonly LightKnob[]> = {
     { key: "deskComputerColorR", label: "Computer R", min: 0, max: 1, step: 0.01 },
     { key: "deskComputerColorG", label: "Computer G", min: 0, max: 1, step: 0.01 },
     { key: "deskComputerColorB", label: "Computer B", min: 0, max: 1, step: 0.01 },
+    { key: "deskComputerScreenOn", label: "Screen on (0/1)", min: 0, max: 1, step: 1 },
+    { key: "deskComputerScreenBrightness", label: "Screen brightness", min: 0, max: 6, step: 0.05 },
   ],
   arcade_wooden_cabin: [
     { key: "arcadeCabinLampIntensity", label: "Lamp intensity", min: 0, max: 20, step: 0.05 },
@@ -590,7 +647,32 @@ export default function SceneLabClient() {
     return () => { cancelled = true; };
   }, []);
   const saveCameraDefault = async (index: number) => {
-    const view = campfireConfig.locationViews?.[index] ?? defaultLocationView(index, campfireConfig);
+    /*
+     * Read the LIVE camera, not config.locationViews[index].
+     *
+     * Orbiting in panelled mode writes to the live pose refs; it does NOT
+     * commit to config.locationViews, which only happens on a Save. So this
+     * button - reading the committed value - re-saved the shot that was
+     * already on disk. You framed the cabin, pressed Save, got "Saved default
+     * camera for Cabin", and nothing had changed, which is the worst kind of
+     * no-op: one that reports success.
+     *
+     * The camera bar's own Save was fixed for exactly this ("pending was
+     * empty, Save was a no-op", in the note on cameraLivePoseRef). This copy
+     * was missed.
+     *
+     * Only for the location actually on screen, though: folding the live
+     * camera into another location's frame would save a shot of that site
+     * taken from over here, which is worse than doing nothing.
+     */
+    const live = siteView === index
+      ? (cameraLivePoseRef.current ?? liveCameraRef.current)
+      : null;
+    const view = live
+      ? worldToLocationView(index, campfireConfig, live.pos, live.tgt)
+      : campfireConfig.locationViews?.[index] ?? defaultLocationView(index, campfireConfig);
+    // Commit in memory too, so Reset snaps back to what was just saved.
+    if (live) updateLocationView(index, view);
     const next = { ...cameraDefaults, [String(index)]: view };
     setCameraDefaults(next);
     try {
@@ -603,7 +685,9 @@ export default function SceneLabClient() {
         showSaveMessage(`Camera default save failed: ${res.status}`);
         return;
       }
-      showSaveMessage(`Saved default camera for ${LOCATION_NAMES[index]}`);
+      showSaveMessage(live
+        ? `Saved default camera for ${LOCATION_NAMES[index]}`
+        : `${LOCATION_NAMES[index]} is not on screen - re-saved its stored view. Switch to that panel to save what you can see.`);
     } catch (err) {
       showSaveMessage(`Camera default save error: ${(err as Error).message}`);
     }
@@ -1077,8 +1161,23 @@ export default function SceneLabClient() {
             const deleted = !isDuplicate && o.hide >= 0.5;
             const title = isDuplicate && dup ? `${selectedObject} · copy of ${dup.source}` : selectedObject;
             return (
-              <div className="pointer-events-auto rounded-2xl border border-white/10 bg-black/70 p-3 text-xs text-white/90 shadow-2xl backdrop-blur-md">
-                <div className="mb-2 flex items-center justify-between">
+              /*
+                Scrolls, and it has to.
+                
+                This card grows with whatever is selected: the cabin brings
+                EIGHT light knobs before you reach a single move slider, and
+                at ~45px a row that is most of a laptop screen before the
+                transform block even starts. With no height cap the sliders
+                that place the object simply fell off the bottom of the
+                viewport with no way to get at them - the control was rendered
+                and unreachable, which reads as "clicking the cabin does
+                nothing useful".
+              */
+              <div className="pointer-events-auto max-h-[calc(100vh-1.5rem)] overflow-y-auto overscroll-contain rounded-2xl border border-white/10 bg-black/70 p-3 text-xs text-white/90 shadow-2xl backdrop-blur-md">
+                {/* Sticky so the name and the close button stay put while the
+                    knobs scroll under them. Negative margins push its
+                    background out to the card's edges. */}
+                <div className="sticky top-0 z-10 -mx-3 -mt-3 mb-2 flex items-center justify-between border-b border-white/10 bg-black/85 px-3 pb-2 pt-3 backdrop-blur-md">
                   <div className="truncate font-semibold" title={title}>{title}</div>
                   <button
                     onClick={() => setSelectedObject(null)}
@@ -1492,6 +1591,17 @@ export default function SceneLabClient() {
                     <SliderRow label="Spark burst chance" value={campfireConfig.sparkBurstChance} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("sparkBurstChance", value)} />
                     <SliderRow label="Spark size" value={campfireConfig.sparkSize} min={0.005} max={0.4} step={0.002} onChange={(value) => updateCampfire("sparkSize", value)} />
                     <SliderRow label="Spark lifetime (s)" value={campfireConfig.sparkLifetime} min={0.2} max={8} step={0.05} onChange={(value) => updateCampfire("sparkLifetime", value)} />
+                    <SliderRow label="Fire click: Click burst on" value={campfireConfig.fireClickBurstOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("fireClickBurstOn", value)} />
+                    <SliderRow label="Fire click: Burst y" value={campfireConfig.fireBurstY} min={-1} max={2} step={0.05} onChange={(value) => updateCampfire("fireBurstY", value)} />
+                    <SliderRow label="Fire click: Burst count" value={campfireConfig.fireBurstCount} min={0} max={800} step={10} onChange={(value) => updateCampfire("fireBurstCount", value)} />
+                    <SliderRow label="Fire click: Burst speed" value={campfireConfig.fireBurstSpeed} min={0} max={8} step={0.1} onChange={(value) => updateCampfire("fireBurstSpeed", value)} />
+                    <SliderRow label="Fire click: Burst spread" value={campfireConfig.fireBurstSpread} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("fireBurstSpread", value)} />
+                    <SliderRow label="Fire click: Burst lifetime" value={campfireConfig.fireBurstLifetime} min={0.1} max={5} step={0.05} onChange={(value) => updateCampfire("fireBurstLifetime", value)} />
+                    <SliderRow label="Fire click: Burst size" value={campfireConfig.fireBurstSize} min={0.005} max={0.2} step={0.002} onChange={(value) => updateCampfire("fireBurstSize", value)} />
+                    <SliderRow label="Fire click: Burst opacity" value={campfireConfig.fireBurstOpacity} min={0} max={5} step={0.05} onChange={(value) => updateCampfire("fireBurstOpacity", value)} />
+                    <SliderRow label="Fire click: Flash intensity" value={campfireConfig.fireFlashIntensity} min={0} max={12} step={0.1} onChange={(value) => updateCampfire("fireFlashIntensity", value)} />
+                    <SliderRow label="Fire click: Flash duration" value={campfireConfig.fireFlashDuration} min={0.05} max={3} step={0.05} onChange={(value) => updateCampfire("fireFlashDuration", value)} />
+                    <SliderRow label="Fire click: Flash reach" value={campfireConfig.fireFlashReach} min={0.5} max={20} step={0.5} onChange={(value) => updateCampfire("fireFlashReach", value)} />
                                         <SliderRow label="Sky brightness" value={campfireConfig.skyBrightness} min={0} max={20} step={0.05} onChange={(value) => updateCampfire("skyBrightness", value)} />
                       <SliderRow label="Star brightness" value={campfireConfig.starBrightness} min={0} max={15} step={0.05} onChange={(value) => updateCampfire("starBrightness", value)} />
                       <SliderRow label="Star count" value={campfireConfig.starCount} min={0} max={3000} step={10} onChange={(value) => updateCampfire("starCount", value)} />
@@ -1541,6 +1651,11 @@ export default function SceneLabClient() {
                     </p>
                     <SliderRow label="Fire casts shadow (0/1)" value={campfireConfig.fireCastShadow} min={0} max={1} step={1} onChange={(value) => updateCampfire("fireCastShadow", value)} />
                     <SliderRow label="Fire shadow map size" value={campfireConfig.fireShadowMapSize} min={64} max={2048} step={64} onChange={(value) => updateCampfire("fireShadowMapSize", value)} />
+                    <SliderRow label="Warm spot shadow map size" value={campfireConfig.warmShadowMapSize} min={64} max={2048} step={64} onChange={(value) => updateCampfire("warmShadowMapSize", value)} />
+                    <SliderRow label="Max pixel ratio (desktop)" value={campfireConfig.maxPixelRatio} min={0.5} max={3} step={0.25} onChange={(value) => updateCampfire("maxPixelRatio", value)} />
+                    <SliderRow label="Max pixel ratio (mobile)" value={campfireConfig.maxPixelRatioMobile} min={0.5} max={3} step={0.25} onChange={(value) => updateCampfire("maxPixelRatioMobile", value)} />
+                    <SliderRow label="Antialias - desktop (remounts canvas)" value={campfireConfig.antialias} min={0} max={1} step={1} onChange={(value) => updateCampfire("antialias", value)} />
+                    <SliderRow label="Antialias - mobile (remounts canvas)" value={campfireConfig.antialiasMobile} min={0} max={1} step={1} onChange={(value) => updateCampfire("antialiasMobile", value)} />
                     <SliderRow label="Fire bias" value={campfireConfig.fireShadowBias} min={-0.01} max={0.01} step={0.0002} onChange={(value) => updateCampfire("fireShadowBias", value)} />
                     <SliderRow label="Fire normal bias" value={campfireConfig.fireShadowNormalBias} min={0} max={0.3} step={0.005} onChange={(value) => updateCampfire("fireShadowNormalBias", value)} />
                     <SliderRow label="Fire shadow intensity" value={campfireConfig.fireShadowIntensity} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("fireShadowIntensity", value)} />
@@ -1727,6 +1842,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Light G" value={campfireConfig.arcadeCrtLightG} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightG", value)} />
                     <SliderRow label="Light B" value={campfireConfig.arcadeCrtLightB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightB", value)} />
                     <SliderRow label="Spot intensity ×" value={campfireConfig.arcadeCrtLightIntensity} min={0} max={5} step={0.02} onChange={(value) => updateCampfire("arcadeCrtLightIntensity", value)} />
+                    <SliderRow label="Casts shadows (0/1)" value={campfireConfig.arcadeCrtShadow} min={0} max={1} step={1} onChange={(value) => updateCampfire("arcadeCrtShadow", value)} />
                     <SliderRow label="Spot cone angle" value={campfireConfig.arcadeCrtLightAngle} min={0.05} max={Math.PI / 2} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightAngle", value)} />
                     <SliderRow label="Spot penumbra" value={campfireConfig.arcadeCrtLightPenumbra} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightPenumbra", value)} />
                     <SliderRow label="Spot distance" value={campfireConfig.arcadeCrtLightDistance} min={0.1} max={20} step={0.1} onChange={(value) => updateCampfire("arcadeCrtLightDistance", value)} />
@@ -1767,6 +1883,9 @@ export default function SceneLabClient() {
                     <SliderRow label="Lamp B" value={campfireConfig.arcadeCabinLampColorB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCabinLampColorB", value)} />
                     <SliderRow label="Lantern glass brightness" value={campfireConfig.arcadeCabinLampEmissive} min={0} max={12} step={0.1} onChange={(value) => updateCampfire("arcadeCabinLampEmissive", value)} />
                     <SliderRow label="Bug swarm (0/1)" value={campfireConfig.arcadeCabinLampBugs} min={0} max={1} step={1} onChange={(value) => updateCampfire("arcadeCabinLampBugs", value)} />
+                    {campfireConfig.arcadeCabinLampBugs >= 0.5 && (
+                      <BugSwarmRows scope="arcadeCabinLamp" config={campfireConfig} onChange={updateCampfire} />
+                    )}
                   </ControlGroup>
                   <ControlGroup title="3 · Cabin — lanterns" scope="3">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
@@ -2000,6 +2119,10 @@ export default function SceneLabClient() {
                     <SliderRow label="Brightness at the source" value={campfireConfig.deskStringBulbBrightness} min={0} max={4} step={0.01} onChange={(value) => updateCampfire("deskStringBulbBrightness", value)} />
                     <SliderRow label="Warmth (0 white · 1 as authored · 2 amber)" value={campfireConfig.deskStringBulbWarmth} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("deskStringBulbWarmth", value)} />
                     <SliderRow label="Opacity" value={campfireConfig.deskStringBulbOpacity} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskStringBulbOpacity", value)} />
+                    <div className="mt-1 text-[0.6rem] text-white/40">Bloom — one additive sprite per bulb, drawn in a single call. Size is what carries the glow; strength past 1 overdrives the colour.</div>
+                    <SliderRow label="Bloom strength" value={campfireConfig.deskStringBulbBloom} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("deskStringBulbBloom", value)} />
+                    <SliderRow label="Bloom size (world units)" value={campfireConfig.deskStringBulbBloomSize} min={0} max={0.5} step={0.005} onChange={(value) => updateCampfire("deskStringBulbBloomSize", value)} />
+                    <SliderRow label="Bloom height offset" value={campfireConfig.deskStringBulbBloomOffsetY} min={-0.5} max={0.5} step={0.005} onChange={(value) => updateCampfire("deskStringBulbBloomOffsetY", value)} />
                   </ControlGroup>
 
                   <ControlGroup title="2 · Arcade — camp lamps" scope="2">
@@ -2033,6 +2156,9 @@ export default function SceneLabClient() {
                     <SliderRow label="Glow on the lamp itself" value={campfireConfig.deskLampVanHeadsEmissive} min={0} max={12} step={0.05} onChange={(value) => updateCampfire("deskLampVanHeadsEmissive", value)} />
                     <SliderRow label="Casts a shadow (0/1)" value={campfireConfig.deskLampVanHeadsShadow} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskLampVanHeadsShadow", value)} />
                     <SliderRow label="Bug swarm (0/1)" value={campfireConfig.deskLampVanHeadsBugs} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskLampVanHeadsBugs", value)} />
+                    {campfireConfig.deskLampVanHeadsBugs >= 0.5 && (
+                      <BugSwarmRows scope="deskLampVanHeads" config={campfireConfig} onChange={updateCampfire} />
+                    )}
                     <div className="mt-1 text-[0.6rem] text-white/40">Lens — the glowing circle. Does not move the beam.</div>
                     <SliderRow label="Lens X" value={campfireConfig.deskLampVanHeadsOffX} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskLampVanHeadsOffX", value)} />
                     <SliderRow label="Lens Y" value={campfireConfig.deskLampVanHeadsOffY} min={-4} max={4} step={0.01} onChange={(value) => updateCampfire("deskLampVanHeadsOffY", value)} />
@@ -2057,6 +2183,9 @@ export default function SceneLabClient() {
                     <SliderRow label="Glow on the lamp itself" value={campfireConfig.deskLampSmallAEmissive} min={0} max={12} step={0.05} onChange={(value) => updateCampfire("deskLampSmallAEmissive", value)} />
                     <SliderRow label="Casts a shadow (0/1)" value={campfireConfig.deskLampSmallAShadow} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskLampSmallAShadow", value)} />
                     <SliderRow label="Bug swarm (0/1)" value={campfireConfig.deskLampSmallABugs} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskLampSmallABugs", value)} />
+                    {campfireConfig.deskLampSmallABugs >= 0.5 && (
+                      <BugSwarmRows scope="deskLampSmallA" config={campfireConfig} onChange={updateCampfire} />
+                    )}
                     <div className="mt-1 text-[0.6rem] text-white/40">Light — the exact point it emits from. Does not move the lamp.</div>
                     <SliderRow label="Light X" value={campfireConfig.deskLampSmallALightX} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskLampSmallALightX", value)} />
                     <SliderRow label="Light Y" value={campfireConfig.deskLampSmallALightY} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskLampSmallALightY", value)} />
@@ -2075,6 +2204,9 @@ export default function SceneLabClient() {
                     <SliderRow label="Glow on the lamp itself" value={campfireConfig.deskLampSmallBEmissive} min={0} max={12} step={0.05} onChange={(value) => updateCampfire("deskLampSmallBEmissive", value)} />
                     <SliderRow label="Casts a shadow (0/1)" value={campfireConfig.deskLampSmallBShadow} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskLampSmallBShadow", value)} />
                     <SliderRow label="Bug swarm (0/1)" value={campfireConfig.deskLampSmallBBugs} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskLampSmallBBugs", value)} />
+                    {campfireConfig.deskLampSmallBBugs >= 0.5 && (
+                      <BugSwarmRows scope="deskLampSmallB" config={campfireConfig} onChange={updateCampfire} />
+                    )}
                     <div className="mt-1 text-[0.6rem] text-white/40">Light — the exact point it emits from. Does not move the lamp.</div>
                     <SliderRow label="Light X" value={campfireConfig.deskLampSmallBLightX} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskLampSmallBLightX", value)} />
                     <SliderRow label="Light Y" value={campfireConfig.deskLampSmallBLightY} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskLampSmallBLightY", value)} />
@@ -2093,6 +2225,9 @@ export default function SceneLabClient() {
                     <SliderRow label="Glow on the lamp itself" value={campfireConfig.deskLampHoodEmissive} min={0} max={12} step={0.05} onChange={(value) => updateCampfire("deskLampHoodEmissive", value)} />
                     <SliderRow label="Casts a shadow (0/1)" value={campfireConfig.deskLampHoodShadow} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskLampHoodShadow", value)} />
                     <SliderRow label="Bug swarm (0/1)" value={campfireConfig.deskLampHoodBugs} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskLampHoodBugs", value)} />
+                    {campfireConfig.deskLampHoodBugs >= 0.5 && (
+                      <BugSwarmRows scope="deskLampHood" config={campfireConfig} onChange={updateCampfire} />
+                    )}
                     <div className="mt-1 text-[0.6rem] text-white/40">Light — the exact point it emits from. Does not move the lamp.</div>
                     <SliderRow label="Light X" value={campfireConfig.deskLampHoodLightX} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskLampHoodLightX", value)} />
                     <SliderRow label="Light Y" value={campfireConfig.deskLampHoodLightY} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskLampHoodLightY", value)} />
@@ -2112,6 +2247,13 @@ export default function SceneLabClient() {
                     <div className="text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Lanterns</div>
                     <div className="mt-1 text-[0.6rem] text-white/40">Line the point-light up with the candle wick:</div>
                     <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Computer screen</div>
+                    <div className="mt-1 text-[0.6rem] text-white/40">The screen itself — the panel, not the light it throws.</div>
+                    <SliderRow label="Screen on (0/1)" value={campfireConfig.deskComputerScreenOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskComputerScreenOn", value)} />
+                    <SliderRow label="Screen brightness" value={campfireConfig.deskComputerScreenBrightness} min={0} max={6} step={0.05} onChange={(value) => updateCampfire("deskComputerScreenBrightness", value)} />
+                    <SliderRow label="Screen R" value={campfireConfig.deskComputerScreenR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerScreenR", value)} />
+                    <SliderRow label="Screen G" value={campfireConfig.deskComputerScreenG} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerScreenG", value)} />
+                    <SliderRow label="Screen B" value={campfireConfig.deskComputerScreenB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerScreenB", value)} />
+                    <div className="mt-1 text-[0.6rem] text-white/40">The spill onto the room.</div>
                     <SliderRow label="Computer intensity" value={campfireConfig.deskComputerIntensity} min={0} max={20} step={0.05} onChange={(value) => updateCampfire("deskComputerIntensity", value)} />
                     <SliderRow label="Computer distance" value={campfireConfig.deskComputerDistance} min={0} max={30} step={0.05} onChange={(value) => updateCampfire("deskComputerDistance", value)} />
                     <SliderRow label="Computer R" value={campfireConfig.deskComputerColorR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerColorR", value)} />
@@ -2784,8 +2926,10 @@ export default function SceneLabClient() {
 
                   <ControlGroup title="2 · Arcade — bug swarm" scope="2">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
-                      One swarm design, worn by whichever lamps have <em>Bug swarm</em>
-                      switched on in the group above. They orbit the emitter, so they
+                      The BASE swarm design, worn by whichever lamps have <em>Bug
+                      swarm</em> switched on in the group above - each of those has its
+                      own block of multipliers next to its other settings, so a lamp can
+                      deviate from this without leaving it. They orbit the emitter, so they
                       follow that lamp&apos;s Light X/Y/Z rather than its lens.
                       Each bug keeps its own orbit — radius, height, plane tilt, speed,
                       and direction, with every other one going the opposite way, which
@@ -2816,6 +2960,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Wobble speed" value={campfireConfig.deskBugJitterSpeed} min={0} max={5} step={0.01} onChange={(value) => updateCampfire("deskBugJitterSpeed", value)} />
                     <SliderRow label="Flicker rate" value={campfireConfig.deskBugFlickerRate} min={0} max={60} step={0.5} onChange={(value) => updateCampfire("deskBugFlickerRate", value)} />
                     <SliderRow label="Flicker depth" value={campfireConfig.deskBugFlickerDepth} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugFlickerDepth", value)} />
+                    <SliderRow label="Lunge flare (brightness on the dive)" value={campfireConfig.deskBugLungeFlare} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugLungeFlare", value)} />
                     <SliderRow label="Vertical drift" value={campfireConfig.deskBugDrift} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("deskBugDrift", value)} />
                     <SliderRow label="Additive glow (0/1)" value={campfireConfig.deskBugAdditive} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskBugAdditive", value)} />
                     <SliderRow label="R" value={campfireConfig.deskBugR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskBugR", value)} />
@@ -2889,6 +3034,10 @@ export default function SceneLabClient() {
                     <SliderRow label="Seed (reshuffles outlines)" value={campfireConfig.groundPatchSeed} min={1} max={200} step={1} onChange={(value) => updateCampfire("groundPatchSeed", value)} />
                     <SliderRow label="Move BOTH X" value={campfireConfig.groundPatchOffsetX} min={-25} max={25} step={0.1} onChange={(value) => updateCampfire("groundPatchOffsetX", value)} />
                     <SliderRow label="Move BOTH Z" value={campfireConfig.groundPatchOffsetZ} min={-25} max={25} step={0.1} onChange={(value) => updateCampfire("groundPatchOffsetZ", value)} />
+                    <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Cabin clearing (same shape, own placement)</div>
+                    <SliderRow label="On (0/1)" value={campfireConfig.cabinGroundPatchOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("cabinGroundPatchOn", value)} />
+                    <SliderRow label="Move X" value={campfireConfig.cabinGroundPatchOffsetX} min={-25} max={25} step={0.1} onChange={(value) => updateCampfire("cabinGroundPatchOffsetX", value)} />
+                    <SliderRow label="Move Z" value={campfireConfig.cabinGroundPatchOffsetZ} min={-25} max={25} step={0.1} onChange={(value) => updateCampfire("cabinGroundPatchOffsetZ", value)} />
                     <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Outer patch</div>
                     <SliderRow label="Radius" value={campfireConfig.groundPatchOuterRadius} min={0.2} max={20} step={0.05} onChange={(value) => updateCampfire("groundPatchOuterRadius", value)} />
                     <SliderRow label="Move X" value={campfireConfig.groundPatchOuterOffsetX} min={-15} max={15} step={0.05} onChange={(value) => updateCampfire("groundPatchOuterOffsetX", value)} />
@@ -2989,6 +3138,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Path line width" value={campfireConfig.pathWidth} min={0.02} max={3} step={0.01} onChange={(value) => updateCampfire("pathWidth", value)} />
                     <SliderRow label="Path flank spacing" value={campfireConfig.pathFlankSpacing} min={0.5} max={10} step={0.05} onChange={(value) => updateCampfire("pathFlankSpacing", value)} />
                     <SliderRow label="Forest outer radius" value={campfireConfig.forestOuterRadius} min={10} max={120} step={0.5} onChange={(value) => updateCampfire("forestOuterRadius", value)} />
+                    <SliderRow label="Trees cast shadows" value={campfireConfig.forestCastShadow} min={0} max={1} step={1} onChange={(value) => updateCampfire("forestCastShadow", value)} />
                   </ControlGroup>
 
                   <ControlGroup title="Bonfire" scope="1">
@@ -3031,6 +3181,72 @@ export default function SceneLabClient() {
                     <SliderRow label="Fish roll Z" value={campfireConfig.fishRotationZ} min={-3.14} max={3.14} step={0.01} onChange={(value) => updateCampfire("fishRotationZ", value)} />
                     <SliderRow label="Fish scale" value={campfireConfig.fishScale} min={0.005} max={1} step={0.005} onChange={(value) => updateCampfire("fishScale", value)} />
                     <SliderRow label="Flop speed" value={campfireConfig.fishFlopSpeed} min={0} max={12} step={0.1} onChange={(value) => updateCampfire("fishFlopSpeed", value)} />
+                    <SliderRow label="Fish: Launch on" value={campfireConfig.fishLaunchOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("fishLaunchOn", value)} />
+                    <SliderRow label="Fish: Launch duration" value={campfireConfig.fishLaunchDuration} min={0.2} max={3} step={0.05} onChange={(value) => updateCampfire("fishLaunchDuration", value)} />
+                    <SliderRow label="Fish: Launch arc" value={campfireConfig.fishLaunchArc} min={0} max={4} step={0.05} onChange={(value) => updateCampfire("fishLaunchArc", value)} />
+                    <SliderRow label="Fish: Launch spin" value={campfireConfig.fishLaunchSpin} min={0} max={8} step={0.25} onChange={(value) => updateCampfire("fishLaunchSpin", value)} />
+                    <SliderRow label="Fish: Launch target y" value={campfireConfig.fishLaunchTargetY} min={-1} max={2} step={0.05} onChange={(value) => updateCampfire("fishLaunchTargetY", value)} />
+                    <SliderRow label="Fish: Launch flail" value={campfireConfig.fishLaunchFlail} min={0} max={6} step={0.1} onChange={(value) => updateCampfire("fishLaunchFlail", value)} />
+                    <SliderRow label="Fish: Respawn delay" value={campfireConfig.fishRespawnDelay} min={0} max={30} step={0.5} onChange={(value) => updateCampfire("fishRespawnDelay", value)} />
+                    <SliderRow label="Fish: Burst count" value={campfireConfig.fishBurstCount} min={0} max={600} step={10} onChange={(value) => updateCampfire("fishBurstCount", value)} />
+                    <SliderRow label="Fish: Burst speed" value={campfireConfig.fishBurstSpeed} min={0} max={8} step={0.1} onChange={(value) => updateCampfire("fishBurstSpeed", value)} />
+                    <SliderRow label="Fish: Burst spread" value={campfireConfig.fishBurstSpread} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("fishBurstSpread", value)} />
+                    <SliderRow label="Fish: Burst lifetime" value={campfireConfig.fishBurstLifetime} min={0.1} max={5} step={0.05} onChange={(value) => updateCampfire("fishBurstLifetime", value)} />
+                    <SliderRow label="Fish: Burst size" value={campfireConfig.fishBurstSize} min={0.005} max={0.2} step={0.005} onChange={(value) => updateCampfire("fishBurstSize", value)} />
+                    <SliderRow label="Fish: Burst opacity" value={campfireConfig.fishBurstOpacity} min={0} max={5} step={0.05} onChange={(value) => updateCampfire("fishBurstOpacity", value)} />
+                    <SliderRow label="Fish: Flash intensity" value={campfireConfig.fishFlashIntensity} min={0} max={12} step={0.1} onChange={(value) => updateCampfire("fishFlashIntensity", value)} />
+                    <SliderRow label="Fish: Flash duration" value={campfireConfig.fishFlashDuration} min={0.05} max={3} step={0.05} onChange={(value) => updateCampfire("fishFlashDuration", value)} />
+                    <SliderRow label="Fish: Flash reach" value={campfireConfig.fishFlashReach} min={0.5} max={20} step={0.5} onChange={(value) => updateCampfire("fishFlashReach", value)} />
+                    <SliderRow label="Critters: Acts on" value={campfireConfig.critterActsOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("critterActsOn", value)} />
+                    <SliderRow label="Critters: Ground y" value={campfireConfig.critterGroundY} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("critterGroundY", value)} />
+                    <SliderRow label="Raccoon: Scale" value={campfireConfig.raccoonScale} min={0.05} max={2} step={0.01} onChange={(value) => updateCampfire("raccoonScale", value)} />
+                    <SliderRow label="Raccoon: Mouth out" value={campfireConfig.tentMouthOut} min={-1} max={4} step={0.05} onChange={(value) => updateCampfire("tentMouthOut", value)} />
+                    <SliderRow label="Raccoon: Y" value={campfireConfig.donutY} min={-0.5} max={1.5} step={0.01} onChange={(value) => updateCampfire("donutY", value)} />
+                    <SliderRow label="Raccoon: Roll" value={campfireConfig.donutRoll} min={0} max={6} step={0.05} onChange={(value) => updateCampfire("donutRoll", value)} />
+                    <SliderRow label="Raccoon: Roll dur" value={campfireConfig.donutRollDur} min={0.1} max={5} step={0.05} onChange={(value) => updateCampfire("donutRollDur", value)} />
+                    <SliderRow label="Raccoon: Scale" value={campfireConfig.donutScale} min={0.05} max={4} step={0.05} onChange={(value) => updateCampfire("donutScale", value)} />
+                    <SliderRow label="Raccoon: Radius" value={campfireConfig.donutRadius} min={0.02} max={1} step={0.01} onChange={(value) => updateCampfire("donutRadius", value)} />
+                    <SliderRow label="Raccoon: Reach" value={campfireConfig.raccoonReach} min={0} max={2} step={0.02} onChange={(value) => updateCampfire("raccoonReach", value)} />
+                    <SliderRow label="Raccoon: Out dur" value={campfireConfig.raccoonOutDur} min={0.2} max={6} step={0.1} onChange={(value) => updateCampfire("raccoonOutDur", value)} />
+                    <SliderRow label="Raccoon: Reach dur" value={campfireConfig.raccoonReachDur} min={0.1} max={3} step={0.05} onChange={(value) => updateCampfire("raccoonReachDur", value)} />
+                    <SliderRow label="Raccoon: Dip" value={campfireConfig.raccoonDip} min={-1.6} max={1.6} step={0.02} onChange={(value) => updateCampfire("raccoonDip", value)} />
+                    <SliderRow label="Raccoon: Take dur" value={campfireConfig.raccoonTakeDur} min={0.1} max={3} step={0.05} onChange={(value) => updateCampfire("raccoonTakeDur", value)} />
+                    <SliderRow label="Raccoon: Back dur" value={campfireConfig.raccoonBackDur} min={0.2} max={6} step={0.1} onChange={(value) => updateCampfire("raccoonBackDur", value)} />
+                    <SliderRow label="Raccoon: Carry scale" value={campfireConfig.donutCarryScale} min={0.05} max={5} step={0.05} onChange={(value) => updateCampfire("donutCarryScale", value)} />
+                    <SliderRow label="Raccoon: Carry drop" value={campfireConfig.donutCarryDrop} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("donutCarryDrop", value)} />
+                  </ControlGroup>
+                  <ControlGroup title="Toppling props — click a bag to knock it over" scope="1">
+                    {/* FALL ANGLE is the one knob that matters: 0 = away from the camera,
+                        1.57 = to the right, 3.14 = straight toward the camera, 2.01 = at the
+                        fire. Hinge, tipping point, resting angle and swing rate are all read
+                        out of the measured sweep in tipTables.ts at whatever angle is set, so
+                        this is safe to drag anywhere. Needs "Critters: Acts on" = 1. */}
+                    <SliderRow label="Right bag (by the rod) — FALL ANGLE" value={campfireConfig.bagTipHeading} min={-3.2} max={3.2} step={0.01} onChange={(value) => updateCampfire("bagTipHeading", value)} />
+                    <SliderRow label="Right bag — shove (x tipping point)" value={campfireConfig.bagTipShove} min={0.5} max={3} step={0.01} onChange={(value) => updateCampfire("bagTipShove", value)} />
+                    <SliderRow label="Right bag — how far it falls (x contact)" value={campfireConfig.bagTipFall} min={0.4} max={1.6} step={0.005} onChange={(value) => updateCampfire("bagTipFall", value)} />
+                    <SliderRow label="Right bag — level trim (rad)" value={campfireConfig.bagTipTilt} min={-0.4} max={0.4} step={0.002} onChange={(value) => updateCampfire("bagTipTilt", value)} />
+                    <SliderRow label="Right bag — lift out of ground" value={campfireConfig.bagTipLift} min={-0.2} max={0.3} step={0.005} onChange={(value) => updateCampfire("bagTipLift", value)} />
+                    <SliderRow label="Right bag — rattle amount" value={campfireConfig.bagRattleAmp} min={0} max={0.15} step={0.002} onChange={(value) => updateCampfire("bagRattleAmp", value)} />
+                    <SliderRow label="Right bag — rattle speed (Hz)" value={campfireConfig.bagRattleFreq} min={1} max={16} step={0.1} onChange={(value) => updateCampfire("bagRattleFreq", value)} />
+                    <SliderRow label="Right bag — rattle fade" value={campfireConfig.bagRattleDamp} min={0.5} max={14} step={0.1} onChange={(value) => updateCampfire("bagRattleDamp", value)} />
+                    <SliderRow label="Right bag — knocks rod at (rad)" value={campfireConfig.bagTipContact} min={0} max={1.6} step={0.005} onChange={(value) => updateCampfire("bagTipContact", value)} />
+                    <SliderRow label="Left bag (by the banjo bear) — FALL ANGLE" value={campfireConfig.hikeBagTipHeading} min={-3.2} max={3.2} step={0.01} onChange={(value) => updateCampfire("hikeBagTipHeading", value)} />
+                    <SliderRow label="Left bag — shove (x tipping point)" value={campfireConfig.hikeBagTipShove} min={0.5} max={3} step={0.01} onChange={(value) => updateCampfire("hikeBagTipShove", value)} />
+                    <SliderRow label="Left bag — how far it falls (x contact)" value={campfireConfig.hikeBagTipFall} min={0.4} max={1.6} step={0.005} onChange={(value) => updateCampfire("hikeBagTipFall", value)} />
+                    <SliderRow label="Left bag — level trim (rad)" value={campfireConfig.hikeBagTipTilt} min={-0.4} max={0.4} step={0.002} onChange={(value) => updateCampfire("hikeBagTipTilt", value)} />
+                    <SliderRow label="Left bag — lift out of ground" value={campfireConfig.hikeBagTipLift} min={-0.2} max={0.3} step={0.005} onChange={(value) => updateCampfire("hikeBagTipLift", value)} />
+                    <SliderRow label="Left bag — rattle amount" value={campfireConfig.hikeBagRattleAmp} min={0} max={0.15} step={0.002} onChange={(value) => updateCampfire("hikeBagRattleAmp", value)} />
+                    <SliderRow label="Left bag — rattle speed (Hz)" value={campfireConfig.hikeBagRattleFreq} min={1} max={16} step={0.1} onChange={(value) => updateCampfire("hikeBagRattleFreq", value)} />
+                    <SliderRow label="Left bag — rattle fade" value={campfireConfig.hikeBagRattleDamp} min={0.5} max={14} step={0.1} onChange={(value) => updateCampfire("hikeBagRattleDamp", value)} />
+                    <SliderRow label="Fishing rod — FALL ANGLE" value={campfireConfig.rodTipHeading} min={-3.2} max={3.2} step={0.01} onChange={(value) => updateCampfire("rodTipHeading", value)} />
+                    <SliderRow label="Fishing rod — shove (x tipping point)" value={campfireConfig.rodTipShove} min={0.5} max={6} step={0.01} onChange={(value) => updateCampfire("rodTipShove", value)} />
+                    <SliderRow label="Fishing rod — how far it falls (x contact)" value={campfireConfig.rodTipFall} min={0.4} max={1.6} step={0.005} onChange={(value) => updateCampfire("rodTipFall", value)} />
+                    <SliderRow label="Fishing rod — level trim (rad)" value={campfireConfig.rodTipTilt} min={-0.4} max={0.4} step={0.002} onChange={(value) => updateCampfire("rodTipTilt", value)} />
+                    <SliderRow label="Fishing rod — lift out of ground" value={campfireConfig.rodTipLift} min={-0.2} max={0.3} step={0.005} onChange={(value) => updateCampfire("rodTipLift", value)} />
+                    <SliderRow label="Fishing rod — rattle amount" value={campfireConfig.rodRattleAmp} min={0} max={0.15} step={0.002} onChange={(value) => updateCampfire("rodRattleAmp", value)} />
+                    <SliderRow label="Fishing rod — rattle speed (Hz)" value={campfireConfig.rodRattleFreq} min={1} max={16} step={0.1} onChange={(value) => updateCampfire("rodRattleFreq", value)} />
+                    <SliderRow label="Fishing rod — rattle fade" value={campfireConfig.rodRattleDamp} min={0.5} max={14} step={0.1} onChange={(value) => updateCampfire("rodRattleDamp", value)} />
+                    <SliderRow label="All three — bounce on landing" value={campfireConfig.tipRestitution} min={0} max={0.8} step={0.01} onChange={(value) => updateCampfire("tipRestitution", value)} />
                   </ControlGroup>
 
 
@@ -3096,6 +3312,8 @@ export default function SceneLabClient() {
                     <SliderRow label="Fire crackling" value={campfireConfig.fireCracklingVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("fireCracklingVolume", value)} />
                     <SliderRow label="Banjo" value={campfireConfig.banjoVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("banjoVolume", value)} />
                     <SliderRow label="Swoosh (panel switch)" value={campfireConfig.swooshVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("swooshVolume", value)} />
+                    <SliderRow label="Swoosh delay (ms)" value={campfireConfig.swooshDelayMs} min={0} max={1000} step={10} onChange={(value) => updateCampfire("swooshDelayMs", value)} />
+                    <SliderRow label="Swoosh speed" value={campfireConfig.swooshRate} min={0.3} max={2} step={0.01} onChange={(value) => updateCampfire("swooshRate", value)} />
                     <SliderRow label="Hover" value={campfireConfig.hoverVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("hoverVolume", value)} />
                     <SliderRow label="Click" value={campfireConfig.clickVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("clickVolume", value)} />
                   </ControlGroup>

@@ -2,13 +2,24 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import CampfireScene from "@/components/scene-lab/CampfireScene";
+import SceneArrow from "@/components/SceneArrow";
 import CampsiteTitleIntro from "@/components/scene-lab/CampsiteTitleIntro";
 import ForceLandscape from "@/components/ForceLandscape";
+import ViewportDebug from "@/components/ViewportDebug";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
+import BearVoiceControls from "@/components/BearVoiceControls";
+import { useBearVoiceAgent } from "@/hooks/useBearVoiceAgent";
 import { DEFAULT_CAMPFIRE_CONFIG, type CampfireSceneConfig } from "@/components/scene-lab/sceneConfig";
 import { useCampsiteOneShot } from "@/lib/campsiteSounds";
 
-const SWOOSH_URL = "/sound/switch-between-scenes.mp3";
+// .wav, not the original .mp3: the source file had ~150ms of near-silence
+// baked in at the front (a swoosh "wind-up", or just MP3 encoder priming
+// samples - LAME and most encoders prepend a short silent header) plus a
+// long silent tail, so it read as laggy no matter how low swooshDelayMs
+// was set - the delay was IN the audio, not before it. Trimmed with
+// ffmpeg's silenceremove and re-exported as .wav to match the site's
+// other short cues (uncompressed, no decode start-up to speak of either).
+const SWOOSH_URL = "/sound/switch-between-scenes.wav";
 
 function clampUnit(v: number) {
   if (!Number.isFinite(v)) return 0;
@@ -19,7 +30,6 @@ function clampUnit(v: number) {
 
 const STORAGE_KEY = "scene-lab-config-v1";
 const MODE_KEY = "campsite-mode";
-const MUTE_KEY = "campsite-muted";
 
 type Mode = "config" | "site";
 
@@ -40,13 +50,13 @@ const PANELS = [
  * the left to move round the fire.
  */
 export default function CampsiteHome() {
+  const bearVoiceAgent = useBearVoiceAgent();
   const [mode, setMode] = useState<Mode>("config");
   const [panel, setPanel] = useState(0);
   // Config is immutable in this component - all live tuning happens in the
   // full scene-lab under /scene-lab, which reads/writes the JSON directly.
   // No setter needed here; keeping it triggers a no-unused-vars error.
   const config: CampfireSceneConfig = DEFAULT_CAMPFIRE_CONFIG;
-  const [muted, setMuted] = useState(false);
   // Title screen gate for site mode. Fresh every time you enter preview - the
   // cinematic is part of the vibe, so returning visitors see it too.
   const [showTitle, setShowTitle] = useState(true);
@@ -63,25 +73,15 @@ export default function CampsiteHome() {
       window.localStorage.removeItem(STORAGE_KEY);
       const savedMode = window.localStorage.getItem(MODE_KEY);
       if (savedMode === "site" || savedMode === "config") setMode(savedMode);
-      const savedMuted = window.localStorage.getItem(MUTE_KEY);
-      if (savedMuted === "1") setMuted(true);
+      // The old campsite-muted flag is deliberately cleared rather than read:
+      // the mute button is gone, so a visitor who happened to leave it on would
+      // otherwise be stuck with a silent site and no control to undo it.
+      window.localStorage.removeItem("campsite-muted");
     } catch {
       /* defaults are fine */
     }
   }, []);
 
-  const toggleMuted = useCallback(() => {
-    setMuted((m) => {
-      const next = !m;
-      try { window.localStorage.setItem(MUTE_KEY, next ? "1" : "0"); } catch { /* ignore */ }
-      return next;
-    });
-  }, []);
-
-  // Effective config: force masterVolume to 0 when muted, so every downstream
-  // sound (fire crackle, banjo, swoosh, hover) is silenced without touching
-  // the individual per-sound sliders.
-  const effectiveConfig = muted ? { ...config, masterVolume: 0 } : config;
 
   const toggleMode = useCallback(() => {
     setMode((m) => {
@@ -95,16 +95,25 @@ export default function CampsiteHome() {
 
   // Swoosh between the three sites. Played every time the panel index changes,
   // not on the click handlers alone, so it also fires from keyboard arrows.
+  // swooshDelayMs holds it back from the exact instant the panel flips - the
+  // camera itself takes a beat to start turning (LocationCamera eases in),
+  // so a swoosh fired the same frame as the click used to land slightly
+  // ahead of the motion it's supposed to be selling. swooshRate is just
+  // HTMLMediaElement.playbackRate on the clone - under 1 stretches the cue
+  // slower without touching its volume.
   const playSwoosh = useCampsiteOneShot(SWOOSH_URL);
   const lastPanelRef = useRef(panel);
   useEffect(() => {
-    if (lastPanelRef.current !== panel) {
-      lastPanelRef.current = panel;
-      const master = clampUnit(effectiveConfig.masterVolume);
-      const vol = master * clampUnit(effectiveConfig.swooshVolume);
-      if (vol > 0) playSwoosh(vol);
-    }
-  }, [panel, effectiveConfig.masterVolume, effectiveConfig.swooshVolume, playSwoosh]);
+    if (lastPanelRef.current === panel) return;
+    lastPanelRef.current = panel;
+    const master = clampUnit(config.masterVolume);
+    const vol = master * clampUnit(config.swooshVolume);
+    if (vol <= 0) return;
+    const delay = Number.isFinite(config.swooshDelayMs) ? Math.max(0, config.swooshDelayMs) : 0;
+    const rate = Number.isFinite(config.swooshRate) && config.swooshRate > 0 ? config.swooshRate : 1;
+    const timer = window.setTimeout(() => playSwoosh(vol, rate), delay);
+    return () => window.clearTimeout(timer);
+  }, [panel, config.masterVolume, config.swooshVolume, config.swooshDelayMs, config.swooshRate, playSwoosh]);
 
   const next = useCallback(() => setPanel((p) => (p + 1) % PANELS.length), []);
   const prev = useCallback(() => setPanel((p) => (p - 1 + PANELS.length) % PANELS.length), []);
@@ -129,27 +138,6 @@ export default function CampsiteHome() {
     </button>
   );
 
-  const MuteToggle = (
-    <button
-      onClick={toggleMuted}
-      aria-label={muted ? "Unmute" : "Mute"}
-      title={muted ? "Unmute" : "Mute"}
-      className="pointer-events-auto fixed bottom-3 right-3 z-50 flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-black/60 text-white/70 shadow-lg backdrop-blur-md transition hover:border-white/35 hover:text-white"
-    >
-      {muted ? (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
-          <path d="M11 5 6 9H3v6h3l5 4V5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-          <path d="m16 9 5 6M21 9l-5 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
-          <path d="M11 5 6 9H3v6h3l5 4V5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-          <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-        </svg>
-      )}
-    </button>
-  );
-
   // Config mode is the scene lab itself - no duplicated controls, no drift between
   // what's tuned here and what the site renders.
   if (mode === "config") {
@@ -161,12 +149,17 @@ export default function CampsiteHome() {
     );
   }
 
-  const current = PANELS[panel];
 
   return (
+    <>
+    {/* TEMP: ?debug overlay. Outside the wrapper so its fixed strips pin to the
+        screen, not to the rotated box. Remove once the bars are settled. */}
+    <ViewportDebug />
     <ForceLandscape>
     <main className="relative h-full w-full overflow-hidden bg-[#03040a]">
-      <CampfireScene config={effectiveConfig} panel={panel} intro titleHeld={titleHeld} />
+        <CampfireScene config={config} panel={panel} intro titleHeld={titleHeld} bearVoiceRef={bearVoiceAgent.voiceRef} />
+
+        {!showTitle && panel === 0 ? <BearVoiceControls agent={bearVoiceAgent} /> : null}
 
 
       {showTitle ? (
@@ -188,41 +181,50 @@ export default function CampsiteHome() {
 
       {!showTitle && (
         <>
+          {/* One arrow in each top corner - the model itself, with no plate
+              behind it. The round button is gone as a LOOK, not as a control:
+              the <button> is still here, still carries the aria-label and the
+              keyboard focus, and is still what takes the click, because the
+              canvas inside it has pointer events switched off. What went is
+              the border, the fill and the blur.
+
+              Nothing painted behind the arrow means nothing guaranteeing
+              contrast either, so the model carries its own drop shadow. A CSS
+              filter on the canvas element does that to the rendered pixels,
+              which keeps a pale chevron readable over a moonlit tent.
+
+              They stay corner-anchored rather than growing into a strip: a
+              full-height edge target used to swallow every click in the left
+              ~130px of the scene, which is a real cost on a page whose whole
+              point is clicking the campsite. */}
+          <button
+            onClick={prev}
+            aria-label={`Previous: ${PANELS[(panel - 1 + PANELS.length) % PANELS.length].title}`}
+            className="scene-arrow-drop group absolute left-2 top-2 z-20 flex h-8 w-8 items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70 sm:left-4 sm:top-4 sm:h-12 sm:w-12"
+          >
+            {/* Hover lives on the inner span, not the button: the button owns
+                the drop-in animation, and an animation with fill `both` keeps
+                writing its own transform - a hover scale up there would be
+                overwritten the moment the drop finished. */}
+            <span className="block h-full w-full drop-shadow-[0_2px_7px_rgba(0,0,0,0.7)] transition-transform duration-300 group-hover:-translate-x-1 group-hover:scale-110">
+              <SceneArrow direction="left" />
+            </span>
+          </button>
           <button
             onClick={next}
             aria-label={`Next: ${PANELS[(panel + 1) % PANELS.length].title}`}
-            className="group absolute left-0 top-0 z-20 flex h-full w-24 cursor-pointer items-center justify-start pl-3 sm:w-32 sm:pl-5"
+            className="scene-arrow-drop scene-arrow-drop-late group absolute right-2 top-2 z-20 flex h-8 w-8 items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70 sm:right-4 sm:top-4 sm:h-12 sm:w-12"
           >
-            <span className="pointer-events-none absolute inset-y-0 left-0 w-full bg-gradient-to-r from-black/45 to-transparent opacity-60 transition-opacity duration-300 group-hover:opacity-100" />
-            <span className="relative flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white/70 backdrop-blur-md transition-all duration-300 group-hover:border-white/40 group-hover:bg-black/60 group-hover:text-white sm:h-14 sm:w-14">
-              <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6 transition-transform duration-300 group-hover:-translate-x-0.5">
-                <path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+            <span className="block h-full w-full drop-shadow-[0_2px_7px_rgba(0,0,0,0.7)] transition-transform duration-300 group-hover:translate-x-1 group-hover:scale-110">
+              <SceneArrow direction="right" />
             </span>
           </button>
-
-          <div className="pointer-events-none absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 flex-col items-center gap-3 text-center">
-            <div>
-              <div className="text-sm font-semibold tracking-wide text-white/90 sm:text-base">{current.title}</div>
-              <div className="text-[0.7rem] text-white/50 sm:text-xs">{current.blurb}</div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              {PANELS.map((p, i) => (
-                <span
-                  key={p.title}
-                  className={`h-1.5 rounded-full transition-all duration-300 ${
-                    i === panel ? "w-6 bg-white/80" : "w-1.5 bg-white/25"
-                  }`}
-                />
-              ))}
-            </div>
-          </div>
         </>
       )}
 
       {ModeToggle}
-      {MuteToggle}
     </main>
     </ForceLandscape>
+    </>
   );
 }

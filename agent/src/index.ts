@@ -26,6 +26,20 @@ type Session = {
   expiresAt: number;
 };
 
+function createSession(id: string): Session {
+  const now = Date.now();
+  return {
+    id,
+    generation: 0,
+    lastSeen: now,
+    expiresAt: now + sessionTtlMs,
+    history: [{
+      role: "system",
+      content: "You are two friendly portfolio bears. Return exactly a JSON object with a 'lines' array containing exactly two objects: first {bear:'bear1',text:string}, then {bear:'bear2',text:string}. Both bears must answer the user concisely, safely, and naturally. No markdown.",
+    }],
+  };
+}
+
 function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
@@ -217,13 +231,7 @@ app.post("/call", (request, response) => {
   relay.language({ code: bear1Language, ttsProvider: bear1Provider, voice: bear1Voice });
   relay.language({ code: bear2Language, ttsProvider: bear2Provider, voice: bear2Voice });
   relay.parameter({ name: "callReference", value: callReference });
-  sessions.set(callReference, {
-    id: callReference,
-    generation: 0,
-    lastSeen: Date.now(),
-    expiresAt: Date.now() + sessionTtlMs,
-    history: [{ role: "system", content: "You are two friendly portfolio bears. Return exactly a JSON object with a 'lines' array containing exactly two objects: first {bear:'bear1',text:string}, then {bear:'bear2',text:string}. Both bears must answer the user concisely, safely, and naturally. No markdown." }],
-  });
+  sessions.set(callReference, createSession(callReference));
   response.type("text/xml").send(voiceResponse.toString());
 });
 
@@ -237,7 +245,15 @@ app.ws("/conversation-relay", (ws, request) => {
     if (message.type === "setup") {
       const reference = message.customParameters?.callReference;
       session = reference ? sessions.get(reference) : undefined;
-      if (!session || session.expiresAt < Date.now()) return ws.close(1008, "Unknown session");
+      // In PROD, the Next.js /call webhook owns TwiML generation, so setup is
+      // the first message the agent sees. Use Twilio's session/call identity.
+      if (!session) {
+        const setupId = reference || message.sessionId || message.callSid;
+        if (!setupId) return ws.close(1008, "Unknown session");
+        session = createSession(setupId);
+        sessions.set(setupId, session);
+      }
+      if (session.expiresAt < Date.now()) return ws.close(1008, "Unknown session");
       session.lastSeen = Date.now();
       session.expiresAt = session.lastSeen + sessionTtlMs;
       sendGreeting(ws, session);

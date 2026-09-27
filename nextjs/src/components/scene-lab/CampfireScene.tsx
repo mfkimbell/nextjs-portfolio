@@ -1,28 +1,59 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { ComponentRef, ReactNode, RefObject } from "react";
 import IntroFlight from "@/components/scene-lab/IntroFlight";
 import SafeAsset from "@/components/scene-lab/SafeAsset";
-import { RetroCrtTv, Table, Chair, meleeMenuHit, type CrtScreen, type CrtMenu } from "@/components/scene-lab/CampProps";
+import { CampCritters, TipOver, RACCOON2_URL, type ActName } from "@/components/scene-lab/CritterActs";
+import { TIP_TABLES } from "@/components/scene-lab/tipTables";
+import { RetroCrtTv, Table, Chair, meleeMenuHit, meleePageBackHit, meleeGridHit, type CrtScreen, type CrtMenu, type CrtPage } from "@/components/scene-lab/CampProps";
 import { roles } from "@/lib/experience";
 import { projects } from "@/lib/projects";
+import { SKILLS, skillIcon } from "@/lib/skills";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Clone, OrbitControls, Stars, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { CampfireSceneConfig, LocationView, ObjectOverride } from "@/components/scene-lab/sceneConfig";
-import { defaultLocationView, DEFAULT_CAMPFIRE_CONFIG, DUPLICATE_PREFIX, EMPTY_OVERRIDE } from "@/components/scene-lab/sceneConfig";
+import { defaultLocationView, DEFAULT_CAMPFIRE_CONFIG, DUPLICATE_PREFIX, EMPTY_OVERRIDE, BUG_SWARM_TWEAK_DEFAULTS } from "@/components/scene-lab/sceneConfig";
+import type { BugSwarmScope, BugSwarmTweak } from "@/components/scene-lab/sceneConfig";
 import banjoBearPoseRaw from "@/config/banjoBearPose.json";
 import bearPosesRaw from "@/config/bearPoses.json";
 import { useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
+import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
 
 import Matte from "@/components/Matte";
 const FIRE_CRACKLING_URL = "/sound/fire_crackling.mp3";
 const BANJO_URL_SOUND = "/sound/banjo.mp3";
-const CLICK_URL = "/sound/click.mp3";
-const HOVER_URL = "/sound/hover.mp3";
+const CLICK_URL = "/sound/click.wav";
+const HOVER_URL = "/sound/hover.wav";
+/** Minimum gap between hover-cue plays, so crossing an internal seam
+ *  between two meshes of the same named object (see the comment by
+ *  handleScenePointerMove) can't replay it. */
+const HOVER_SOUND_COOLDOWN_MS = 500;
+const BACK_URL = "/sound/back.wav";
+const SELECT_URL = "/sound/select.wav";
+const FISH_FLOP_URL = "/sound/fish_flop.wav";
+const FIRE_WHOOSH_URL = "/sound/fire whoosh.mp3";
+/** Minimum gap between fire-click reactions (ember burst + whoosh), so
+ *  clicking the campfire repeatedly can't stack them. Doesn't apply to the
+ *  fish's own impact - that's already paced by the several-second throw
+ *  animation, not a rapid click. */
+const FIRE_CLICK_COOLDOWN_MS = 500;
+// These two live under /CRT, not /sound - the rest of the CRT asset set
+// (cursor, the CRT's own music track) is there too.
+const CRT_ZOOM_IN_URL = "/CRT/zoom into CRT.wav";
+const CRT_ZOOM_OUT_URL = "/CRT/zoom out of crt.wav";
+const CRT_MUSIC_URL = "/sound/CRT music.mp3";
+/** CRT_MUSIC's volume multiplier at the two ends of the zoom: quiet while
+ *  you're just standing in the arcade panel, lifted once the close-up is
+ *  held. CrtFocusCamera eases a 0..1 progress value between them over
+ *  exactly the same flight the camera itself is making, so the loop rises
+ *  as the tube actually gets closer rather than snapping the moment the
+ *  camera arrives. */
+const CRT_MUSIC_FAR_MULT = 0.35;
+const CRT_MUSIC_FOCUS_BOOST = 1.6;
 
 /** 0..1 clamp for volume knobs, tolerant of missing/NaN JSON values. */
 function clampUnit(v: number) {
@@ -137,7 +168,6 @@ const RED_OWL_URL = "/birds/red_owl.glb";
 const TOUCAN_URL = "/models/toucan_wing_fly_land_v2.glb";
 const DEER_URL = "/models/deer.glb";
 const DOE_URL = "/models/doe.glb";
-const RACCOON_URL = "/wildpoly/raccoon.glb";
 const BEAR_URL = "/wildpoly/bear_sit_fixed.glb";
 // Bear pose baked into GLBs by nextjs/scripts/bake_bear_pose.py (invoked from
 // /api/dev/bake-bear-pose whenever the pose lab saves). The site loads these
@@ -390,6 +420,10 @@ const OLD_BEAR_TOILET_URL = "/bear/3/Toilet%20Paper%20stack%20by%20Quaternius%20
 const OLD_BEAR_POSTIT_URL = "/bear/3/Yellow%20Post-it%20by%20Zack%20Huang%20-%201-ZStsi8S91.glb";
 const OLD_BEAR_DEBRIS_URL = "/bear/3/Debris%20Papers%20by%20Quaternius%20-%20MujITy1NRR.glb";
 const OLD_BEAR_LANTERN_URL = "/bear/3/Lantern%20by%20Poly%20by%20Google%20-%209YMVn5hMiv8.glb";
+/** Rocking chair for the cabin study. Bear sits in it via ROCKING_CHAIR_BEAR,
+ *  rendered as a child of the same Selectable so moving/rotating/scaling the
+ *  chair in the lab carries the bear with it - drag the chair, not two things. */
+const ROCKING_CHAIR_URL = "/rocking-chair.glb";
 const OLD_BEAR_CARAVAN_URL = "/bear/3/Caravan%20by%20Poly%20by%20Google%20-%20aiDmjN8uOmA%20(1).glb";
 // New camping scene GLB dropped into old-bear/. Kept as a raw placeable so the
 // user can decide what to keep or strip out.
@@ -488,11 +522,54 @@ const CONSOLE_PORTS: Array<[number, number, number]> = [
   [0.04079, 0.06328, -0.09532],
 ];
 
+/**
+ * The four controller ports on gamecube_console.glb - the dots on its front -
+ * in the MODEL's own units.
+ *
+ * Measured in Blender rather than eyeballed. Importing the GLB and splitting
+ * every mesh into connected shells turns up four IDENTICAL pieces, 1.0 x 0.26
+ * x 1.0, sitting at the same height and evenly spaced 1.7464 apart along one
+ * face - which is what a row of sockets looks like to a clustering pass and
+ * what nothing else on this model looks like.
+ *
+ * The face matters and cost me a screenshot: the opposite side clusters
+ * suspiciously well too, because the vent slats are also a regular row. A
+ * front view settled it - four sockets with the two memory-card slots beneath
+ * them on this face, vents and the recessed panel on the other.
+ *
+ * Two conversions are baked in. Blender is Z-up and glTF is Y-up, so the
+ * measured (x, y, z) is read back as (x, z, -y). And the y is the socket
+ * MOUTH - the pieces' outermost face at -5.4911, not their centre - so a lead
+ * starts where it would really plug in rather than a millimetre inside the
+ * shell.
+ */
+const ARCADE_CONSOLE_PORTS: Array<[number, number, number]> = [
+  [-2.6195, 4.4906, 5.4911],
+  [-0.8732, 4.4906, 5.4911],
+  [0.8732, 4.4906, 5.4911],
+  [2.6195, 4.4906, 5.4911],
+];
+
+/**
+ * Cord gauge for the arcade's leads, in world units.
+ *
+ * Worth the arithmetic rather than reusing WIRE_RADIUS, which belongs to a
+ * console at a different scale: this console is 10.467 model units wide at
+ * baseScale 0.014, so it stands 0.1465 world units across. A real GameCube is
+ * 150mm, which puts this scene at about a metre to the unit - and a real
+ * controller cord is ~2.5mm, and 3.6mm is about as thin as this holds up: at
+ * the distance the camera sits that is a pixel and a half, and anything under
+ * a pixel flickers as it crosses pixel boundaries rather than drawing a line.
+ */
+const ARCADE_WIRE_RADIUS = 0.0018;
+
+/** Cord and plug colour. Near-black rather than pure: at #000 a cord reads as
+ *  a hole cut in the floor, because nothing in the scene can shade it. */
+const ARCADE_WIRE_COLOR = "#0a0a0c";
+
 /** Where the cord leaves the controller shell, in controller-local metres. */
 const CONTROLLER_CORD_EXIT = new THREE.Vector3(-0.00668, -0.00142, -0.03165);
 
-/** Measured off the original cord: 15 mm radius at model scale, ~1.3 mm for real. */
-const WIRE_RADIUS = 0.0042;
 /**
  * What each CRT is showing. Drop an image in /public and point `content` at it; leave
  * it out and the screen runs a built-in animation so it never looks dead. `tint` is
@@ -517,11 +594,42 @@ const WIRE_RADIUS = 0.0042;
  * Four lines is the readout's limit at this size, and shortest-first reads
  * better on a 256px tube than newest-first would.
  */
+/* The tube runs two screens. Idle it plays the attract video with nothing
+   drawn over it; clicking it brings up the plates, which sit on this still
+   instead - a moving background behind the menu fights the plates for
+   attention. Both live in /public/CRT. */
+const CRT_ATTRACT_VIDEO = "/CRT/Menu.mp4";
+/* .mp4, not the .mov that was dropped in: the file is H.264 either way, but
+   Firefox will not open a QuickTime container. This one is that exact video
+   remuxed with `ffmpeg -c copy` - same bytes, same quality, a container every
+   browser reads. background_buttons.mov is still on disk as the source. */
+const CRT_BUTTONS_VIDEO = "/CRT/background_buttons.mp4";
+/*
+ * The P1 hand, as the mouse cursor, for as long as the tube is open.
+ *
+ * Downscaled from the crt_cursor.png in that folder rather than used
+ * directly: a CSS cursor image is capped at 128px square (Chrome ignores a
+ * larger one outright, so the cursor would simply not change), and the
+ * source is 2048x2108 and 1.8MB - a download the size of the whole menu
+ * video for something that is 40 pixels on screen.
+ *
+ * The hotspot is the FINGERTIP - measured off the alpha channel as the
+ * middle of the topmost opaque row, not eyeballed. Put it anywhere else and
+ * the plate you click is not the plate the finger is touching.
+ */
+const CRT_CURSOR = "url('/CRT/crt_cursor_48.png') 24 2, pointer";
+/* Poster under the buttons video, so the switch never shows black. */
+const CRT_MENU_BACKGROUND = "/CRT/background.jpg";
+
 const PORTFOLIO_MENU: CrtMenu = {
   title: "Main Menu",
   dwell: 3.6,
   variant: "melee",
-  backgroundVideo: "/melee-menu-bg.mp4",
+  tagline: "Solo Smash",
+  backgroundVideo: CRT_ATTRACT_VIDEO,
+  backgroundImage: CRT_MENU_BACKGROUND,
+  // everything the tube can show, decoded before it is needed
+  preloadMedia: [CRT_ATTRACT_VIDEO, CRT_BUTTONS_VIDEO, CRT_MENU_BACKGROUND],
   items: [
     {
       label: "Experience",
@@ -541,18 +649,103 @@ const PORTFOLIO_MENU: CrtMenu = {
       subtitle: "Tools of the Trade",
       lines: ["React / Next / TS", "Python / C# / .NET", "AWS / GCP / K8s", "Bedrock / PyTorch"],
     },
-    {
-      label: "Options",
-      subtitle: "Tweak the Setup",
-      lines: ["Contact", "Resume", "GitHub", "LinkedIn"],
-    },
-    {
-      label: "Data",
-      subtitle: "Save & Records",
-      lines: ["Since 2013", "Full-Stack", "Cloud-Native", "Ship It"],
-    },
   ],
 };
+
+/*
+ * One screen per section, built from the same site data the menu plates are.
+ *
+ * The plates only ever had room for four teaser lines each; picking one now
+ * opens its own readout, so Experience can carry job titles and dates and
+ * Projects can carry their stacks instead of just a list of names. Order
+ * matches PORTFOLIO_MENU.items, because the plate index IS the page index.
+ */
+/* Plate names. Long enough to be clear, short enough not to be truncated -
+   the tile is a label, the panel underneath is where the full name lives. */
+const COMPANY_TAGS: Record<string, string> = {
+  "Twilio": "Twilio",
+  "Regions Bank": "Regions",
+  "Summit Technology Consulting": "Summit",
+  "Dark Tower": "Dark Tower",
+  "BioGX": "BioGX",
+};
+
+const SECTION_PAGES: CrtPage[] = [
+  {
+    // A board of the company logos, which are animated gifs. They keep
+    // animating because the loader parks each <img> in the document rather
+    // than decoding it detached - a detached image shows frame one forever.
+    // Five big tiles across one row, so a spinning logo is actually readable;
+    // the band underneath carries the role and dates for whichever is lit.
+    title: "Experience",
+    grid: true,
+    cols: roles.length,
+    // The panel carries the whole role - title, dates and every bullet - so
+    // it needs the height, and the logo strip shrinks to pay for it.
+    bandFrac: 0.66,
+    tile: { wellH: 30, capH: 10 },
+    rows: roles.map((r) => ({
+      label: r.company,
+      // A clean short form for the plate. "Summit Technology Consulting"
+      // truncated to fit was the thing that looked unprofessional.
+      tag: COMPANY_TAGS[r.company] ?? r.company.split(/\s+/)[0],
+      sub: `${r.title} · ${r.dates}`,
+      body: r.bullets,
+      // .mp4, not the .gif the rest of the site uses: on a canvas the browser
+      // will not reliably animate an off-screen <img>, and a <video> can be
+      // told to play. Same artwork, a third of the bytes.
+      icon: r.logo.replace(/\.gif$/i, ".mp4"),
+    })),
+  },
+  {
+    title: "Projects",
+    // A roster board, not a list: each project is a tile with its own icon,
+    // 7 across by 3 down, which is exactly the 21 there are.
+    /*
+     * Thumbnails squeezed into a strip so the diagram gets the screen.
+     *
+     * 11 across by 2 down holds all 21 in half the rows 7-across needed, and
+     * that bought the panel another 20 logical pixels of height. The tiles are
+     * an index at this size, not a label - which is why they have no name
+     * plates and lean on the lit rim instead.
+     */
+    grid: true,
+    cols: 11,
+    bandFrac: 0.72,
+    tile: { wellH: 16, showCaption: false },
+    // Every logo has an "_arch" twin already on disk, so the diagram path is
+    // derived rather than being a field nobody would remember to fill in.
+    rows: projects.map((pr) => ({
+      label: pr.name,
+      icon: pr.logo,
+      diagram: pr.logo.replace(/\.png$/i, "_arch.png"),
+      // Every one of the 21 has a repo, so every tile on this board is a link.
+      href: pr.github,
+    })),
+  },
+  {
+    title: "Skills",
+    /*
+     * Every icon, on one board.
+     *
+     * This was eight lines of "React / Next.js / TypeScript" - the tech
+     * bundled into slash-separated strings because a list was all the screen
+     * could do. It is a grid now, off the same SKILLS the carousel on the
+     * site runs on, so the two can never disagree about what he works with.
+     *
+     * 5 across by 4 down holds all nineteen and fills the body exactly:
+     * cellH 33 x 4 rows is 132 of the 138 available. No name plates and no
+     * band - at this size a caption under each would be mush, and the marks
+     * are the recognisable thing anyway. That is what pays for icons this
+     * big: 28px of art where a captioned board would have given 20.
+     */
+    grid: true,
+    cols: 5,
+    bandFrac: 0,
+    tile: { wellH: 32, showCaption: false },
+    rows: SKILLS.map((s) => ({ label: s.label, icon: skillIcon(s) })),
+  },
+];
 
 const ARCADE_SCREENS: CrtScreen[] = [
   // crt_0 runs the portfolio menu rather than media. Tint is the cool blue
@@ -645,25 +838,69 @@ export function worldToLocationView(
  * one per location just drew three squares on the ground; the single circular
  * CampfireGround is the surface under the whole campsite instead.
  */
+/**
+ * Half-width of the arc a location stays lit for, in radians.
+ *
+ * Sites are 120° apart, so the window has to admit exactly one when parked and
+ * both of a pair mid-turn: anything over 60° does the latter, anything under
+ * 120° does the former, and 75° sits in the middle.
+ *
+ * This deliberately measures the camera's ANGLE around the ring rather than its
+ * distance to each site. Distance looked simpler and failed a check: the shots
+ * stand back by very different amounts (4.0, 2.6 and 10.2 units from their own
+ * site), so no single distance threshold separates "parked here" from "mid-turn
+ * elsewhere" for all three. The angle does not care how far back a shot sits.
+ */
+const LOCATION_VISIBLE_ARC = Math.PI * (75 / 180);
+
 function Location({
   index,
   config,
+  gate = false,
   children,
 }: {
   index: number;
   config: CampfireSceneConfig;
+  /** Switch off whenever the camera is looking at a different site. Off during
+   *  free-look and the intro flight, where "which site" has no answer. */
+  gate?: boolean;
   children: ReactNode;
 }) {
   const ref = useRef<THREE.Group>(null);
   const cfg = useRef(config);
   cfg.current = config;
-  useFrame(() => {
+  const gateRef = useRef(gate);
+  gateRef.current = gate;
+
+  useFrame(({ camera }) => {
     if (!ref.current) return;
     const c = cfg.current;
     const a = LOCATION_AZIMUTH(index, c);
     ref.current.position.set(Math.sin(a) * c.locationRadius, 0, Math.cos(a) * c.locationRadius);
     ref.current.rotation.set(0, a + Math.PI + c.locationSpin, 0);
+
+    /*
+     * Hiding the group is what makes this worth doing, and not because of the
+     * meshes - three already frustum-culls those per object. It is the LIGHTS.
+     * They go into one global list with no distance test, and
+     * lights_fragment_begin loops every one of them for every lit fragment, so
+     * a lantern behind the camera still costs on every pixel. In
+     * WebGLRenderer.projectObject the `object.visible === false` early-out sits
+     * ABOVE the isLight branch, so switching a location off drops its lights
+     * out of the frame entirely. WebGLShadowMap honours it too, so their shadow
+     * passes go with them.
+     */
+    if (!gateRef.current) {
+      ref.current.visible = true;
+      return;
+    }
+    // Where the camera stands around the ring. ringMatrix puts a site at
+    // (sin a · R, 0, cos a · R), so the same atan2 recovers the camera's own
+    // angle whatever radius it happens to be orbiting at.
+    const camAngle = Math.atan2(camera.position.x, camera.position.z);
+    ref.current.visible = Math.abs(shortestTurn(camAngle, a)) < LOCATION_VISIBLE_ARC;
   });
+
   return (
     <group ref={ref} name={`location_${index}`}>
       {children}
@@ -856,7 +1093,6 @@ const ANIMALS: AnimalPlacement[] = [
   { url: TOUCAN_URL, position: [0, 0.55, 2.4], rotationY: Math.PI, scale: 3.6, label: "toucan on front log" },
   { url: DEER_URL, position: [0.8, 0, 2.4], rotationY: Math.PI, scale: 1.5, label: "deer next to front log", flatShading: true },
   { url: DOE_URL, position: [1.6, 0, 2.4], rotationY: Math.PI, scale: 1.45, label: "doe next to front log", flatShading: true },
-  { url: RACCOON_URL, position: [-0.2, 0.55, 2.4], rotationY: Math.PI, scale: 0.35, label: "raccoon on front log", animation: "idle" },
   {
     url: BEAR_URL_FRONT_LOG, position: [0.4, 0, 2.4], bench: 0, rotationY: Math.PI, scale: 0.5,
     label: "bear on front log", animation: "sit_log", sitOnBench: true,
@@ -994,6 +1230,27 @@ void CUBS; // kept for reference; not rendered by the current ArcadeSector
  * camera the shot reads as four kids on the floor watching the CRTs. Speeds
  * are mutually non-integer so the four never fall into lockstep.
  */
+/**
+ * Which cub is plugged into which socket, in socket order left to right.
+ *
+ * Both of those "left to right"s are the ARCADE CAMERA's, not the model's, and
+ * they were checked rather than assumed: projecting each socket and each cub
+ * onto that shot's right-vector puts the sockets in their model order
+ * (screen-x -0.068, -0.053, -0.037, -0.022 for 0..3) and the cubs the other
+ * way round - cub 3 sits at -0.345 and cub 2 at -0.181, so the bear on the
+ * LEFT of frame is cub 3.
+ *
+ * Only the left pair is wired. The other two sockets stay empty - and empty
+ * means empty: a plug sitting in a socket with no cord running out of it
+ * looks more broken than a bare hole.
+ */
+const ARCADE_PORT_CUBS: readonly (string | null)[] = [
+  "arcade_cub_3",   // port 1 - the bear on the left
+  "arcade_cub_2",   // port 2 - the bear on the right
+  null,
+  null,
+];
+
 const ARCADE_CUBS: AnimalPlacement[] = [
   cub(0, [-0.55, 0, 1.75], Math.PI, 1.4, 1.06),
   cub(1, [-0.19, 0, 1.60], Math.PI, 5.7, 0.93),
@@ -1012,6 +1269,21 @@ const CONSOLE_BASE = { x: -0.62, y: 0, z: 0, rotY: -Math.PI / 2, scale: 1 };
 const CONTACT_BEAR: AnimalPlacement = {
   url: BEAR_URL, position: [-0.95, 0.42, 0], rotationY: Math.PI / 2, scale: 0.5,
   label: "bear at the table", animation: "sit_log", animationOffset: 3.1, animationSpeed: 1,
+  accessories: ["glasses"], bearId: "table",
+};
+
+/**
+ * Sits in the rocking chair, rendered as a CHILD of the chair's own
+ * Selectable (see cabin_rocking_chair in CabinSector) - not a sibling like
+ * CONTACT_BEAR/contact_chair are. Position/rotation/scale below are a first
+ * guess in the CHAIR'S LOCAL SPACE (seat height, facing) and are almost
+ * certainly off; nudge them from the lab's object drawer by clicking the
+ * bear directly (name "bear_rocking_chair"). Dragging the chair itself
+ * (name "cabin_rocking_chair") moves both together.
+ */
+const ROCKING_CHAIR_BEAR: AnimalPlacement = {
+  url: BEAR_URL, position: [0, 0.4, 0], rotationY: 0, scale: 0.5,
+  label: "bear in the rocking chair", animation: "sit_log", animationOffset: 5.6, animationSpeed: 1,
   accessories: ["glasses"], bearId: "table",
 };
 
@@ -1228,16 +1500,26 @@ function CrtFocusCamera({
   view,
   config,
   handoff,
+  zoomRef,
 }: {
   active: boolean;
   view: LocationView | null;
   config: CampfireSceneConfig;
   handoff: boolean;
+  /** Written every frame with CRT_MUSIC's volume multiplier, eased from
+   *  CRT_MUSIC_FAR_MULT (idle, out on the ring) to CRT_MUSIC_FOCUS_BOOST
+   *  (arrived on the glass) in lockstep with the same flight the camera
+   *  itself is making - so the loop rises as the tube actually gets closer
+   *  instead of snapping the moment the camera arrives. A plain ref, not
+   *  state: this changes every frame and nothing here needs a re-render
+   *  for it - the CRT music hook reads it straight off its own rAF loop. */
+  zoomRef?: React.MutableRefObject<number>;
 }) {
   const { camera } = useThree();
   type Pose = { px: number; py: number; pz: number; tx: number; ty: number; tz: number };
   const pose = useRef<Pose | null>(null);
   const seed = useRef<Pose | null>(null);
+  const zoomProgress = useRef(0);
   const scratch = useMemo(() => new THREE.Matrix4(), []);
   const goal = useMemo(() => new THREE.Vector3(), []);
   const aim = useMemo(() => new THREE.Vector3(), []);
@@ -1246,6 +1528,14 @@ function CrtFocusCamera({
   useFrame((_, delta) => {
     const settle = Math.max(0.05, config.locationTurnSpeed);
     const k = 1 - Math.pow(0.01, Math.min(delta, 1 / 20) / settle);
+
+    // Same k the camera itself eases on, so the music's rise is locked to
+    // the actual flight rather than running on a timer of its own.
+    zoomProgress.current += ((active ? 1 : 0) - zoomProgress.current) * k;
+    if (zoomRef) {
+      zoomRef.current = CRT_MUSIC_FAR_MULT
+        + (CRT_MUSIC_FOCUS_BOOST - CRT_MUSIC_FAR_MULT) * zoomProgress.current;
+    }
 
     if (active && view) {
       if (!pose.current) {
@@ -1409,6 +1699,118 @@ function OrbitCameraSaver({
  * Pass identity position/rotation/scale to the wrapped component - Selectable
  * carries the base transform so the drag delta composes cleanly.
  */
+/**
+ * Hover feedback for anything a visitor is meant to click.
+ *
+ * Without it there is no way to know an object is interactive until you have
+ * already clicked it - and half of these only work ONCE, so a missed affordance
+ * is a trick the visitor never finds. Two signals, because either alone is easy
+ * to miss on a dark scene: the pointer changes, and the object lifts a little
+ * out of the gloom.
+ *
+ * The lift is emissive rather than a scale or an outline: this scene is lit by
+ * a single fire, so the thing that reads instantly is an object appearing to
+ * catch more of the light. Every material's original emissive is cached on the
+ * way in and restored on the way out, so a hover can never leave a prop glowing.
+ */
+/** The tint a clickable prop wears while the pointer is on it. Warm, as though
+ *  the fire caught it - and the SAME everywhere, so "this does something" is
+ *  one language across the scene rather than per-prop decoration. */
+const HOVER_GLOW_COLOR = { r: 1, g: 0.86, b: 0.6 } as const;
+const HOVER_GLOW_INTENSITY = 0.22;
+const HOVER_CURSOR = "url('/cursors/pointer.svg') 14 14, pointer";
+
+type GlowTarget = THREE.Object3D | RefObject<THREE.Object3D | null> | null | undefined;
+type GlowCache = {
+  root: THREE.Object3D;
+  mats: { mat: THREE.MeshStandardMaterial; color: THREE.Color; intensity: number }[];
+};
+
+/**
+ * Brighten everything under `target` while `lit`, and put it back when it goes
+ * out. The pointer changes with it: a prop that lights up without the cursor
+ * changing reads as decoration rather than as a button.
+ *
+ * Three things this has to get right, all of them learned the hard way:
+ *
+ *  - RESTORING MUST SURVIVE THE AFFORDANCE GOING AWAY. Clicking a prop is
+ *    exactly the moment it stops being clickable - the click starts the fall,
+ *    the fall drops the affordance - and an earlier version bailed out before
+ *    touching the materials in that case. The warm emissive stayed on for the
+ *    rest of the visit, so a bag lying on the ground went on glowing as though
+ *    the cursor were still over it.
+ *  - The materials are SHARED with drei's GLTF cache, so the original emissive
+ *    and intensity are kept per material and written back verbatim. Anything
+ *    less leaks a permanent glow into every other user of that model.
+ *  - The cache is keyed on the ROOT it was collected from. Point this at a
+ *    different object and the old one is put back first, or it keeps whatever
+ *    it was wearing when the target moved on.
+ */
+function useHoverGlow(target: GlowTarget, lit: boolean) {
+  const cache = useRef<GlowCache | null>(null);
+
+  const restore = useCallback(() => {
+    const c = cache.current;
+    if (!c) return;
+    for (const t of c.mats) {
+      t.mat.emissive.copy(t.color);
+      t.mat.emissiveIntensity = t.intensity;
+      t.mat.needsUpdate = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    const root = target && "current" in target ? target.current : target ?? null;
+    if (cache.current && cache.current.root !== root) {
+      restore();
+      cache.current = null;
+    }
+    if (!root) return;
+    if (!lit) { restore(); return; }
+    if (!cache.current) {
+      const mats: GlowCache["mats"] = [];
+      root.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh || !m.material) return;
+        for (const raw of Array.isArray(m.material) ? m.material : [m.material]) {
+          const std = raw as THREE.MeshStandardMaterial;
+          if (std && "emissive" in std) {
+            mats.push({ mat: std, color: std.emissive.clone(), intensity: std.emissiveIntensity ?? 1 });
+          }
+        }
+      });
+      cache.current = { root, mats };
+    }
+    for (const t of cache.current.mats) {
+      t.mat.emissive.setRGB(HOVER_GLOW_COLOR.r, HOVER_GLOW_COLOR.g, HOVER_GLOW_COLOR.b);
+      t.mat.emissiveIntensity = HOVER_GLOW_INTENSITY;
+      t.mat.needsUpdate = true;
+    }
+  }, [target, lit, restore]);
+
+  // and if the prop unmounts while lit, put the shared material back
+  useEffect(() => restore, [restore]);
+
+  useEffect(() => {
+    if (!lit) return;
+    const prev = document.body.style.cursor;
+    document.body.style.cursor = HOVER_CURSOR;
+    // Restore on unmount too: these props get carried off mid-hover, and a
+    // cursor left pointing at nothing would stick for the rest of the visit.
+    return () => { document.body.style.cursor = prev; };
+  }, [lit]);
+}
+
+/**
+ * Hover affordance for a Selectable: same glow, but it owns the group ref the
+ * caller wraps its children in.
+ */
+function useHoverLift(hovered: boolean, enabled: boolean) {
+  const group = useRef<THREE.Group>(null);
+  useHoverGlow(group, hovered && enabled);
+  return group;
+}
+
 function Selectable({
   name,
   onSelect,
@@ -1416,6 +1818,8 @@ function Selectable({
   basePosition = [0, 0, 0],
   baseRotationY = 0,
   baseScale = 1,
+  hidden = false,
+  interactive = false,
   children,
 }: {
   name: string;
@@ -1424,10 +1828,47 @@ function Selectable({
   basePosition?: [number, number, number];
   baseRotationY?: number;
   baseScale?: number;
+  /** Runtime hide, as opposed to the config's own `hide` slider. Set while a
+   *  critter is carrying this object off - what you can see is its clone in a
+   *  mouth or a set of talons, and leaving the original standing there would
+   *  give the game away. */
+  hidden?: boolean;
+  /** true = this one does something when clicked, so advertise it on hover */
+  interactive?: boolean;
   children: ReactNode;
 }) {
+  return (
+    <SelectableInner
+      name={name} onSelect={onSelect} config={config} basePosition={basePosition}
+      baseRotationY={baseRotationY} baseScale={baseScale} hidden={hidden}
+      interactive={interactive}
+    >
+      {children}
+    </SelectableInner>
+  );
+}
+
+function SelectableInner({
+  name, onSelect, config, basePosition = [0, 0, 0], baseRotationY = 0,
+  baseScale = 1, hidden = false, interactive = false, children,
+}: {
+  name: string;
+  onSelect: (name: string) => void;
+  config: CampfireSceneConfig;
+  basePosition?: [number, number, number];
+  baseRotationY?: number;
+  baseScale?: number;
+  hidden?: boolean;
+  interactive?: boolean;
+  children: ReactNode;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const liftRef = useHoverLift(hovered && interactive, interactive);
+  // onPointerOut is unmounted along with interactivity, so without this the
+  // flag would stay true forever on a prop that was clicked mid-hover.
+  useEffect(() => { if (!interactive) setHovered(false); }, [interactive]);
   const o = config.objectOverrides?.[name] ?? EMPTY_OVERRIDE;
-  if (o.hide >= 0.5) return null;
+  if (hidden || o.hide >= 0.5) return null;
   return (
     <group
       name={name}
@@ -1438,8 +1879,10 @@ function Selectable({
       rotation={new THREE.Euler(o.rotX, baseRotationY + o.rotY, o.rotZ, "XZY")}
       scale={baseScale * o.scale}
       onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); onSelect(name); }}
+      onPointerOver={interactive ? (e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(true); } : undefined}
+      onPointerOut={interactive ? (e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(false); } : undefined}
     >
-      {children}
+      <group ref={liftRef}>{children}</group>
     </group>
   );
 }
@@ -1906,6 +2349,7 @@ function CampfireSceneModel({
   onSelect: (name: string) => void;
 }) {
   const gltf = useGLTF(CAMPFIRE_SCENE_URL) as unknown as { scene: THREE.Group };
+  const [fireHot, setFireHot] = useState(false);
   const { scene, trees, bonfire, campItems, namedNodes } = useMemo(() => {
     const cloned = gltf.scene.clone(true);
     const toRemove: THREE.Object3D[] = [];
@@ -2062,12 +2506,37 @@ function CampfireSceneModel({
 
   });
 
+  /*
+   * The fire lights under the pointer like every other clickable prop.
+   *
+   * It cannot use a Selectable's hover for this: the log is a node INSIDE this
+   * GLB rather than something wrapped in a group of its own, which is the same
+   * reason the click below has to walk up from whatever mesh was hit. So the
+   * hover is resolved the same way, and only the log counts - the flame, the
+   * sparks and the glow disc are decoration routed elsewhere.
+   *
+   * Gated on the burst actually being armed. A prop that brightens and then
+   * does nothing when clicked is worse than one that never brightened.
+   */
+  const fireClickable = config.fireClickBurstOn >= 0.5;
+  const hitName = (obj: THREE.Object3D) => {
+    let node: THREE.Object3D | null = obj;
+    while (node && !namedNodes.has(node.name)) node = node.parent;
+    return node?.name ?? "";
+  };
+  useHoverGlow(bonfire?.node ?? null, fireClickable && fireHot);
+
   return (
     <primitive
       object={scene}
       position={[config.sceneX, config.sceneY, config.sceneZ]}
       rotation={[0, config.sceneRotationY, 0]}
       scale={config.sceneScale}
+      onPointerMove={(e: ThreeEvent<PointerEvent>) => {
+        const on = fireClickable && hitName(e.object) === "bonfire";
+        if (on !== fireHot) setFireHot(on);
+      }}
+      onPointerOut={() => { if (fireHot) setFireHot(false); }}
       onClick={(e: THREE.Event & { object: THREE.Object3D; stopPropagation: () => void }) => {
         // stopPropagation ONLY once we've actually resolved a name. It used to
         // fire unconditionally at the top, which meant a click landing on any
@@ -2444,6 +2913,9 @@ function CampfireLights({ config }: { config: CampfireSceneConfig }) {
   // the map modest (1024) and near/far tight (matched to fireLightReach).
   const fireCasts = config.fireCastShadow >= 0.5 && config.shadowsEnabled >= 0.5;
   const fireMapSize = Math.max(64, Math.round(config.fireShadowMapSize));
+  // The spot is ONE depth pass, so it is six times cheaper per texel than the
+  // point light above and can afford to stay the sharper of the two.
+  const warmMapSize = Math.max(64, Math.round(config.warmShadowMapSize));
   useEffect(() => {
     fireLight.current?.shadow.camera.updateProjectionMatrix();
   }, [config.fireLightReach]);
@@ -2535,8 +3007,8 @@ function CampfireLights({ config }: { config: CampfireSceneConfig }) {
         // three defaults to a 512x512 shadow map. Stretched over the whole camp that
         // is ~1cm per texel on the animals, which is what reads as blocky, pixelated
         // shading across their fur.
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
+        shadow-mapSize-width={warmMapSize}
+        shadow-mapSize-height={warmMapSize}
         shadow-camera-near={0.5}
         shadow-camera-far={config.warmLightReach}
       />
@@ -3019,7 +3491,7 @@ function LitWoodenCabin({ config }: { config: CampfireSceneConfig }) {
         <BugSwarm
           origin={[config.arcadeCabinLampX, config.arcadeCabinLampY, config.arcadeCabinLampZ]}
           frameScale={0.1 * (config.objectOverrides?.["arcade_wooden_cabin"]?.scale ?? 1)}
-          {...bugSwarmProps(config, bugColor)}
+          {...bugSwarmProps(config, bugColor, "arcadeCabinLamp")}
         />
       )}
       {/* Sits in the model's frame so it tracks the lantern through the mirror
@@ -4271,7 +4743,7 @@ type BugSwarmProps = {
   sizeVary: number;
   // --- motion: read live every frame ---------------------------------------
   lungeSharp: number; lungeDepth: number; jitterSpeed: number;
-  flickerDepth: number; drift: number; additive: number;
+  flickerDepth: number; lungeFlare: number; drift: number; additive: number;
   /** Exponent on where bugs sit in the column / the radius band. 1 is the
    *  even scatter this always had; >1 crowds them low / inward, <1 high /
    *  outward. Applied per frame off the raw random, so dragging re-shapes the
@@ -4287,32 +4759,58 @@ type BugSwarmProps = {
 };
 
 /** Everything the two mounting points hand a swarm, built once from config. */
-function bugSwarmProps(config: CampfireSceneConfig, color: THREE.Color) {
+/**
+ * The shared swarm design, with one site's own block applied on top.
+ *
+ * Everything that describes HOW the bugs behave - lunge, flicker, jitter,
+ * drift, tilt - stays global on purpose: that is the species, and it should
+ * look like the same insect at every lamp. What varies per site is the shape
+ * and placement of the cloud, so those are the knobs that take a multiplier.
+ *
+ * `scope` is the config prefix, and it is the same string the fixture's other
+ * keys are built from (deskLampSmallA and friends), so a lamp's swarm block
+ * lives with the rest of that lamp's settings rather than in a table of its
+ * own that could fall out of step with DESK_CAMP_LAMPS.
+ */
+function bugSwarmProps(config: CampfireSceneConfig, color: THREE.Color, scope: BugSwarmScope) {
+  const c = config as unknown as Record<string, number>;
+  const tweak = (knob: BugSwarmTweak) => c[`${scope}${knob}`] ?? BUG_SWARM_TWEAK_DEFAULTS[knob];
   return {
-    count: config.deskBugCount, radius: config.deskBugRadius,
-    spread: config.deskBugSpread, height: config.deskBugHeight,
-    speed: config.deskBugSpeed, jitter: config.deskBugJitter,
-    dive: config.deskBugDive, size: config.deskBugSize,
-    opacity: config.deskBugOpacity, color,
-    seed: config.deskBugSeed, speedVary: config.deskBugSpeedVary,
+    // Count is rounded here rather than in BugSwarm, so the multiplier reads
+    // as a real number of bugs on the panel instead of silently truncating.
+    count: Math.max(0, Math.round(config.deskBugCount * tweak("BugCountMul"))),
+    radius: config.deskBugRadius * tweak("BugRadiusMul"),
+    spread: config.deskBugSpread * tweak("BugSpreadMul"),
+    height: config.deskBugHeight * tweak("BugHeightMul"),
+    speed: config.deskBugSpeed * tweak("BugSpeedMul"),
+    size: config.deskBugSize * tweak("BugSizeMul"),
+    opacity: Math.max(0, Math.min(1, config.deskBugOpacity * tweak("BugOpacityMul"))),
+    jitter: config.deskBugJitter,
+    dive: config.deskBugDive, color,
+    seed: config.deskBugSeed + tweak("BugSeedShift"), speedVary: config.deskBugSpeedVary,
     twoWay: config.deskBugTwoWay, tilt: config.deskBugTilt,
     lungeRate: config.deskBugLungeRate, flickerRate: config.deskBugFlickerRate,
     lungeSharp: config.deskBugLungeSharp, lungeDepth: config.deskBugLungeDepth,
     jitterSpeed: config.deskBugJitterSpeed, flickerDepth: config.deskBugFlickerDepth,
+    lungeFlare: config.deskBugLungeFlare,
     drift: config.deskBugDrift, additive: config.deskBugAdditive,
     sizeVary: config.deskBugSizeVary,
     heightBias: config.deskBugHeightBias, radiusBias: config.deskBugRadiusBias,
     oval: config.deskBugOval, swarmRotY: config.deskBugRotY,
     wobbleY: config.deskBugWobbleY,
-    offsetX: config.deskBugOffsetX, offsetY: config.deskBugOffsetY,
-    offsetZ: config.deskBugOffsetZ,
+    // Added to the shared offset, not replacing it: the global is "where a
+    // swarm sits relative to its bulb" in general, this is this fixture's
+    // correction to that.
+    offsetX: config.deskBugOffsetX + tweak("BugOffX"),
+    offsetY: config.deskBugOffsetY + tweak("BugOffY"),
+    offsetZ: config.deskBugOffsetZ + tweak("BugOffZ"),
   };
 }
 
 function BugSwarm({
   origin, frameScale, count, radius, spread, height, speed, jitter, dive,
   size, opacity, color, seed, speedVary, twoWay, tilt, lungeRate, flickerRate,
-  lungeSharp, lungeDepth, jitterSpeed, flickerDepth, drift, additive,
+  lungeSharp, lungeDepth, jitterSpeed, flickerDepth, lungeFlare, drift, additive,
   sizeVary, heightBias, radiusBias, oval, swarmRotY, wobbleY,
   offsetX, offsetY, offsetZ,
 }: BugSwarmProps) {
@@ -4360,20 +4858,30 @@ function BugSwarm({
 
   const live = {
     origin, radius: localRadius, spread, height: localHeight, speed, jitter, dive,
-    lungeSharp, lungeDepth, jitterSpeed, flickerDepth, drift,
+    lungeSharp, lungeDepth, jitterSpeed, flickerDepth, lungeFlare, drift,
     heightBias, radiusBias, oval, swarmRotY, wobbleY,
     offsetX: offsetX / s, offsetY: offsetY / s, offsetZ: offsetZ / s,
   };
   const p = useRef(live);
   p.current = live;
+  // The swarm's OWN clock, advanced by real time scaled by Speed - not
+  // clock.elapsedTime read straight. Orbit angle already multiplied Speed
+  // in on its own below, but jitter, drift, wobble, the lunge and the
+  // wing-flicker all used to read the wall clock regardless of it, so a
+  // swarm dialed down to a crawl on Speed still jittered and flickered at
+  // full tempo - "slower" bottomed out well short of still. Scaling the
+  // swarm's clock by Speed instead means every one of those follows it
+  // down too, all the way to frozen at 0.
+  const swarmClock = useRef(0);
 
-  useFrame(({ clock }) => {
+  useFrame((_state, delta) => {
     const posAttr = posRef.current, alphaAttr = alphaRef.current;
     if (!posAttr || !alphaAttr) return;
     const P = posAttr.array as Float32Array;
     const A = alphaAttr.array as Float32Array;
-    const t = clock.elapsedTime;
     const c = p.current;
+    swarmClock.current += delta * Math.max(0, c.speed);
+    const t = swarmClock.current;
     for (let i = 0; i < N; i += 1) {
       const b = bugs[i];
       // Bias 1 reproduces the even scatter exactly (pow(x,1) === x), so these
@@ -4386,7 +4894,8 @@ function BugSwarm({
       // rounds it out into the whole swarm breathing together.
       const d = Math.pow(0.5 + 0.5 * Math.sin(t * b.dw + b.dphase), c.lungeSharp) * c.dive;
       const r = r0 * (1 - c.lungeDepth * d);
-      const a = b.phase + t * b.w * c.speed;
+      // Speed is already baked into `t` above - not reapplied here.
+      const a = b.phase + t * b.w;
       const j = c.jitter * r0;
       const js = c.jitterSpeed;
       // Ellipse, then spin it about Y. oval 1 + swarmRotY 0 is the old circle.
@@ -4404,8 +4913,17 @@ function BugSwarm({
       P[i * 3 + 2] = c.origin[2] + c.offsetZ - ex * sy + ez * cy
         + j * 0.5 * Math.cos(t * 6.1 * js + b.jp * 2.3);
       const flick = 0.5 + 0.5 * Math.sin(t * b.ff + b.fp);
-      // FlickerDepth 0 is a steady mote; 1 blinks all the way to dark.
-      A[i] = Math.min(1, (1 - c.flickerDepth) + c.flickerDepth * flick + d * 0.6);
+      /*
+       * Two things move a bug's brightness, and BOTH are knobs now.
+       *
+       * FlickerDepth is the wing blink: 0 is a steady mote, 1 blinks all the
+       * way to dark. LungeFlare is the flare on the dive at the bulb, which
+       * used to be a hardcoded 0.6 - so a swarm turned all the way down on
+       * flicker still pulsed, with nothing in the panel to explain why. At 0
+       * a lunging bug is exactly as bright as a circling one and the only
+       * thing the lunge changes is where it is.
+       */
+      A[i] = Math.min(1, (1 - c.flickerDepth) + c.flickerDepth * flick + d * c.lungeFlare);
     }
     posAttr.needsUpdate = true;
     alphaAttr.needsUpdate = true;
@@ -4512,7 +5030,7 @@ function DeskCampLampLight({
       // baseScale on the camping Selectable is 1, so the accumulated scale IS
       // its override - the same reasoning DeskStringLight uses for its bar.
       frameScale={config.objectOverrides?.["old_bear_camping"]?.scale ?? 1}
-      {...bugSwarmProps(config, bugColor)}
+      {...bugSwarmProps(config, bugColor, `deskLamp${lamp.id}` as BugSwarmScope)}
     />
   ) : null;
   const intensity = c[`deskLamp${lamp.id}Intensity`] ?? 0.2;
@@ -4604,15 +5122,43 @@ function DeskCampLampLight({
  * 1.44 x 1.26 x 1.15), carry the same four materials, and stand 2.5 apart on
  * the terrain surface at y 1.14. A matching pair of chairs, in other words.
  *
- * The small lamp between them (Object_133 + Object_446-449) is deliberately
- * NOT here: it is the SmallA fixture in DESK_CAMP_LAMPS, and its point light,
- * lens offsets and bug swarm are all resolved by looking its meshes up inside
- * `cloned`. Removing them from `cloned` would strip the anchor and the light
- * with it, so extracting the lamp means moving that plumbing too.
+ * The small lamp between them (Object_133 + Object_446-449) comes out too,
+ * but not here - see CAMP_LANTERNS. It is a FIXTURE as well as a prop, so
+ * lifting it means carrying its point light, lens offsets and bug swarm along
+ * with the meshes.
  */
 const CAMP_CHAIRS: readonly { name: string; meshes: readonly string[] }[] = [
   { name: "camping_chair_1", meshes: ["Object_369", "Object_370", "Object_371", "Object_372"] },
   { name: "camping_chair_2", meshes: ["Object_364", "Object_365", "Object_366", "Object_367"] },
+];
+
+/**
+ * The two standing lanterns, lifted out so each can be dragged on its own.
+ *
+ * Both are the SAME model twice over - Object_133 and Object_131 index the
+ * identical POSITION accessors, as do their four body meshes each - so what
+ * tells them apart is where they stand: one on the ground by the fire pit,
+ * one out on the dock. They are the SmallA and SmallB fixtures in
+ * DESK_CAMP_LAMPS, and the `lampId` here is the wire back to that table: it
+ * is what keeps the existing deskLampSmallA / deskLampSmallB knobs - colour,
+ * reach, lens offset, bugs, the dock's fish shading - pointed at the right
+ * lamp after the meshes have moved out of the diorama.
+ *
+ * Moving one is therefore two things at once, and both have to happen or the
+ * lantern leaves its own light behind: the meshes go into a Selectable, and
+ * the fixture's point light is rendered INSIDE that Selectable rather than as
+ * a sibling of the diorama.
+ */
+const CAMP_LANTERNS: readonly {
+  name: string;
+  /** The DESK_CAMP_LAMPS id whose config block drives this fixture. */
+  lampId: string;
+  meshes: readonly string[];
+}[] = [
+  { name: "camping_lantern_firepit", lampId: "SmallA",
+    meshes: ["Object_133", "Object_446", "Object_447", "Object_448", "Object_449"] },
+  { name: "camping_lantern_dock", lampId: "SmallB",
+    meshes: ["Object_131", "Object_460", "Object_461", "Object_462", "Object_463"] },
 ];
 
 function CampingWithSelectableTrees({
@@ -4625,7 +5171,7 @@ function CampingWithSelectableTrees({
   onSelect: (name: string) => void;
 }) {
   const gltf = useGLTF(url) as unknown as { scene: THREE.Group };
-  const { base, trees, chairs, lampAnchors, lampParts, bulbMats, waterMeshes, dockShade } = useMemo(() => {
+  const { base, trees, chairs, lanterns, lampAnchors, lampParts, bulbMats, bulbGlow, waterMeshes, dockShade } = useMemo(() => {
     const cloned = gltf.scene.clone(true);
     const treeParentPattern = /^(Cylinder|Icosphere)\.\d+_\d+$/;
 
@@ -4747,6 +5293,61 @@ function CampingWithSelectableTrees({
       chairs.push({ name: spec.name, group });
     }
 
+    // --- lift the two lanterns out -------------------------------------------
+    //
+    // Same cluster-into-a-group move as the chairs, with one extra wire to
+    // run: a lantern is a LIGHT as well as a prop. Its point light, bug swarm
+    // and emissive glass are all resolved further down by looking its meshes
+    // up - so this has to happen BEFORE those passes, and those passes have to
+    // walk `lampRoots` rather than `cloned`, or the fixture would be found in
+    // a scene it no longer belongs to and its light would stay behind.
+    //
+    // Unlike a chair, the group is left AT THE ORIGIN and the pivot is handed
+    // to the Selectable as its basePosition. That is what makes the lab's
+    // rotate and scale turn the lantern about its own base: a group parked at
+    // the pivot would still swing around the camp's origin when the Selectable
+    // rotated, because the rotation applies to that offset too.
+    const lanterns: { name: string; lampId: string; group: THREE.Object3D; pivot: THREE.Vector3 }[] = [];
+    /** mesh name -> the lantern Selectable it now lives under. */
+    const lampOwner = new Map<string, string>();
+    const lanternBox = new THREE.Box3();
+    for (const spec of CAMP_LANTERNS) {
+      const parts = spec.meshes
+        .map((n) => cloned.getObjectByName(n))
+        .filter((o): o is THREE.Object3D => !!o);
+      if (parts.length !== spec.meshes.length) continue;   // model changed - leave it in the diorama
+      lanternBox.makeEmpty();
+      for (const p of parts) {
+        p.updateWorldMatrix(true, true);
+        lanternBox.expandByObject(p);
+      }
+      const pivot = new THREE.Vector3(
+        (lanternBox.min.x + lanternBox.max.x) / 2,
+        lanternBox.min.y,
+        (lanternBox.min.z + lanternBox.max.z) / 2
+      );
+      const group = new THREE.Group();
+      const toLocal = new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z);
+      for (const p of parts) {
+        p.updateWorldMatrix(true, false);
+        const world = p.matrixWorld.clone();
+        p.parent?.remove(p);
+        group.add(p);
+        p.matrix.copy(toLocal.clone().multiply(world));
+        p.matrix.decompose(p.position, p.quaternion, p.scale);
+      }
+      // The lamp passes below read world positions straight off these meshes.
+      // The group sits at identity, so a world position here is already
+      // PIVOT-RELATIVE - which is exactly the frame the light needs once it is
+      // rendered inside the Selectable.
+      group.updateMatrixWorld(true);
+      for (const m of spec.meshes) lampOwner.set(m, spec.name);
+      lanterns.push({ name: spec.name, lampId: spec.lampId, group, pivot });
+    }
+    /** Where the lamp passes look for fixture meshes: the diorama, plus every
+     *  lantern just lifted out of it. */
+    const lampRoots: THREE.Object3D[] = [cloned, ...lanterns.map((l) => l.group)];
+
     // --- flatten the landscape above a ceiling -------------------------------
     //
     // The mountains are GONE FROM THE MODEL now, not hidden at runtime. The
@@ -4804,8 +5405,8 @@ function CampingWithSelectableTrees({
     // stable across the Blender round-trips this GLB has been through.
     // See DESK_CAMP_LAMPS for the table and where each one sits.
     cloned.updateMatrixWorld(true);
-    const byMesh = new Map<string, { position: THREE.Vector3; glass: THREE.Material[] }>();
-    cloned.traverse((o) => {
+    const byMesh = new Map<string, { position: THREE.Vector3; glass: THREE.Material[]; owner?: string }>();
+    for (const root of lampRoots) root.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh || !DESK_CAMP_LAMP_MESHES.has(mesh.name)) return;
       // Each fixture gets its OWN copy of its head material. Two reasons:
@@ -4817,9 +5418,15 @@ function CampingWithSelectableTrees({
       const glass = (Array.isArray(mesh.material) ? mesh.material : [mesh.material])
         .map((m) => (m as THREE.Material).clone());
       mesh.material = Array.isArray(mesh.material) ? glass : glass[0];
-      // cloned sits at identity here, so its world position IS the local
-      // position the pointLight needs alongside <primitive object={base} />.
-      byMesh.set(mesh.name, { position: mesh.getWorldPosition(new THREE.Vector3()), glass });
+      // Every root here sits at identity, so a world position IS the local
+      // position its pointLight needs: camp-space for a fixture still in the
+      // diorama, pivot-relative for one that has moved into a lantern group.
+      // `owner` is which of the two, and decides where the light is rendered.
+      byMesh.set(mesh.name, {
+        position: mesh.getWorldPosition(new THREE.Vector3()),
+        glass,
+        owner: lampOwner.get(mesh.name),
+      });
     });
     // One anchor per BULB, but the lamp (and therefore the config block) is
     // shared - so the van's two headlights get a light each off one set of
@@ -4829,7 +5436,7 @@ function CampingWithSelectableTrees({
     // is in the mesh's own scaled parent - so the parent's world scale is
     // captured here to divide back out. Same correction the river needs.
     const lampParts: { id: string; mesh: THREE.Object3D; base: THREE.Vector3; pscale: THREE.Vector3 }[] = [];
-    cloned.traverse((o) => {
+    for (const root of lampRoots) root.traverse((o) => {
       const id = DESK_CAMP_LAMP_PARTS.get(o.name);
       if (!id) return;
       lampParts.push({
@@ -4842,7 +5449,10 @@ function CampingWithSelectableTrees({
 
     const lampAnchors = DESK_CAMP_LAMPS
       .flatMap((lamp) => lamp.meshes.map((mesh) => ({ lamp, mesh, ...(byMesh.get(mesh) ?? {}) })))
-      .filter((a): a is { lamp: DeskCampLamp; mesh: string; position: THREE.Vector3; glass: THREE.Material[] } => !!a.position);
+      .filter((a): a is {
+        lamp: DeskCampLamp; mesh: string; position: THREE.Vector3;
+        glass: THREE.Material[]; owner?: string;
+      } => !!a.position);
 
     // --- the string-light bulbs ---------------------------------------------
     //
@@ -4878,13 +5488,23 @@ function CampingWithSelectableTrees({
 
     const bulbMats: { mat: THREE.MeshStandardMaterial; emissive: THREE.Color; intensity: number }[] = [];
     const bulbClones = new Map<string, THREE.MeshStandardMaterial>();
+    /* Where each bulb hangs, for the halo sprites. Gathered in this pass
+     * rather than a second traversal because this loop already knows exactly
+     * which meshes are string bulbs - the ones carrying a Lamp* material that
+     * are not one of the five real fixtures. `cloned` sits at identity, so a
+     * world position here is camp-local, which is the frame the points are
+     * drawn in. */
+    const bulbSpots: number[] = [];
+    const bulbAt = new THREE.Vector3();
     cloned.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh || DESK_CAMP_LAMP_MESHES.has(mesh.name)) return;
       const src = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      let isBulb = false;
       const next = src.map((m) => {
         const name = (m as { name?: string })?.name ?? "";
         if (name !== "Lamp" && !name.startsWith("Lamp.")) return m;
+        isBulb = true;
         const key = m.uuid;
         let clone = bulbClones.get(key);
         if (!clone) {
@@ -4901,7 +5521,12 @@ function CampingWithSelectableTrees({
       if (next.some((m, i) => m !== src[i])) {
         mesh.material = Array.isArray(mesh.material) ? next : next[0];
       }
+      if (isBulb) {
+        mesh.getWorldPosition(bulbAt);
+        bulbSpots.push(bulbAt.x, bulbAt.y, bulbAt.z);
+      }
     });
+    const bulbGlow = new Float32Array(bulbSpots);
 
     // --- the river ----------------------------------------------------------
     //
@@ -4941,7 +5566,7 @@ function CampingWithSelectableTrees({
       });
     });
 
-    return { base: cloned, trees, chairs, lampAnchors, lampParts, bulbMats, waterMeshes, dockShade };
+    return { base: cloned, trees, chairs, lanterns, lampAnchors, lampParts, bulbMats, bulbGlow, waterMeshes, dockShade };
   }, [gltf.scene, config.deskCampGroundMaxY]);
 
   // Height and opacity are applied OUTSIDE that memo on purpose. Putting them
@@ -5044,12 +5669,34 @@ function CampingWithSelectableTrees({
     if (!anchor) return null;
     const cr = config as unknown as Record<string, number>;
     const lit = config.deskCampLampEnabled >= 0.5 && (cr.deskLampSmallBOn ?? 1) >= 0.5;
+    /*
+     * That bulb IN CAMP SPACE.
+     *
+     * The dock lantern is its own Selectable now, so its anchor is measured
+     * from that object's pivot rather than from the camp - and the pivot plus
+     * whatever the lab has done to the object has to be added back, or
+     * dragging the lantern off the dock would leave the water still shaded as
+     * though it were standing there. Order is the Selectable's own: scale the
+     * local offset, then place it.
+     *
+     * rotY is deliberately not applied. The glass sits within 0.01 of the
+     * pivot's vertical axis, so spinning the lantern moves the emitter by far
+     * less than this shading can resolve.
+     */
+    const lant = lanterns.find((l) => l.name === anchor.owner);
+    const lo = (lant ? config.objectOverrides?.[lant.name] : undefined) ?? EMPTY_OVERRIDE;
+    const at = anchor.position.clone();
+    if (lant) {
+      at.multiplyScalar(lo.scale)
+        .add(lant.pivot)
+        .add(new THREE.Vector3(lo.dx, lo.dy, lo.dz));
+    }
     return {
       field: dockShade,
       light: [
-        anchor.position.x + (cr.deskLampSmallBLightX ?? 0),
-        anchor.position.y + (cr.deskLampSmallBLightY ?? 0),
-        anchor.position.z + (cr.deskLampSmallBLightZ ?? 0),
+        at.x + (cr.deskLampSmallBLightX ?? 0),
+        at.y + (cr.deskLampSmallBLightY ?? 0),
+        at.z + (cr.deskLampSmallBLightZ ?? 0),
       ],
       // baseScale on the camping Selectable is 1, so its override IS the
       // accumulated scale - the same reasoning DeskStringLight and BugSwarm use.
@@ -5060,12 +5707,19 @@ function CampingWithSelectableTrees({
       fade: lit ? config.deskFishShadeFade : 0,
       soft: config.deskFishShadeSoft,
     };
-  }, [dockShade, lampAnchors, config]);
+  }, [dockShade, lampAnchors, lanterns, config]);
 
   return (
     <>
       <primitive object={base} />
-      {config.deskCampLampEnabled >= 0.5 && lampAnchors.map(({ lamp, mesh, position }) => (
+      {/* Halos on the string bulbs. Inside the camp's own frame, so they ride
+          the diorama's transform; the sprite size is in world units either
+          way, since three writes gl_PointSize from the uniform and only then
+          divides by view depth - no model matrix ever reaches it. */}
+      <StringBulbBloom positions={bulbGlow} config={config} />
+      {/* Fixtures still IN the diorama. The lanterns' own lights are rendered
+          inside their Selectables below, so they travel with them. */}
+      {config.deskCampLampEnabled >= 0.5 && lampAnchors.filter((a) => !a.owner).map(({ lamp, mesh, position }) => (
         <DeskCampLampLight key={`${lamp.id}-${mesh}`} lamp={lamp} position={position} config={config} />
       ))}
       {/* Sits in the camp's own frame alongside the lamps, so it tracks the
@@ -5096,6 +5750,30 @@ function CampingWithSelectableTrees({
           <primitive object={c.group} />
         </Selectable>
       ))}
+      {/* The lanterns. The fixture's point light (and its bug swarm, which
+          hangs off the same component) is a CHILD here rather than a sibling
+          of the diorama - that is what makes the pool of light, and the moths
+          in it, come along when the lantern is dragged. Hiding the object
+          takes its light with it too, which is the behaviour you want from a
+          lamp that is no longer in the scene. */}
+      {lanterns.map((l) => (
+        <Selectable
+          key={l.name}
+          name={l.name}
+          onSelect={onSelect}
+          config={config}
+          basePosition={[l.pivot.x, l.pivot.y, l.pivot.z]}
+          baseRotationY={0}
+          baseScale={1}
+        >
+          <primitive object={l.group} />
+          {config.deskCampLampEnabled >= 0.5 && lampAnchors
+            .filter((a) => a.owner === l.name)
+            .map(({ lamp, mesh, position }) => (
+              <DeskCampLampLight key={`${lamp.id}-${mesh}`} lamp={lamp} position={position} config={config} />
+            ))}
+        </Selectable>
+      ))}
       {trees.map((t) => (
         <Selectable
           key={t.name}
@@ -5111,6 +5789,183 @@ function CampingWithSelectableTrees({
       ))}
     </>
   );
+}
+
+/**
+ * The halo sprite every bulb wears: one 64px radial falloff, built once and
+ * shared by all of them.
+ *
+ * Lazy rather than module-level because it touches `document` - this file is a
+ * client component, but a module-scope canvas would still run during the
+ * server render of anything that imports it.
+ */
+let bulbGlowTexture: THREE.CanvasTexture | null = null;
+function bulbGlowSprite(): THREE.CanvasTexture {
+  if (bulbGlowTexture) return bulbGlowTexture;
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  // A hot core with a long tail. Stopping at 0.5 halfway out is what makes it
+  // read as glow rather than as a disc with a soft edge.
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.18, "rgba(255,255,255,0.62)");
+  g.addColorStop(0.5, "rgba(255,255,255,0.16)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  bulbGlowTexture = new THREE.CanvasTexture(canvas);
+  bulbGlowTexture.colorSpace = THREE.SRGBColorSpace;
+  return bulbGlowTexture;
+}
+
+/**
+ * Bloom on the string lights, for the price of one draw call.
+ *
+ * A sprite per bulb in a single <points>, additive, no depth write and no
+ * per-frame work - the positions never change, so this uploads once and then
+ * costs the GPU a few hundred blended pixels a frame and the CPU nothing.
+ *
+ * The honest alternative is a post-processing bloom pass, and it was the wrong
+ * trade here: it re-renders the scene into extra targets and blurs them
+ * several times, it costs that whether one bulb is lit or the whole camp is,
+ * and it would bloom every bright thing in frame - the CRT, the fire, the
+ * moon - not the lights that were asked for.
+ *
+ * Strength splits at 1 on purpose. Below it, the halo fades in on opacity.
+ * Above it, opacity is pinned and the COLOUR is overdriven instead, because a
+ * blend factor is clamped at 1 by the hardware and more alpha buys nothing;
+ * an over-bright colour with toneMapped off does keep going.
+ */
+function StringBulbBloom({
+  positions,
+  config,
+}: {
+  positions: Float32Array;
+  config: CampfireSceneConfig;
+}) {
+  const strength = config.deskStringBulbBloom;
+  const sprite = useMemo(() => bulbGlowSprite(), []);
+  // Same buffer, nudged up/down. Kept as its own copy rather than mutating
+  // `positions` in place - that array is also the one CampFireScene's own
+  // memo holds onto, and a plain assignment here would leak the offset back
+  // into it the moment the slider moved back to 0 having already been baked
+  // into the source.
+  const offsetPositions = useMemo(() => {
+    const dy = config.deskStringBulbBloomOffsetY;
+    if (Math.abs(dy) < 1e-6) return positions;
+    const out = new Float32Array(positions.length);
+    for (let i = 0; i < positions.length; i += 3) {
+      out[i] = positions[i];
+      out[i + 1] = positions[i + 1] + dy;
+      out[i + 2] = positions[i + 2];
+    }
+    return out;
+  }, [positions, config.deskStringBulbBloomOffsetY]);
+  const color = useMemo(() => {
+    // Same warmth ramp the bulbs themselves use, so the halo is the colour of
+    // the thing it is coming off rather than a decorator's guess.
+    const w = config.deskStringBulbWarmth;
+    const c = new THREE.Color(
+      Math.min(1, Math.max(0, 0.98 + (1 - 0.98) * w)),
+      Math.min(1, Math.max(0, 0.95 + (0.86 - 0.95) * w)),
+      Math.min(1, Math.max(0, 0.9 + (0.62 - 0.9) * w)),
+    );
+    return c.multiplyScalar(Math.max(1, strength));
+  }, [config.deskStringBulbWarmth, strength]);
+
+  if (strength <= 0.001 || positions.length === 0) return null;
+  return (
+    <points frustumCulled={false} renderOrder={2}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[offsetPositions, 3]} />
+      </bufferGeometry>
+      <pointsMaterial
+        map={sprite}
+        color={color}
+        size={config.deskStringBulbBloomSize}
+        sizeAttenuation
+        transparent
+        opacity={Math.min(1, strength)}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        toneMapped={false}
+      />
+    </points>
+  );
+}
+
+/**
+ * The screen face of low_poly_computer_with_devices.glb.
+ *
+ * Picked by MESH, not by material: the file ships a single "base" material for
+ * the entire machine - tower, keyboard, mouse mat and all - so there is no
+ * "screen" material to look for. Object_20 is the only flat quad in the file
+ * (0.994 x 0.785 x 0.0) and it stands at the monitor's front face, z -0.257,
+ * against the case's own -1.5..-0.17. That is the screen.
+ */
+const COMPUTER_SCREEN_MESH = "Object_20";
+
+/**
+ * The cabin computer, with a screen that is actually lit.
+ *
+ * It used to be a plain GLBModel with a spotlight in front of it, which left
+ * the room lit BY a monitor whose own panel was a dark rectangle. The screen
+ * face now carries its own emissive, on its own clone of the shared material -
+ * cloning is not optional here, since every part of this model draws from one
+ * material and tinting it in place would turn the keyboard and the tower blue
+ * as well (and leak that into drei's cache for anything else using the file).
+ */
+function LitComputer({ config }: { config: CampfireSceneConfig }) {
+  const gltf = useGLTF(OLD_BEAR_COMPUTER_URL) as unknown as { scene: THREE.Group };
+  const { model, screens } = useMemo(() => {
+    const cloned = gltf.scene.clone(true);
+    // Collected into an array rather than a `let` the traversal assigns to:
+    // TS narrows a closure-assigned local to `never` and the callers would
+    // stop typechecking.
+    const found: THREE.MeshStandardMaterial[] = [];
+    cloned.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      if (mesh.name !== COMPUTER_SCREEN_MESH) return;
+      const src = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+      const lit = (src as THREE.MeshStandardMaterial).clone();
+      mesh.material = lit;
+      found.push(lit);
+    });
+    if (!found.length) {
+      // Worth saying out loud: the model was re-exported and the screen is
+      // now called something else, so its knobs silently do nothing.
+      console.warn(`[scene] computer: no "${COMPUTER_SCREEN_MESH}" mesh - screen knobs are inert`);
+    }
+    return { model: cloned, screens: found };
+  }, [gltf.scene]);
+
+  useEffect(() => {
+    const on = config.deskComputerScreenOn >= 0.5;
+    for (const mat of screens) {
+      mat.emissive.setRGB(
+        config.deskComputerScreenR,
+        config.deskComputerScreenG,
+        config.deskComputerScreenB,
+      );
+      mat.emissiveIntensity = on ? config.deskComputerScreenBrightness : 0;
+      mat.needsUpdate = true;
+    }
+  }, [
+    screens,
+    config.deskComputerScreenOn,
+    config.deskComputerScreenBrightness,
+    config.deskComputerScreenR,
+    config.deskComputerScreenG,
+    config.deskComputerScreenB,
+  ]);
+
+  return <primitive object={model} />;
 }
 
 /** camping.glb loaded raw, but every emissive lamp mesh (materials named
@@ -6106,45 +6961,68 @@ function GameCubeConsole({
 }
 
 /**
- * One controller lead. The ONLY thing in this scene that stretches - the console and
- * the controllers are rigid, and the slack between them is taken up here.
+ * One controller lead, hung off the socket it plugs into.
  *
- * It bows sideways rather than sagging, because both ends sit within a few centimetres
- * of the floor and a hanging curve would just clip through it; each lead bows by a
- * different amount so the four fan out across the ground instead of overlapping.
+ * THE END THAT MATTERS IS NOT COMPUTED. This mesh is a child of the port's own
+ * group, so the socket end of the curve is the origin - (0,0,0) - and no
+ * amount of dragging, spinning or rescaling the console can put the cord
+ * anywhere else. That is the whole reason it was moved here.
  *
- * The geometry is only rebuilt when an end actually moves - the cubs breathe, but a
- * couple of millimetres is not worth a new tube every frame.
+ * The version before this one passed port positions through a world-space
+ * registry: the console published where its sockets were, the lead read that
+ * back and converted it into its own frame. Both ends were then at the mercy
+ * of two different matrices being up to date in the same tick - and the ring
+ * that carries a whole site re-seats itself inside the frame loop, so
+ * `matrixWorld` is a frame stale exactly when it matters. A cord that lands
+ * near the console but not in it is what that looks like from the outside.
+ *
+ * Only the controller end crosses frames now, and it is allowed to be a frame
+ * behind: the cub holding it is breathing, not teleporting.
+ *
+ * Everything here is in MODEL units, because that is the frame this mesh
+ * lives in - the console is drawn at 0.014, so a 6mm cord is 0.43 units of
+ * this space. `scale` divides the world-unit constants back out.
  */
 function ControllerWire({
   index,
   cords,
-  ports,
   cubName,
+  count = ARCADE_CONSOLE_PORTS.length,
+  radius = ARCADE_WIRE_RADIUS,
+  floorY,
 }: {
   index: number;
   cords: RefObject<CordRegistry>;
-  ports: RefObject<PortRegistry>;
   cubName: string;
+  /** How many leads fan out, which is what decides this one's bow. */
+  count?: number;
+  /** Cord gauge in WORLD units. Divided by the frame's scale on use. */
+  radius?: number;
+  /** Where the ground is in this frame, so a lead can rest on it instead of
+   *  sinking through. In model units, measured down from the socket. */
+  floorY: number;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
   const a = useMemo(() => new THREE.Vector3(), []);
-  const b = useMemo(() => new THREE.Vector3(), []);
   const mid = useMemo(() => new THREE.Vector3(), []);
+  const worldScale = useMemo(() => new THREE.Vector3(), []);
   const lastA = useRef(new THREE.Vector3(NaN, NaN, NaN));
-  const lastB = useRef(new THREE.Vector3(NaN, NaN, NaN));
 
+  /* A degenerate tube: zero radius, so a lead that has never been placed
+   * draws nothing. The previous version shipped a full-size placeholder that
+   * ran one unit along +Z, and four of them stacked into a single black rod
+   * lying across the set - which looked exactly like a cord that had missed. */
   const initial = useMemo(
     () =>
       new THREE.TubeGeometry(
         new THREE.QuadraticBezierCurve3(
           new THREE.Vector3(),
-          new THREE.Vector3(0, 0, 0.5),
-          new THREE.Vector3(0, 0, 1)
+          new THREE.Vector3(),
+          new THREE.Vector3()
         ),
-        20,
-        WIRE_RADIUS,
-        6,
+        1,
+        0,
+        3,
         false
       ),
     []
@@ -6154,47 +7032,121 @@ function ControllerWire({
 
   useFrame(() => {
     const mesh = meshRef.current;
-    if (!mesh || !mesh.parent) return;
+    const parent = mesh?.parent;
+    if (!mesh || !parent) return;
     const from = cords.current?.get(cubName);
-    const to = ports.current?.get(index);
-    if (!from || !to) {
+    if (!from) {
+      // No controller: the cub is hidden, or its paw bones never resolved.
       mesh.visible = false;
       return;
     }
-    mesh.visible = true;
-
+    // This lead's own matrices, brought up to date before anything is read
+    // through them - the console may have been dragged this very frame.
+    parent.updateWorldMatrix(true, false);
     a.copy(from);
-    b.copy(to);
-    mesh.parent.worldToLocal(a);
-    mesh.parent.worldToLocal(b);
-    // 2mm of movement is below anything you could see on a 4mm cord
-    if (a.distanceToSquared(lastA.current) < 4e-6 && b.distanceToSquared(lastB.current) < 4e-6) return;
-    lastA.current.copy(a);
-    lastB.current.copy(b);
+    parent.worldToLocal(a);
 
-    mid.copy(a).lerp(b, 0.5);
-    const dx = b.x - a.x;
-    const dz = b.z - a.z;
-    const len = Math.hypot(dx, dz) || 1;
-    const bow = (index - (CONSOLE_PORTS.length - 1) / 2) * 0.06;
-    mid.x += (-dz / len) * bow;
-    mid.z += (dx / len) * bow;
-    mid.y = WIRE_RADIUS * 1.2; // lying on the ground between the two ends
+    // 2mm of movement, in world units, is below anything you could see.
+    const s = Math.abs(parent.getWorldScale(worldScale).x) || 1;
+    const still = a.distanceToSquared(lastA.current) * s * s < 4e-6;
+    if (still && mesh.visible) return;
+    lastA.current.copy(a);
+
+    const r = radius / s;
+    const bow = ((index - (count - 1) / 2) * 0.06) / s;
+    // Halfway between the controller and the socket, which is the origin.
+    mid.copy(a).multiplyScalar(0.5);
+    const len = Math.hypot(a.x, a.z) || 1;
+    mid.x += (-a.z / len) * bow;
+    mid.z += (a.x / len) * bow;
+    /*
+     * A cord sags below the line between its ends and cannot sink through the
+     * floor. Both cases are live here: cubs sitting on the ground give a
+     * near-flat lead that rests on the carpet, cubs up on a chair give one
+     * that drapes. The clamp is what turns the same rule into both.
+     */
+    mid.y = Math.max(floorY + r * 1.2, a.y / 2 - len * 0.15);
 
     mesh.geometry.dispose();
     mesh.geometry = new THREE.TubeGeometry(
-      new THREE.QuadraticBezierCurve3(a.clone(), mid.clone(), b.clone()),
+      new THREE.QuadraticBezierCurve3(a.clone(), mid.clone(), new THREE.Vector3()),
       20,
-      WIRE_RADIUS,
+      r,
       6,
       false
     );
+    mesh.visible = true;
   });
 
   return (
     <mesh ref={meshRef} geometry={initial} castShadow>
-      <meshStandardMaterial color="#15171b" roughness={0.9} metalness={0} />
+      <meshStandardMaterial color={ARCADE_WIRE_COLOR} roughness={0.9} metalness={0} />
     </mesh>
+  );
+}
+
+/** The wrapper group the console model hangs in re-centres it and drops its
+ *  base onto the floor: [0, -0.061, 1.107]. The y term is what tells a lead
+ *  where the ground is relative to a socket, so it is named rather than
+ *  repeated. */
+const ARCADE_CONSOLE_LIFT = -0.061;
+
+/**
+ * The console's four sockets: a plug in each, and the lead that runs out of it.
+ *
+ * Both hang off a group positioned AT the port, which is the point. The plug
+ * and the cord end then share one transform, so they cannot disagree about
+ * where the socket is, and neither can drift from the mesh - the wrapper's
+ * re-centring offset is applied to all three by the same parent.
+ *
+ * It also means no registry and no world-space hand-off between two frame
+ * callbacks, which is what the previous version got wrong.
+ */
+function ConsolePorts({
+  cords,
+  cubNames,
+}: {
+  cords: RefObject<CordRegistry>;
+  /** Which cub plugs into which socket, in socket order. A null leaves that
+   *  socket empty - no plug, no lead. */
+  cubNames: readonly (string | null)[];
+}) {
+  // Which lead this is among the ones actually in use, so two cords fan apart
+  // evenly instead of both bowing off to one side as though there were four.
+  const used = ARCADE_CONSOLE_PORTS.map((_, i) => cubNames[i]).filter(Boolean).length;
+  let rank = -1;
+  return (
+    <>
+      {ARCADE_CONSOLE_PORTS.map(([x, y, z], i) => {
+        const cub = cubNames[i];
+        if (!cub) return null;
+        rank += 1;
+        const fan = rank;
+        return (
+          <group key={i} position={[x, y, z]}>
+            {/*
+              The plug, seated in the socket. Sized off the socket itself: the
+              measured pieces are 0.998 across, so a 0.36 radius sits inside
+              the rim, pushed 0.18 back into the hole.
+            */}
+            <mesh position={[0, 0, -0.18]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+              <cylinderGeometry args={[0.36, 0.36, 0.36, 10]} />
+              <meshStandardMaterial color={ARCADE_WIRE_COLOR} roughness={0.85} metalness={0.05} />
+            </mesh>
+            <ControllerWire
+              index={fan}
+              cords={cords}
+              cubName={cub}
+              count={used}
+              // The floor, measured down from THIS socket: the wrapper puts
+              // the model's base at its own origin, so the drop is the port's
+              // own height plus that lift.
+              floorY={-(y + ARCADE_CONSOLE_LIFT)}
+            />
+          </group>
+        );
+      })}
+    </>
   );
 }
 
@@ -6334,6 +7286,7 @@ function Animal({
   onSelect,
   heads,
   cords,
+  bearVoiceRef,
   seed = 0,
 }: {
   placement: AnimalPlacement;
@@ -6344,6 +7297,7 @@ function Animal({
   heads?: RefObject<HeadRegistry>;
   /** shared cord-exit positions, so the wires can find the controllers */
   cords?: RefObject<CordRegistry>;
+  bearVoiceRef?: BearVoiceStateRef;
   seed?: number;
 }) {
   const gltf = useGLTF(placement.url) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
@@ -6367,6 +7321,8 @@ function Animal({
   const cubEarLRestQ = useRef<THREE.Quaternion | null>(null);
   const cubEarRRestQ = useRef<THREE.Quaternion | null>(null);
   const cubIdleTime = useRef(seed * 0.73);
+  const mouthBoneRef = useRef<THREE.Bone | null>(null);
+  const mouthRestQRef = useRef<THREE.Quaternion | null>(null);
 
   // Banjo-bear arm override: eight arm bones + their rest quaternions, so the
   // picking loop can compose `rest * userEuler` each frame and hard-replace
@@ -6417,6 +7373,21 @@ function Animal({
     handLRestQRef.current = null;
     handRRef.current = null;
     handRRestQRef.current = null;
+    mouthBoneRef.current = null;
+    mouthRestQRef.current = null;
+
+    // The model has no shared skeleton between placements; cache its jaw once
+    // so voice motion can layer over the mixer without a per-frame traversal.
+    if (placement.bearId === "back_left_log" || placement.bearId === "back_right_log") {
+      model.traverse((o) => {
+        const bone = o as THREE.Bone;
+        const normalizedName = o.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (!mouthBoneRef.current && bone.isBone && (normalizedName.includes("jaw") || normalizedName.includes("mouth"))) {
+          mouthBoneRef.current = bone;
+          mouthRestQRef.current = bone.quaternion.clone();
+        }
+      });
+    }
 
     // Cache Food socket + hand_L/hand_R + their rest quaternions for the
     // fish-holder path. Skipped for banjo bears - banjo hard-overrides both
@@ -6657,7 +7628,7 @@ function Animal({
     return () => { unregisterDuplicateAnimation(name); };
   }, [name, gltf.animations, placement.animation, placement.animationOffset, placement.animationSpeed]);
 
-  useFrame(() => {
+  useFrame((state) => {
     if (!groupRef.current) return;
     const c = configRef.current;
     const o = c.objectOverrides?.[name] ?? EMPTY_OVERRIDE;
@@ -6774,6 +7745,18 @@ function Animal({
       applyArm("arm_R");
       applyArm("hand_R");
     }
+
+    const mouth = mouthBoneRef.current;
+    const mouthRest = mouthRestQRef.current;
+    const voice = bearVoiceRef?.current;
+    if (mouth && mouthRest) {
+      const isActiveSpeaker = voice?.isRemoteSpeaking && placement.bearId === voice.activeBearId;
+      const level = Math.min(1, Math.max(0, (voice?.remoteAudioLevel ?? 0) * 18));
+      const opening = isActiveSpeaker
+        ? (0.018 + level * 0.065) * (0.45 + 0.55 * Math.sin(state.clock.elapsedTime * 19) ** 2)
+        : 0;
+      mouth.quaternion.copy(mouthRest).multiply(new THREE.Quaternion().setFromAxisAngle(FACE_RIGHT_LOCAL, opening));
+    }
   });
 
   // Runs after drei's mixer update - useAnimations subscribes its useFrame before
@@ -6885,18 +7868,264 @@ function Animal({
  * feels metronomic. Position, rotation, and scale are placement-only; no lab
  * sliders yet - if we want to tune them, expose them through sceneConfig later.
  */
+/** Imperative handle on an <EmberBurst>. */
+type EmberBurstHandle = { fire: () => void };
+
+type EmberBurstProps = {
+  /** Emitter origin, in the parent's frame. */
+  x: number; y: number; z: number;
+  count: number;
+  speed: number;
+  /** Width of the cone. 0 is a vertical column. */
+  spread: number;
+  /** Ceiling, shared with the ambient sparks so both rise to the same place. */
+  maxHeight: number;
+  /** Sideways drift, shared with the ambient sparks. */
+  sway: number;
+  lifetime: number;
+  size: number;
+  opacity: number;
+  flashIntensity: number;
+  flashDuration: number;
+  flashReach: number;
+};
+
+/**
+ * A one-shot shower of embers, fired imperatively.
+ *
+ * Deliberately NOT the ambient <Sparks> rig with its count cranked: that one is
+ * a steady-state emitter whose particles respawn forever on a stagger, and
+ * borrowing it would have meant teaching it about bursts that end. This owns a
+ * fixed pool, fires them all on the same frame, and parks itself the moment the
+ * last one dies - `visible = false`, no per-frame work, nothing uploaded.
+ *
+ * The trigger is a ref rather than a prop, so setting one off costs no React
+ * render at all: the two call sites (a fish landing, a click on the fire) are
+ * both deep inside a scene tree whose re-render is thousands of elements wide.
+ *
+ * Same material recipe as the ambient sparks (additive, #ffc66d, per-point
+ * alpha injected into PointsMaterial) so the two read as the same fire.
+ */
+const EmberBurst = forwardRef<EmberBurstHandle, EmberBurstProps>(function EmberBurst(p, ref) {
+  const COUNT = Math.max(1, Math.min(800, Math.round(p.count)));
+  const pointsRef = useRef<THREE.Points>(null);
+  const posAttrRef = useRef<THREE.BufferAttribute>(null);
+  const alphaAttrRef = useRef<THREE.BufferAttribute>(null);
+  const lightRef = useRef<THREE.PointLight>(null);
+  const ageRef = useRef(Infinity);
+  // Live copy of the tuning, so the frame loop and fire() read current slider
+  // values without either of them being rebuilt when a slider moves.
+  const cfg = useRef(p);
+  cfg.current = p;
+
+  const { positions, alphas, vel, hvar } = useMemo(() => ({
+    positions: new Float32Array(COUNT * 3),
+    alphas: new Float32Array(COUNT),
+    vel: new Float32Array(COUNT * 3),
+    /** per-ember multiplier on the ceiling, so they do not all stop in a plane */
+    hvar: new Float32Array(COUNT),
+  }), [COUNT]);
+
+  useImperativeHandle(ref, () => ({
+    fire() {
+      const c = cfg.current;
+      // Math.random, not the seeded PRNG the ambient sparks use - two bursts in
+      // a row looking identical would give the trick away.
+      for (let i = 0; i < COUNT; i++) {
+        const a = Math.random() * Math.PI * 2;
+        // sqrt keeps the cone's cross-section evenly filled instead of clumping
+        // everything around the axis.
+        const r = Math.sqrt(Math.random()) * c.spread;
+        const sp = c.speed * (0.45 + Math.random() * 0.95);
+        vel[i * 3] = Math.cos(a) * r * sp;
+        vel[i * 3 + 1] = sp * (0.75 + Math.random() * 0.75);
+        vel[i * 3 + 2] = Math.sin(a) * r * sp;
+        hvar[i] = 0.7 + Math.random() * 0.6;   // matches the ambient spread
+        positions[i * 3] = 0; positions[i * 3 + 1] = 0; positions[i * 3 + 2] = 0;
+        alphas[i] = 0;
+      }
+      ageRef.current = 0;
+      if (pointsRef.current) pointsRef.current.visible = true;
+    },
+  }), [COUNT, vel, positions, alphas, hvar]);
+
+  useFrame((_, dt) => {
+    const c = cfg.current;
+    const life = Math.max(0.05, c.lifetime);
+    if (ageRef.current > life) {
+      if (pointsRef.current?.visible) pointsRef.current.visible = false;
+      if (lightRef.current && lightRef.current.intensity !== 0) lightRef.current.intensity = 0;
+      return;
+    }
+    ageRef.current += dt;
+    const age = ageRef.current;
+
+    // Flash: a hard spike on impact, then a fast decay. The light is mounted
+    // ALWAYS, at intensity 0 when idle, because three keys its shader program
+    // cache on the number of lights in the scene - mounting one on the click
+    // would recompile every material in the scene at exactly the wrong moment.
+    if (lightRef.current) {
+      const f = Math.max(0, 1 - age / Math.max(0.05, c.flashDuration));
+      lightRef.current.intensity = c.flashIntensity * f * f;
+    }
+
+    const pa = posAttrRef.current, aa = alphaAttrRef.current;
+    if (!pa || !aa) return;
+    const pos = pa.array as Float32Array;
+    const al = aa.array as Float32Array;
+    /*
+     * Rise exactly the way the ambient sparks rise.
+     *
+     * This used to be pure exponential drag, y = v0(1 - e^-kt)/k, which
+     * ASYMPTOTES at v0/k: the embers decelerate and park in mid-air. Next to
+     * the ambient sparks - which climb steadily to their ceiling and fade out
+     * still moving - the click burst read as a different substance. So it now
+     * uses the ambient law, and takes its ceiling and its sway from the same
+     * config, so the two are the same fire.
+     *
+     * `tCap` clamps the age at the parabola's vertex, which is what makes it
+     * monotonic: the ambient formula would eventually turn over and rain the
+     * embers back down, and embers from a fire do not fall.
+     */
+    const maxH = Math.max(0.05, c.maxHeight);
+    const swayAmp = c.sway * 0.35;
+    for (let i = 0; i < COUNT; i++) {
+      const vy = vel[i * 3 + 1];
+      const latDrag = 1 - Math.min(1, age * 0.55);
+      const tCap = vy / 0.7;
+      const a2 = Math.min(age, tCap);
+      const rise = Math.min(maxH * (hvar[i] || 1), vy * a2 - 0.35 * a2 * a2);
+      pos[i * 3] = vel[i * 3] * age * latDrag + Math.sin(age * 4.2 + i) * swayAmp;
+      pos[i * 3 + 1] = rise;
+      pos[i * 3 + 2] = vel[i * 3 + 2] * age * latDrag + Math.cos(age * 3.9 + i * 1.7) * swayAmp;
+      const norm = age / life;
+      const fadeIn = Math.min(1, norm * 10);
+      const fadeOut = 1 - Math.pow(Math.min(1, norm), 1.6);
+      const flick = 0.72 + 0.28 * Math.sin(age * 26 + i);
+      al[i] = Math.max(0, fadeIn * fadeOut * flick);
+    }
+    pa.needsUpdate = true;
+    aa.needsUpdate = true;
+  });
+
+  return (
+    <group position={[p.x, p.y, p.z]}>
+      <pointLight ref={lightRef} intensity={0} distance={p.flashReach} decay={2} color="#ffb257" />
+      <points ref={pointsRef} visible={false} raycast={() => null} frustumCulled={false}>
+        <bufferGeometry>
+          <bufferAttribute ref={posAttrRef} attach="attributes-position" args={[positions, 3]} />
+          <bufferAttribute ref={alphaAttrRef} attach="attributes-alpha" args={[alphas, 1]} />
+        </bufferGeometry>
+        <pointsMaterial
+          color="#ffc66d"
+          size={p.size}
+          sizeAttenuation
+          transparent
+          opacity={p.opacity}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          onBeforeCompile={(shader) => {
+            shader.vertexShader = shader.vertexShader.replace(
+              "void main() {",
+              "attribute float alpha;\nvarying float vAlpha;\nvoid main() {\n  vAlpha = alpha;"
+            );
+            shader.fragmentShader = shader.fragmentShader
+              .replace("void main() {", "varying float vAlpha;\nvoid main() {")
+              .replace(
+                "vec4 diffuseColor = vec4( diffuse, opacity );",
+                "vec4 diffuseColor = vec4( diffuse, opacity * vAlpha );"
+              );
+          }}
+        />
+      </points>
+    </group>
+  );
+});
+
 function FloppingFish({
   config,
   onClickSound,
+  onImpactSound,
   onSelect,
 }: {
   config: CampfireSceneConfig;
   onClickSound?: () => void;
+  /** Fired the instant the throw lands - the fish "hits" the fire. */
+  onImpactSound?: () => void;
   onSelect?: (name: string) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const gltf = useGLTF(FISH_URL) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
   const [hovered, setHovered] = useState(false);
+
+  /*
+   * Click-to-cook. idle -> flying -> gone, with an optional trip back to idle
+   * if fishRespawnDelay is set.
+   *
+   * The flight is driven from a ref rather than state so the frame loop never
+   * waits on a re-render; only the three PHASE changes go through setState,
+   * because they are the only things React actually has to draw differently.
+   */
+  const [phase, setPhase] = useState<"idle" | "flying" | "gone">("idle");
+  const burstRef = useRef<EmberBurstHandle>(null);
+  const flight = useRef<{
+    t: number;
+    from: THREE.Vector3;
+    to: THREE.Vector3;
+    rot: THREE.Euler;
+    spinAxis: THREE.Vector3;
+  } | null>(null);
+
+  const ov = config.objectOverrides?.["fish"] ?? EMPTY_OVERRIDE;
+
+  /*
+   * Where the fire actually is, in the fish's own parent frame.
+   *
+   * FloppingFish and the "campfire" group are SIBLINGS, so the flame's local
+   * (flameX, flameY, flameZ) has to have the campfire group's own drag offset
+   * added to it before the fish can aim at it. Reading it live means dragging
+   * either one in the lab keeps the throw honest.
+   */
+  const campOv = config.objectOverrides?.["campfire"] ?? EMPTY_OVERRIDE;
+  const fireTarget = useMemo(
+    () => new THREE.Vector3(
+      campOv.dx + config.flameX,
+      campOv.dy + config.flameY + config.fishLaunchTargetY,
+      campOv.dz + config.flameZ,
+    ),
+    [campOv.dx, campOv.dy, campOv.dz, config.flameX, config.flameY, config.flameZ, config.fishLaunchTargetY],
+  );
+
+  const launch = useCallback(() => {
+    const g = groupRef.current;
+    if (!g) return;
+    flight.current = {
+      t: 0,
+      from: g.position.clone(),
+      to: fireTarget.clone(),
+      rot: g.rotation.clone(),
+      // Tumble end-over-end about the axis across the direction of travel, so
+      // it reads as a thrown fish rather than a spinning top.
+      //
+      // The fallback matters: setFromAxisAngle takes the axis on trust, and a
+      // zero-length one yields (0,0,0,cos) - a quaternion of length < 1, which
+      // three applies as a SCALE. Park the fish exactly on the flame in the lab
+      // and, without this, clicking it would shrink it instead of throwing it.
+      spinAxis: (() => {
+        const a = new THREE.Vector3(fireTarget.z - g.position.z, 0, g.position.x - fireTarget.x);
+        return a.lengthSq() < 1e-8 ? new THREE.Vector3(1, 0, 0) : a.normalize();
+      })(),
+    };
+    setPhase("flying");
+  }, [fireTarget]);
+
+  // Respawn is opt-in: fishRespawnDelay 0 means the fish is gone for the rest
+  // of the visit, which is the point of the gag.
+  useEffect(() => {
+    if (phase !== "gone" || config.fishRespawnDelay <= 0) return;
+    const id = window.setTimeout(() => setPhase("idle"), config.fishRespawnDelay * 1000);
+    return () => window.clearTimeout(id);
+  }, [phase, config.fishRespawnDelay]);
 
   // Every mesh on the fish needs to cast shadows, or the fire's point-light
   // shadow map won't include it and the fish sits shadowless on the ground.
@@ -7036,6 +8265,47 @@ function FloppingFish({
   }, [actions]);
 
   useFrame((_, dt) => {
+    /*
+     * FLIGHT. Takes over the whole frame while it runs: the flop bounce below
+     * writes position.y every frame, so letting both run would have the fish
+     * hopping along its own arc.
+     */
+    if (phase === "flying" && flight.current) {
+      const f = flight.current;
+      f.t += dt;
+      const dur = Math.max(0.05, config.fishLaunchDuration);
+      const u = Math.min(1, f.t / dur);
+      const g = groupRef.current;
+      if (g) {
+        // Constant speed across the ground, parabola on top. A single eased
+        // lerp in all three axes would float; this throws.
+        g.position.x = f.from.x + (f.to.x - f.from.x) * u;
+        g.position.z = f.from.z + (f.to.z - f.from.z) * u;
+        g.position.y = f.from.y + (f.to.y - f.from.y) * u
+          + Math.sin(u * Math.PI) * config.fishLaunchArc;
+
+        // Tumble, applied on top of the resting orientation rather than
+        // replacing it, so it starts from exactly the pose it was lying in.
+        scratchQ.setFromAxisAngle(f.spinAxis, u * Math.PI * 2 * config.fishLaunchSpin);
+        g.quaternion.setFromEuler(f.rot).premultiply(scratchQ);
+      }
+
+      // Thrash for real on the way in.
+      const swimKey = actions ? Object.keys(actions).find((k) => /swim/i.test(k)) : undefined;
+      if (swimKey && actions?.[swimKey]) {
+        actions[swimKey]!.timeScale = config.fishFlopSpeed * config.fishLaunchFlail;
+      }
+
+      if (u >= 1) {
+        flight.current = null;
+        burstRef.current?.fire();
+        onImpactSound?.();
+        setPhase("gone");
+      }
+      return;
+    }
+    if (phase === "gone") return;
+
     t.current += dt;
 
     // Walk through phases based on cumulative time. Sum durations = one full cycle.
@@ -7127,37 +8397,74 @@ function FloppingFish({
   // through the same ObjectDragLayer path as every other named object. Naming
   // the outer group "fish" is what makes drag work at all - the drag layer
   // walks up from the hit target looking for a node with `name === selectedObject`.
-  const ov = config.objectOverrides?.["fish"] ?? EMPTY_OVERRIDE;
   return (
-    <group
-      ref={groupRef}
-      name="fish"
-      position={[config.fishX + ov.dx, config.fishY + ov.dy, config.fishZ + ov.dz]}
-      rotation={[config.fishRotationX + ov.rotX, config.fishRotationY + ov.rotY, 0]}
-      scale={ov.scale}
-      onPointerOver={(e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(true); }}
-      onPointerOut={(e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(false); }}
-      onClick={(e: ThreeEvent<MouseEvent>) => {
-        e.stopPropagation();
-        onClickSound?.();
-        onSelect?.("fish");
-      }}
-    >
-      {/* Inner group holds the "lay on side" roll so the outer group's Y-rotation
-          (the wobble) stays as heading rather than mixing with the flop tilt. */}
-      <group rotation={[0, 0, config.fishRotationZ + ov.rotZ]} scale={config.fishScale}>
-        <primitive object={gltf.scene} />
-      </group>
-    </group>
+    <>
+      {phase !== "gone" ? (
+        <group
+          ref={groupRef}
+          name="fish"
+          position={[config.fishX + ov.dx, config.fishY + ov.dy, config.fishZ + ov.dz]}
+          rotation={[config.fishRotationX + ov.rotX, config.fishRotationY + ov.rotY, 0]}
+          scale={ov.scale}
+          onPointerOver={(e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(true); }}
+          onPointerOut={(e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(false); }}
+          onClick={(e: ThreeEvent<MouseEvent>) => {
+            e.stopPropagation();
+            onClickSound?.();
+            // fishLaunchOn exists so the lab can still pick the fish up and
+            // position it. With this on, one click and it is in the fire.
+            if (config.fishLaunchOn >= 0.5) {
+              // Deliberately NOT onSelect: selecting it would leave
+              // selectedObject pointing at a node that is about to unmount, and
+              // OrbitControls are disabled for as long as anything is selected
+              // - so the throw would end with a camera that cannot be moved.
+              if (phase === "idle") {
+                setHovered(false);
+                launch();
+              }
+              return;
+            }
+            onSelect?.("fish");
+          }}
+        >
+          {/* Inner group holds the "lay on side" roll so the outer group's Y-rotation
+              (the wobble) stays as heading rather than mixing with the flop tilt. */}
+          <group rotation={[0, 0, config.fishRotationZ + ov.rotZ]} scale={config.fishScale}>
+            <primitive object={gltf.scene} />
+          </group>
+        </group>
+      ) : null}
+      {/* Sibling, not a child: the embers belong to the FIRE, and parenting them
+          to the fish would have taken them away with it when it unmounts. */}
+      <EmberBurst
+        ref={burstRef}
+        x={fireTarget.x}
+        y={fireTarget.y}
+        z={fireTarget.z}
+        count={config.fishBurstCount}
+        speed={config.fishBurstSpeed}
+        spread={config.fishBurstSpread}
+        maxHeight={config.sparkMaxHeight}
+        sway={config.sparkSway}
+        lifetime={config.fishBurstLifetime}
+        size={config.fishBurstSize}
+        opacity={config.fishBurstOpacity}
+        flashIntensity={config.fishFlashIntensity}
+        flashDuration={config.fishFlashDuration}
+        flashReach={config.fishFlashReach}
+      />
+    </>
   );
 }
 
 function CampfireAnimals({
   config,
   onSelect,
+  bearVoiceRef,
 }: {
   config: CampfireSceneConfig;
   onSelect: (name: string) => void;
+  bearVoiceRef?: BearVoiceStateRef;
 }) {
   // Live head positions, written and read by the bears each frame, so they can find
   // each other wherever the config sliders have put them.
@@ -7221,6 +8528,7 @@ function CampfireAnimals({
             config={config}
             onSelect={onSelect}
             heads={heads}
+            bearVoiceRef={bearVoiceRef}
             seed={i}
           />
         );
@@ -7676,7 +8984,7 @@ function CabinSector({ config, onSelect }: { config: CampfireSceneConfig; onSele
           code-built table (y = 0.62) around the bear's writing spot. */}
       <Selectable name="old_bear_computer" onSelect={onSelect} config={config} basePosition={[0.35, TABLE_TOP_Y, -0.15]} baseRotationY={Math.PI}>
         <SafeAsset label="old-bear computer">
-          <GLBModel url={OLD_BEAR_COMPUTER_URL} />
+          <LitComputer config={config} />
         </SafeAsset>
         {/* Screen glow: bluish spill from the monitor face. Spot-light so
             it only shines out the FRONT of the screen (a pointLight was
@@ -7739,6 +9047,32 @@ function CabinSector({ config, onSelect }: { config: CampfireSceneConfig; onSele
         config={config}
         onSelect={onSelect}
       />
+      {/* Rocking chair + its bear, tied together: both live inside the SAME
+          Selectable so the chair's own drawer (name "cabin_rocking_chair")
+          drags/rotates/scales the pair as one unit. The bear also keeps its
+          own name ("bear_rocking_chair") for a separate seat-position nudge
+          on top of that - click it directly in the lab to adjust just it.
+          First-pass placement only; expect to redo it from the lab. */}
+      <Selectable
+        name="cabin_rocking_chair"
+        onSelect={onSelect}
+        config={config}
+        basePosition={[1.6, 1.0, 0.9]}
+        baseRotationY={0}
+      >
+        {/* GLB's bbox is roughly a symmetric -1..1 cube (centered pivot), so
+            +1 on Y is a guess at lifting its base onto the floor rather than
+            burying half of it - first thing to check/fix from the lab. */}
+        <SafeAsset label="rocking chair">
+          <GLBModel url={ROCKING_CHAIR_URL} />
+        </SafeAsset>
+        <Animal
+          name="bear_rocking_chair"
+          placement={ROCKING_CHAIR_BEAR}
+          config={config}
+          onSelect={onSelect}
+        />
+      </Selectable>
       </group>
     </group>
   );
@@ -7760,11 +9094,17 @@ function CabinSector({ config, onSelect }: { config: CampfireSceneConfig; onSele
  * not a location.
  */
 
-function ArcadeSector({ config, onSelect, crtMenu, onCrtClick }: {
+function ArcadeSector({ config, onSelect, crtMenu, onCrtClick, onCrtHover, crtHot = false }: {
   config: CampfireSceneConfig;
   onSelect: (n: string) => void;
   crtMenu?: CrtMenu;
   onCrtClick?: (uv: { x: number; y: number } | null) => void;
+  onCrtHover?: (uv: { x: number; y: number } | null) => void;
+  /** True while clicking the live tube would pull the camera into it - i.e.
+   *  while it is still a prop you can walk up to. Once you are inside the
+   *  close-up the SCREEN is the affordance and the chassis lighting up behind
+   *  the menu would be noise. */
+  crtHot?: boolean;
 }) {
   const cords = useRef<CordRegistry>(new Map());
   // One colour for every CRT's throw, the way arcadeCrtGlow is one brightness
@@ -7774,6 +9114,26 @@ function ArcadeSector({ config, onSelect, crtMenu, onCrtClick }: {
   const crtLightColor = `#${[config.arcadeCrtLightR, config.arcadeCrtLightG, config.arcadeCrtLightB]
     .map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0"))
     .join("")}`;
+
+  /*
+   * How the tube's shadow map is shaped.
+   *
+   * Quality comes from the camp's own shadow settings - one set of knobs for
+   * every shadow in this sector, so the lanterns and the television cannot
+   * disagree about softness or bias.
+   *
+   * The FAR PLANE does not. It is taken from this light's own reach, because
+   * the shared default is 2 world units and the tube throws further than that
+   * - a caster past the far plane is simply not in the shadow camera, so the
+   * chair would light up and drop no shadow at all, which looks like the
+   * feature is broken rather than mis-tuned.
+   */
+  const tuneCrtShadow = (light: THREE.SpotLight) => {
+    applyDeskShadow(light, config as unknown as Record<string, number>);
+    const cam = light.shadow.camera as THREE.PerspectiveCamera;
+    cam.far = Math.max(cam.near + 0.01, config.arcadeCrtLightDistance || 4);
+    cam.updateProjectionMatrix();
+  };
 
   /* Truck sits centred in front of the camera with the open bed pointed at the
      viewer. The camera lives at local +Z looking at -Z, so we point the truck's
@@ -7971,6 +9331,8 @@ function ArcadeSector({ config, onSelect, crtMenu, onCrtClick }: {
             name={`crt_${i}`}
             onSelect={onSelect}
             config={config}
+            // Only crt_0 does anything - the other three are scenery.
+            interactive={i === 0 && crtHot}
             basePosition={[x, y, z]}
             baseRotationY={0}
             baseScale={0.72}
@@ -7978,7 +9340,9 @@ function ArcadeSector({ config, onSelect, crtMenu, onCrtClick }: {
             <RetroCrtTv
               screen={scaledScreen}
               seed={i}
+              hot={i === 0 && crtHot}
               onScreenClick={i === 0 ? onCrtClick : undefined}
+              onScreenHover={i === 0 ? onCrtHover : undefined}
               light={{
                 forwardOffset: config.arcadeCrtLightForwardOffset,
                 angle: config.arcadeCrtLightAngle,
@@ -7989,6 +9353,12 @@ function ArcadeSector({ config, onSelect, crtMenu, onCrtClick }: {
                 offsetX: config.arcadeCrtLightOffsetX,
                 offsetY: config.arcadeCrtLightOffsetY,
                 color: crtLightColor,
+                // Only the live tube. The other three are hidden, and a depth
+                // pass each would be paid for nothing.
+                castShadow: i === 0
+                  && config.shadowsEnabled >= 0.5
+                  && config.arcadeCrtShadow >= 0.5,
+                tuneShadow: tuneCrtShadow,
               }}
             />
           </Selectable>
@@ -8057,10 +9427,12 @@ function ArcadeSector({ config, onSelect, crtMenu, onCrtClick }: {
         baseRotationY={0}
         baseScale={0.014}
       >
-        <group position={[0, -0.061, 1.107]}>
+        <group position={[0, ARCADE_CONSOLE_LIFT, 1.107]}>
           <SafeAsset label="gamecube console">
             <GLBModel url={GAMECUBE_CONSOLE_URL} />
           </SafeAsset>
+          {/* Plugs and leads live with the sockets - see ConsolePorts. */}
+          <ConsolePorts cords={cords} cubNames={ARCADE_PORT_CUBS} />
         </group>
       </Selectable>
       {/* The picnic set, moved over with the CRTs. Same block as before -
@@ -8261,6 +9633,14 @@ function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onS
 
   const instRefs = useRef<Array<THREE.InstancedMesh | null>>([]);
 
+  /*
+   * Every tree, always. The forest was distance-culled for a while; it is not
+   * worth it and it is not free. A pine here is 264 TRIANGLES, so all 356 of
+   * them together are ~94k triangles in two draw calls - next to nothing, and
+   * far less than one face of a shadow cube. Any cut-off, however generous,
+   * buys frames you cannot measure in exchange for trees that vanish, which is
+   * the one thing you actually notice. Slot i is tree i; keep it that way.
+   */
   useEffect(() => {
     const mat = new THREE.Matrix4();
     const q = new THREE.Quaternion();
@@ -8309,7 +9689,18 @@ function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onS
               key={`forest-${idx}`}
               ref={(node) => { instRefs.current[idx] = node; }}
               args={[tpl.geometry, tpl.material, Math.max(1, trees.length)]}
-              castShadow
+              /*
+               * Off by default, and it is the single biggest saving here.
+               * The scene's only shadow casters are the campfires - a point
+               * light (SIX cube faces) plus a spot light each. Because the
+               * forest is frustumCulled={false}, WebGLShadowMap's own frustum
+               * test is skipped and every one of those faces re-renders the
+               * whole forest. What it buys is the shadow of whichever pine
+               * happens to fall between the clear radius (6) and the fire's
+               * reach (8.9), thrown outward onto ground you are not looking
+               * at. forestCastShadow puts it back if that trade ever changes.
+               */
+              castShadow={config.forestCastShadow >= 0.5}
               receiveShadow
               frustumCulled={false}
               // Per-instance selection: r3f fills in `instanceId` on hits
@@ -8525,13 +9916,54 @@ function GroundPatches({ config, centreX, centreZ }: { config: CampfireSceneConf
   );
 }
 
-function CampfireGround({ config }: { config: CampfireSceneConfig }) {
+/**
+ * The visibility half of <Location>, on its own. For world-space things that
+ * belong to one camp but must NOT inherit the ring transform: the dirt patches
+ * are already positioned in world coordinates, so parenting them under
+ * <Location> would rotate and translate them off the camp entirely.
+ */
+function SiteGate({
+  index,
+  config,
+  gate,
+  children,
+}: {
+  index: number;
+  config: CampfireSceneConfig;
+  gate: boolean;
+  children: ReactNode;
+}) {
+  const ref = useRef<THREE.Group>(null);
+  const cfg = useRef(config);
+  cfg.current = config;
+  const gateRef = useRef(gate);
+  gateRef.current = gate;
+  useFrame(({ camera }) => {
+    if (!ref.current) return;
+    if (!gateRef.current) {
+      ref.current.visible = true;
+      return;
+    }
+    const a = LOCATION_AZIMUTH(index, cfg.current);
+    const camAngle = Math.atan2(camera.position.x, camera.position.z);
+    ref.current.visible = Math.abs(shortestTurn(camAngle, a)) < LOCATION_VISIBLE_ARC;
+  });
+  return <group ref={ref}>{children}</group>;
+}
+
+function CampfireGround({ config, gate = false }: { config: CampfireSceneConfig; gate?: boolean }) {
   const radius = Math.max(30, config.locationRadius + 24);
   // Location 0 IS the campfire camp. Same placement ringMatrix uses, so the
   // patches track the camp if the ring is rotated or resized.
   const centreA = LOCATION_AZIMUTH(0, config);
   const centreX = Math.sin(centreA) * config.locationRadius + config.groundPatchOffsetX;
   const centreZ = Math.cos(centreA) * config.locationRadius + config.groundPatchOffsetZ;
+  // Same placement math, at the cabin's own slot (location 2) instead - see
+  // cabinGroundPatchOn in sceneConfig.ts for why this is a second GroundPatches
+  // mount rather than a third layer bolted onto the existing one.
+  const cabinA = LOCATION_AZIMUTH(LOCATION_CABIN, config);
+  const cabinCentreX = Math.sin(cabinA) * config.locationRadius + config.cabinGroundPatchOffsetX;
+  const cabinCentreZ = Math.cos(cabinA) * config.locationRadius + config.cabinGroundPatchOffsetZ;
   const color = useMemo(
     () => new THREE.Color(config.groundColorR, config.groundColorG, config.groundColorB),
     [config.groundColorR, config.groundColorG, config.groundColorB],
@@ -8542,9 +9974,130 @@ function CampfireGround({ config }: { config: CampfireSceneConfig }) {
         <circleGeometry args={[radius, 96]} />
         <meshStandardMaterial color={color} roughness={0.96} metalness={0} />
       </mesh>
-      <GroundPatches config={config} centreX={centreX} centreZ={centreZ} />
+      {/* The patches are the campfire's dirt clearing, and nothing else's.
+          Gated with location 0 for the same reason the camp itself is: without
+          this the tent, fire and props blink off as you swing away and leave a
+          bare scorched circle sitting on the grass with nothing in it. */}
+      <SiteGate index={LOCATION_CAMPFIRE} config={config} gate={gate}>
+        <GroundPatches config={config} centreX={centreX} centreZ={centreZ} />
+      </SiteGate>
+      {/* Same clearing, same shape/colour knobs, parked outside the cabin
+          instead - cabinGroundPatchOn is its own switch on top of
+          GroundPatches' internal groundPatchOn check, so this ring can be
+          hidden without also hiding the campfire's. */}
+      {config.cabinGroundPatchOn >= 0.5 && (
+        <SiteGate index={LOCATION_CABIN} config={config} gate={gate}>
+          <GroundPatches config={config} centreX={cabinCentreX} centreZ={cabinCentreZ} />
+        </SiteGate>
+      )}
     </>
   );
+}
+
+/**
+ * Dev-only instrumentation, mounted at ?perf. Reports what the renderer ACTUALLY
+ * did last frame rather than what we assume it did - draw calls, triangles, how
+ * many lights are live, and how many shadow maps are being fed. Every number
+ * here is read off three itself.
+ */
+function PerfProbe({ onSample }: { onSample: (s: PerfSample) => void }) {
+  const frames = useRef(0);
+  const since = useRef(0);
+  useFrame(({ gl, scene, clock }) => {
+    frames.current++;
+    const now = clock.elapsedTime;
+    if (since.current === 0) since.current = now;
+    if (now - since.current < 0.5) return;
+    const fps = frames.current / (now - since.current);
+    frames.current = 0;
+    since.current = now;
+    let lights = 0;
+    let shadowMaps = 0;
+    let shadowTexels = 0;
+    scene.traverse((o) => {
+      const l = o as THREE.Light;
+      if (!l.isLight || !l.visible) return;
+      lights++;
+      if (!l.castShadow || !l.shadow) return;
+      // A point light's shadow is a CUBE: six faces off one map size.
+      const faces = (l as THREE.PointLight).isPointLight ? 6 : 1;
+      shadowMaps += faces;
+      shadowTexels += faces * l.shadow.mapSize.x * l.shadow.mapSize.y;
+    });
+    const size = new THREE.Vector2();
+    gl.getSize(size);
+    const dpr = gl.getPixelRatio();
+    onSample({
+      fps,
+      calls: gl.info.render.calls,
+      tris: gl.info.render.triangles,
+      progs: gl.info.programs?.length ?? 0,
+      geoms: gl.info.memory.geometries,
+      textures: gl.info.memory.textures,
+      lights,
+      shadowMaps,
+      shadowTexels,
+      screenTexels: size.x * dpr * size.y * dpr,
+    });
+  });
+  return null;
+}
+
+type PerfSample = {
+  fps: number; calls: number; tris: number; progs: number;
+  geoms: number; textures: number; lights: number;
+  shadowMaps: number; shadowTexels: number; screenTexels: number;
+};
+
+/**
+ * Keeps the fog honest when the camera pulls back.
+ *
+ * config.fogFar is tuned for a camera parked at a camp, a few units off the
+ * fire. The title card is not that: IntroFlight hauls the camera tens of units
+ * out, and at that range a fogFar of ~40 puts the ENTIRE campsite past the far
+ * plane of the gradient, so every pixel resolves to pure sky colour and the
+ * screen goes black. (titleFlyFogSquash was meant to cover this and was wired
+ * to IntroFlight as a prop, but nothing ever read it - grep for scene.fog and
+ * there was no writer at all.)
+ *
+ * So the far plane never goes below what the current shot needs: whichever is
+ * larger of the tuned value and the camera's own distance from the nearest camp
+ * times a multiplier. Parked, the distance term is the smaller of the two and
+ * the fog is exactly as tuned - the close-up look is untouched. Pulled back, it
+ * opens up, and the fog rolls in again as you fly down into the camp. near
+ * rides along on the same ratio so the gradient keeps its shape.
+ */
+function FogRig({ config }: { config: CampfireSceneConfig }) {
+  const cfg = useRef(config);
+  cfg.current = config;
+  const farRef = useRef(0);
+  useFrame(({ scene, camera }, delta) => {
+    const fog = scene.fog as THREE.Fog | null;
+    if (!fog || !(fog as THREE.Fog).isFog) return;
+    const c = cfg.current;
+
+    let d2 = Infinity;
+    for (let i = 0; i < LOCATION_COUNT; i++) {
+      const a = LOCATION_AZIMUTH(i, c);
+      const dx = camera.position.x - Math.sin(a) * c.locationRadius;
+      const dy = camera.position.y;
+      const dz = camera.position.z - Math.cos(a) * c.locationRadius;
+      const v = dx * dx + dy * dy + dz * dz;
+      if (v < d2) d2 = v;
+    }
+    const need = Math.sqrt(d2) * Math.max(0, c.fogPullbackMul);
+    const target = Math.max(c.fogFar, need);
+
+    // Ease, so a cut between shots does not snap the horizon.
+    if (farRef.current === 0) farRef.current = target;
+    const k = 1 - Math.exp(-delta * Math.max(0.001, c.fogPullbackEase));
+    farRef.current += (target - farRef.current) * k;
+
+    fog.far = farRef.current;
+    // Same ratio on near, so the gradient stretches rather than collapsing.
+    fog.near = c.fogNear * (farRef.current / Math.max(0.001, c.fogFar));
+  });
+  return null;
 }
 
 function BackgroundGlow() {
@@ -8586,7 +10139,7 @@ const CRT_BACK_ITEM = { label: "Back", lines: ["Leave the screen"] };
 function CampfireWorld({
   config,
   onCameraChange,
-  onSelect,
+  onSelect: onSelectProp,
   selectedObject,
   dragPlaneMode,
   onObjectTranslate,
@@ -8597,9 +10150,17 @@ function CampfireWorld({
   onLocationViewChange,
   titleHeld = false,
   onFishClickSound,
+  onFireWhooshSound,
   onHoverSound,
+  onCrtEnterSound,
+  onCrtExitSound,
+  onCrtBackSound,
+  onCrtSelectSound,
+  onCrtFocusChange,
+  crtZoomRef,
   cameraSnapSignal,
   cameraLivePoseRef,
+  bearVoiceRef,
 }: {
   config: CampfireSceneConfig;
   onCameraChange: (pos: [number, number, number], tgt: [number, number, number]) => void;
@@ -8619,13 +10180,100 @@ function CampfireWorld({
   /** while true, freeze IntroFlight at its pulled-back start pose */
   titleHeld?: boolean;
   onFishClickSound?: () => void;
+  /** Fired when the campfire ignites its whoosh - clicking it directly (with
+   *  its own cooldown, applied where this fires), or the flopping fish
+   *  landing in it at the end of its throw. */
+  onFireWhooshSound?: () => void;
   /** Fired once each time the pointer enters a fresh named object anywhere in
    *  the scene. Used to play hover.mp3. */
   onHoverSound?: () => void;
+  /** Fired when the camera flies IN onto the CRT close-up. */
+  onCrtEnterSound?: () => void;
+  /** Fired when the camera pulls OUT of the CRT close-up (Back plate, or
+   *  ringing away from the arcade panel). */
+  onCrtExitSound?: () => void;
+  /** Fired specifically for the CRT menu's Back plate. Plays alongside the
+   *  zoom-out cue so the "leave the screen" click has its own tick. */
+  onCrtBackSound?: () => void;
+  /** Fired when a CRT menu plate other than Back is picked. */
+  onCrtSelectSound?: () => void;
+  /** Reports CRT focus state changes upward so the parent can loop background
+   *  music while the close-up is held. */
+  onCrtFocusChange?: (focused: boolean) => void;
+  /** Written every frame by CrtFocusCamera with 0..1 progress through the
+   *  close-up flight - read outside the canvas to ramp CRT_MUSIC's volume
+   *  with the actual dolly rather than snapping it at the endpoints. */
+  crtZoomRef?: React.MutableRefObject<number>;
   cameraLivePoseRef?: React.MutableRefObject<
     { pos: [number, number, number]; tgt: [number, number, number] } | null
   >;
+  /** Live remote-audio state for the two scene-one bears. */
+  bearVoiceRef?: BearVoiceStateRef;
 }) {
+  /*
+   * Clicking the fire throws embers up out of it.
+   *
+   * Hooked at the onSelect SEAM rather than on a click handler, because the
+   * fire has two independent routes to being picked: the <group name="campfire">
+   * wrapper, and the bonfire log itself, which lives over in CampfireSceneModel
+   * and calls onSelect("campfire") directly with the event stopped - so a
+   * handler on the group alone would miss the most obvious thing to click. One
+   * wrapper here catches both, and any route added later.
+   *
+   * The burst is fired through a ref, so a click costs no re-render of a scene
+   * tree that is thousands of elements wide. Selection still happens as before;
+   * this is purely additive, so the lab can still drag the fire around.
+   */
+  const fireBurstRef = useRef<EmberBurstHandle>(null);
+  const fireBurstOn = config.fireClickBurstOn >= 0.5;
+  // Repeat-clicking the fire used to stack the burst (and would have stacked
+  // the whoosh too) - one timestamp, checked before either fires.
+  const lastFireClickAtRef = useRef(0);
+
+  /*
+   * Click-to-topple, plus the one scripted animal that is left.
+   *
+   * Both bags fall forward under their own weight (see TipOver), and the right
+   * one takes the fishing rod down with it. Each is one-shot: the same flag
+   * that runs the fall also drops the hover affordance, so a prop already lying
+   * on the ground does not look clickable.
+   *
+   * Routed through the onSelect seam for the same reason the fire's embers are:
+   * the props have more than one path to being picked, and one wrapper catches
+   * them all.
+   */
+  const [act, setAct] = useState<ActName | null>(null);
+  const [bagDown, setBagDown] = useState(false);
+  const [hikeBagDown, setHikeBagDown] = useState(false);
+  /* A counter, not a flag: re-tuning the bag replays its fall, which fires the
+   * knock again, and the rod has to go over again with it. A boolean that was
+   * already true would leave the rod lying there through every replay. */
+  const [rodPlay, setRodPlay] = useState(0);
+  const crittersOn = config.critterActsOn >= 0.5;
+  const onSelect = useCallback((name: string) => {
+    if (name === "campfire" && fireBurstOn) {
+      const now = performance.now();
+      if (now - lastFireClickAtRef.current >= FIRE_CLICK_COOLDOWN_MS) {
+        lastFireClickAtRef.current = now;
+        fireBurstRef.current?.fire();
+        onFireWhooshSound?.();
+      }
+    }
+    if (crittersOn && act === null) {
+      // Deliberately NOT falling through to onSelectProp: selecting an object
+      // that is about to be carried away strands selectedObject on a node that
+      // unmounts, and OrbitControls stay disabled while anything is selected.
+      // critterActsOn = 0 gives the plain click-to-select behaviour back.
+      if (name === "campfire_hiking_backpack" && !hikeBagDown) {
+        setHikeBagDown(true); return;
+      }
+      // The right-hand bag is not an animal cue any more: it simply topples
+      // forward, and TipOver's contact callback is what knocks the rod down -
+      // at the angle the meshes actually touch, not on a timer.
+      if (name === "campfire_backpack" && !bagDown) { setBagDown(true); return; }
+    }
+    onSelectProp(name);
+  }, [onSelectProp, fireBurstOn, onFireWhooshSound, crittersOn, act, bagDown, hikeBagDown]);
 
   /*
    * Click the tube to pull the camera in; the screen's last plate lets it go.
@@ -8638,8 +10286,28 @@ function CampfireWorld({
    * The aim point is read from crt_0's LIVE override rather than pinned, so
    * dragging the CRT in the lab drags the close-up with it.
    */
-  const [crtFocus, setCrtFocus] = useState(false);
+  /*
+   * The tube runs in three stages, not two:
+   *
+   *   0  idle      - attract video, camera out on the ring
+   *   1  close-up  - camera flown in, STILL the attract video, no buttons
+   *   2  buttons   - the menu plates over their own video
+   *   3  section   - one plate's own screen, with its Back plate
+   *
+   * A click steps 0 -> 1 -> 2, picking a plate opens 3, and Back walks it
+   * back one level at a time (3 -> 2, 2 -> 0). Stage 1 is the point of the
+   * whole thing: you get to see the screen properly before the UI arrives on
+   * top of it.
+   */
+  const [crtStage, setCrtStage] = useState<0 | 1 | 2 | 3>(0);
+  const crtFocus = crtStage > 0;
   const [crtIndex, setCrtIndex] = useState(0);
+  /** Back plate lit on a section screen. The menu's own plates need no flag:
+   *  hovering one simply makes it the active plate, which already lights. */
+  const [crtBackHot, setCrtBackHot] = useState(false);
+  /** Tile under the pointer on the Projects board; its diagram fills the
+   *  band along the bottom. -1 until something is pointed at. */
+  const [crtTile, setCrtTile] = useState(0);
 
   const crtFocusView = useMemo<LocationView | null>(() => {
     if (!crtFocus) return null;
@@ -8672,44 +10340,265 @@ function CampfireWorld({
   }, [crtFocus, config.objectOverrides, config.crtFocusHeight, config.crtFocusBack,
       config.arcadeSetX, config.arcadeSetY, config.arcadeSetZ]);
 
+  // Turning config mode on while the close-up is held drops it, rather than
+  // leaving the camera locked somewhere the lab cannot drive it from.
+  useEffect(() => {
+    if (!editing) return;
+    setCrtStage((was) => {
+      if (was > 0) onCrtExitSound?.();
+      return 0;
+    });
+    setCrtIndex(0);
+    setCrtTile(0);
+  }, [editing, onCrtExitSound]);
+
   // Ringing away to another campsite drops the close-up. Without this the
   // camera would keep aiming at a shot written in the arcade's local frame
   // while the ring angle had already swung somewhere else.
   useEffect(() => {
-    if (panel !== LOCATION_ARCADE) { setCrtFocus(false); setCrtIndex(0); }
-  }, [panel]);
+    if (panel !== LOCATION_ARCADE) {
+      setCrtStage((was) => {
+        if (was > 0) onCrtExitSound?.();
+        return 0;
+      });
+      setCrtIndex(0);
+    }
+  }, [panel, onCrtExitSound]);
 
-  /** What crt_0 shows: free-running normally, driven once the camera is in. */
+  // Report focus changes upward so the parent can loop CRT background music
+  // while the close-up is held.
+  useEffect(() => {
+    onCrtFocusChange?.(crtFocus);
+  }, [crtFocus, onCrtFocusChange]);
+
+  /*
+   * What crt_0 shows, which is two different screens.
+   *
+   * Idle: the attract video, full frame, no UI over it - `hideUi` stops the
+   * plates being drawn at all, so the first thing you see is just the video.
+   * Clicked: the plates, on the still. Clearing `backgroundVideo` is what
+   * picks the still, and the Back plate is appended so there is a way out.
+   */
   const crtMenu = useMemo<CrtMenu>(() => (
-    crtFocus
-      ? { ...PORTFOLIO_MENU, items: [...PORTFOLIO_MENU.items, CRT_BACK_ITEM], activeIndex: crtIndex }
-      : PORTFOLIO_MENU
-  ), [crtFocus, crtIndex]);
+    crtStage === 3
+      ? {
+          ...PORTFOLIO_MENU,
+          backgroundVideo: CRT_BUTTONS_VIDEO,
+          page: {
+            ...(SECTION_PAGES[crtIndex] ?? SECTION_PAGES[0]),
+            activeRow: crtTile,
+          },
+          /*
+           * Board art is pulled in only once the board is open, and only the
+           * diagram actually being looked at.
+           *
+           * The 21 icons are 0.9MB and the 21 diagrams are 4.6MB; loading
+           * either up front would charge every visitor for a screen most of
+           * them never open. The icons all have to arrive together - the board
+           * shows them at once - but the diagrams are one at a time, so only
+           * the pointed-at one joins the list. Moving off it drops it again;
+           * coming back is an HTTP cache hit.
+           */
+          preloadMedia: [
+            ...(PORTFOLIO_MENU.preloadMedia ?? []),
+            ...(SECTION_PAGES[crtIndex]?.grid
+              ? (SECTION_PAGES[crtIndex]?.rows ?? [])
+                  .map((r) => r.icon)
+                  .filter((u): u is string => !!u)
+              : []),
+            ...(crtTile >= 0
+              ? [SECTION_PAGES[crtIndex]?.rows[crtTile]?.diagram]
+                  .filter((u): u is string => !!u)
+              : []),
+          ],
+          // Only the selected tile's gif animates - see liveImage.
+          liveImage: SECTION_PAGES[crtIndex]?.rows[crtTile]?.icon,
+          pageBackHover: crtBackHot,
+          tagline: PORTFOLIO_MENU.items[crtIndex]?.subtitle,
+        }
+      : crtStage === 2
+      ? {
+          ...PORTFOLIO_MENU,
+          backgroundVideo: CRT_BUTTONS_VIDEO,
+          items: [...PORTFOLIO_MENU.items, CRT_BACK_ITEM],
+          activeIndex: crtIndex,
+        }
+      // stages 0 and 1 are the same screen - the attract video, no UI. Only
+      // the camera moves between them.
+      //
+      // Contain-fit, unlike every other screen: this video is a title card,
+      // and cover-fit cropped 160 source pixels off each side - enough to eat
+      // the end of the wordmark. See CrtMenu.backgroundFit.
+      : { ...PORTFOLIO_MENU, hideUi: true, backgroundFit: "contain" as const }
+  ), [crtStage, crtIndex, crtBackHot, crtTile]);
+
+  /*
+   * Pointer over the glass.
+   *
+   * On the menu, hovering a plate MOVES the selection to it, the way the
+   * cursor does in the original - so the sub-list and the jut follow the
+   * mouse and a click just commits whatever is already lit. On a section
+   * screen there is only Back to light. The cursor turns into a pointer over
+   * anything clickable so the screen reads as live rather than as a picture.
+   */
+  /*
+   * The cursor is NOT set here.
+   *
+   * While the tube is open the P1 hand is the cursor everywhere, the way it
+   * is in the menus this screen is copying - the plates light to say what is
+   * under it, the pointer itself does not change shape. It is held by the
+   * effect below instead, because this callback only fires while the pointer
+   * is over the glass: driving the cursor from here meant it flipped back to
+   * an arrow the moment you drifted a pixel off the screen, mid-menu.
+   */
+  const onCrtHover = useCallback((uv: { x: number; y: number } | null) => {
+    if (editing) return;
+    if (!uv || crtStage < 2) {
+      if (crtBackHot) setCrtBackHot(false);
+      return;
+    }
+    if (crtStage === 3) {
+      const on = meleePageBackHit(uv.x, uv.y);
+      setCrtBackHot(on);
+      // On the Projects board, pointing at a tile fills the diagram band.
+      const pg = SECTION_PAGES[crtIndex];
+      const tile = pg?.grid ? meleeGridHit(uv.x, uv.y, pg) : null;
+      // Keep the last pick when the pointer wanders off the tiles - the band
+      // holding its last diagram beats it blanking every time you move.
+      if (tile !== null) setCrtTile(tile);
+      return;
+    }
+    const back = PORTFOLIO_MENU.items.length;
+    const hit = meleeMenuHit(uv.x, uv.y, back + 1, crtIndex);
+    /*
+     * Back lights like any other plate.
+     *
+     * It used to be held out of the selection on the grounds that it would
+     * "steal the sub-list" - but it carries its own line ("Leave the
+     * screen"), so the panel has something to say for it, and a plate you can
+     * click but never light reads as broken. The index is safe to leave
+     * parked on it: every path that resolves a SECTION out of crtIndex runs
+     * on stage 3, and Back cannot open one - it exits instead.
+     */
+    if (hit !== null) setCrtIndex(hit);
+  }, [editing, crtStage, crtIndex, crtBackHot]);
+
+  /*
+   * The P1 hand, held from the moment the camera starts into the tube until
+   * it backs out again.
+   *
+   * Keyed on the STAGE rather than on hover, so it covers the whole viewport:
+   * once you are in the close-up there is nothing else to point at, and a
+   * cursor that reverted to an arrow between the plates would give the game
+   * away. Config mode is exempt - the tube is just a prop being positioned
+   * there, and the lab's own cursors belong to the lab.
+   */
+  useEffect(() => {
+    if (editing || crtStage < 1) return;
+    const prev = document.body.style.cursor;
+    document.body.style.cursor = CRT_CURSOR;
+    return () => { document.body.style.cursor = prev; };
+  }, [editing, crtStage]);
+
+  // Never leave a cursor behind on unmount.
+  useEffect(() => () => { document.body.style.cursor = ""; }, []);
 
   const onCrtClick = useCallback((uv: { x: number; y: number } | null) => {
-    // This fires in the lab too. The click still bubbles to the Selectable, so
-    // the object drawer opens at the same time as the camera flies in - both
-    // happen, which is what was asked for.
+    /*
+     * In config mode the tube is just another prop.
+     *
+     * The click still bubbles to the Selectable, so it selects the CRT for
+     * dragging and the object drawer opens - but the camera stays where it
+     * is. Flying into a close-up is the last thing you want while you are
+     * positioning the thing, and it fights the lab's own camera, which
+     * LocationCamera drives from the panel's saved shot.
+     */
+    if (editing) return;
     // The menu's own plates are the buttons: the click is hit-tested against
     // the same layout the canvas draws with, so pointing at a plate picks that
     // plate rather than just stepping to the next one.
     const back = PORTFOLIO_MENU.items.length;
-    const hit = uv ? meleeMenuHit(uv.x, uv.y, back + 1) : null;
-    if (!crtFocus) {
-      // Anywhere on the glass pulls the camera in; land on whatever was
-      // pointed at, or the top plate if it was a miss.
-      setCrtIndex(hit !== null && hit < back ? hit : 0);
-      setCrtFocus(true);
+    if (crtStage === 0) {
+      // Anywhere on the glass pulls the camera in. No plates are up yet, so
+      // there is nothing to hit-test - the video just keeps playing.
+      setCrtStage(1);
+      onCrtEnterSound?.();
       return;
     }
+    if (crtStage === 1) {
+      // Second click brings the buttons up over their own background.
+      setCrtIndex(0);
+      setCrtStage(2);
+      onCrtSelectSound?.();
+      return;
+    }
+    // crtIndex is passed so the hit test knows which plate is jutting out.
+    if (crtStage === 3) {
+      // Back first: it sits over the board's top-right corner, so whichever
+      // is hit there, leaving beats opening something.
+      if (uv && meleePageBackHit(uv.x, uv.y)) {
+        onCrtBackSound?.();
+        setCrtBackHot(false);
+        setCrtTile(0);
+        setCrtStage(2);
+        return;
+      }
+      /*
+       * A tile with an href is a button: clicking a project opens its repo.
+       *
+       * A NEW TAB, always. This is a 3D scene with a camera part-way into a
+       * close-up and a menu state machine behind it - navigating the page
+       * away would throw all of that out, and coming back would land you at
+       * the start of the flight rather than on the board you were reading.
+       *
+       * The click also commits the selection, so a tile that was never
+       * hovered - a touch screen, or the pointer arriving straight onto it -
+       * still opens the thing under the finger rather than whatever the
+       * board happened to be showing.
+       */
+      const pg = SECTION_PAGES[crtIndex];
+      const tile = uv && pg?.grid ? meleeGridHit(uv.x, uv.y, pg) : null;
+      if (tile === null) return;
+      setCrtTile(tile);
+      const href = pg?.rows[tile]?.href;
+      if (!href) return;
+      onCrtSelectSound?.();
+      window.open(href, "_blank", "noopener,noreferrer");
+      return;
+    }
+    const hit = uv ? meleeMenuHit(uv.x, uv.y, back + 1, crtIndex) : null;
     if (hit === null) return;            // missed the plates - leave it alone
-    if (hit >= back) { setCrtFocus(false); setCrtIndex(0); return; }  // Back
+    if (hit >= back) {
+      // Back plate: its own tick, then the pull-out cue. Straight to idle -
+      // stopping at the close-up would strand you on a screen with no way out.
+      onCrtBackSound?.();
+      onCrtExitSound?.();
+      setCrtStage(0);
+      setCrtIndex(0);
+      return;
+    }
+    // A plate opens its own screen.
+    onCrtSelectSound?.();
     setCrtIndex(hit);
-  }, [crtFocus]);
+    setCrtStage(3);
+  }, [editing, crtStage, crtIndex, onCrtEnterSound, onCrtExitSound, onCrtBackSound, onCrtSelectSound]);
   // Track the last named object under the cursor. r3f fires onPointerMove for
   // every hovered mesh; we only want a sound when the resolved "top-level
   // named ancestor" actually changes.
   const hoveredNameRef = useRef<string>("");
+  /*
+   * A model with several meshes under one named group fires a pointerout
+   * (from the sub-mesh you're leaving) immediately followed by a pointermove
+   * (onto the sub-mesh you're entering) as the cursor crosses the seam
+   * between them - same named object the whole time, as far as the visitor
+   * is concerned, but handleScenePointerOut had already cleared
+   * hoveredNameRef by the time the move handler re-resolved the same name,
+   * so it read as a fresh hover and replayed the cue. A straight cooldown on
+   * the SOUND rather than trying to out-think that event ordering: once
+   * played, hover.wav won't fire again for HOVER_SOUND_COOLDOWN_MS, so
+   * crossing internal seams while sitting on one object stays silent.
+   */
+  const lastHoverSoundAtRef = useRef(0);
   const resolveHoverName = (obj: THREE.Object3D | null): string => {
     let node: THREE.Object3D | null = obj;
     while (node) {
@@ -8725,7 +10614,11 @@ function CampfireWorld({
     const name = resolveHoverName(e.object);
     if (name && name !== hoveredNameRef.current) {
       hoveredNameRef.current = name;
-      onHoverSound?.();
+      const now = performance.now();
+      if (now - lastHoverSoundAtRef.current >= HOVER_SOUND_COOLDOWN_MS) {
+        lastHoverSoundAtRef.current = now;
+        onHoverSound?.();
+      }
     }
   };
   const handleScenePointerOut = () => {
@@ -8769,12 +10662,13 @@ function CampfireWorld({
           </>
         );
       })()}
+      <FogRig config={config} />
       <CameraRig config={config} paused={flying || panelled} />
       {panelled ? (
         <LocationCamera config={config} panel={panel} active={!flying} editing={editing} suspended={crtFocus} />
       ) : null}
       {/* Mounted whether or not a location owns the camera - see CrtFocusCamera. */}
-      <CrtFocusCamera active={crtFocus} view={crtFocusView} config={config} handoff={panelled} />
+      <CrtFocusCamera active={crtFocus} view={crtFocusView} config={config} handoff={panelled} zoomRef={crtZoomRef} />
       {flying ? (
         <IntroFlight
           to={intro.to}
@@ -8826,7 +10720,7 @@ function CampfireWorld({
       <WorldLights config={config} />
       <Stars radius={55} depth={20} count={Math.round(config.starCount)} factor={config.starBrightness} saturation={0} fade speed={0.12} />
 
-      <CampfireGround config={config} />
+      <CampfireGround config={config} gate={panelled && !flying} />
       {/* Non-visual: nulls out raycasting for any name listed in
           config.lockedObjects. Lets clicks pass through locked props. */}
       <LockLayer config={config} />
@@ -8857,7 +10751,7 @@ function CampfireWorld({
         {/* Location 0 - the campfire. Everything here was already composed around the
             origin with the camera off at +Z, so it moves onto the ring untouched and
             keeps every slider meaning exactly what it did. */}
-        <Location index={LOCATION_CAMPFIRE} config={config}>
+        <Location index={LOCATION_CAMPFIRE} config={config} gate={panelled && !flying}>
           <CampfireSceneModel config={config} onSelect={onSelect} />
           {(config.objectOverrides?.["camper"]?.hide ?? 0) < 0.5 && (
             <SafeAsset label="camper"><Camper config={config} onSelect={onSelect} /></SafeAsset>
@@ -8866,7 +10760,7 @@ function CampfireWorld({
             <SafeAsset label="tent"><Tent config={config} onSelect={onSelect} /></SafeAsset>
           )}
           <Benches config={config} onSelect={onSelect} />
-          <CampfireAnimals config={config} onSelect={onSelect} />
+          <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} />
           {/* Wood pile near the bonfire, as if stacked ready to feed the fire. */}
           <Selectable
             name="campfire_wood_pile"
@@ -8918,6 +10812,9 @@ function CampfireWorld({
             name="campfire_tent"
             onSelect={onSelect}
             config={config}
+            /* Not an affordance: nothing happens when a visitor clicks the
+               tent. It stays selectable so the lab can still drag it. */
+            interactive={false}
             basePosition={[4.6, 0, -4.2]}
             baseRotationY={-0.83}
             baseScale={0.16}
@@ -9119,15 +11016,31 @@ function CampfireWorld({
             name="campfire_hiking_backpack"
             onSelect={onSelect}
             config={config}
+            interactive={crittersOn && !hikeBagDown}
             basePosition={[-0.9, 0, 1.8]}
             baseRotationY={0.5}
             baseScale={0.4}
           >
+            <TipOver
+              active={hikeBagDown}
+              table={TIP_TABLES.hikeBag}
+              heading={config.hikeBagTipHeading}
+              groundY={config.critterGroundY}
+              shove={config.hikeBagTipShove}
+              fall={config.hikeBagTipFall}
+              tilt={config.hikeBagTipTilt}
+              lift={config.hikeBagTipLift}
+              restitution={config.tipRestitution}
+              rattleAmp={config.hikeBagRattleAmp}
+              rattleFreq={config.hikeBagRattleFreq}
+              rattleDamp={config.hikeBagRattleDamp}
+            >
             <group position={[20.07, 0.005, 0.069]}>
               <SafeAsset label="hiking backpack">
                 <GLBModel url={HIKING_BACKPACK_URL} />
               </SafeAsset>
             </group>
+            </TipOver>
           </Selectable>
           {/* Backpack slumped near the front log. Source model is ~1.6 cm
               across, so baseScale=20 gets it to ~30 cm. Slider tunes further. */}
@@ -9135,13 +11048,31 @@ function CampfireWorld({
             name="campfire_backpack"
             onSelect={onSelect}
             config={config}
+            interactive={crittersOn && !bagDown}
             basePosition={[-1.3, 0, 1.6]}
             baseRotationY={0.4}
             baseScale={20}
           >
-            <SafeAsset label="backpack">
-              <GLBModel url={BACKPACK_URL} />
-            </SafeAsset>
+            <TipOver
+              active={bagDown}
+              table={TIP_TABLES.bag}
+              heading={config.bagTipHeading}
+              groundY={config.critterGroundY}
+              shove={config.bagTipShove}
+              fall={config.bagTipFall}
+              tilt={config.bagTipTilt}
+              lift={config.bagTipLift}
+              restitution={config.tipRestitution}
+              rattleAmp={config.bagRattleAmp}
+              rattleFreq={config.bagRattleFreq}
+              rattleDamp={config.bagRattleDamp}
+              contactAngle={config.bagTipContact}
+              onContact={() => setRodPlay((n) => n + 1)}
+            >
+              <SafeAsset label="backpack">
+                <GLBModel url={BACKPACK_URL} />
+              </SafeAsset>
+            </TipOver>
           </Selectable>
           {/* Fishing rod leaned against the front log. Source model is ~6 cm
               long, so baseScale=3 lands it around 18 cm and the slider takes
@@ -9154,13 +11085,29 @@ function CampfireWorld({
             baseRotationY={-0.4}
             baseScale={3}
           >
-            <SafeAsset label="fishing rod">
-              <GLBModel url={FISHING_ROD_URL} />
-            </SafeAsset>
+            <TipOver
+              active={rodPlay > 0}
+              replay={rodPlay}
+              table={TIP_TABLES.rod}
+              heading={config.rodTipHeading}
+              groundY={config.critterGroundY}
+              shove={config.rodTipShove}
+              fall={config.rodTipFall}
+              tilt={config.rodTipTilt}
+              lift={config.rodTipLift}
+              restitution={config.tipRestitution}
+              rattleAmp={config.rodRattleAmp}
+              rattleFreq={config.rodRattleFreq}
+              rattleDamp={config.rodRattleDamp}
+            >
+              <SafeAsset label="fishing rod">
+                <GLBModel url={FISHING_ROD_URL} />
+              </SafeAsset>
+            </TipOver>
           </Selectable>
           {(config.objectOverrides?.["fish"]?.hide ?? 0) < 0.5 && (
             <SafeAsset label="flopping fish">
-              <FloppingFish config={config} onClickSound={onFishClickSound} onSelect={onSelect} />
+              <FloppingFish config={config} onClickSound={onFishClickSound} onImpactSound={onFireWhooshSound} onSelect={onSelect} />
             </SafeAsset>
           )}
           {/* Named "campfire" group so ObjectDragLayer can pick it up as the
@@ -9203,6 +11150,25 @@ function CampfireWorld({
               innerScale={config.flameInnerScale}
               haloScale={config.flameHaloScale}
             />
+            {/* Inside the campfire group and positioned off flameX/Y/Z, so it
+                stays on the fire however the fire is dragged. */}
+            <EmberBurst
+              ref={fireBurstRef}
+              x={config.flameX}
+              y={config.flameY + config.fireBurstY}
+              z={config.flameZ}
+              count={config.fireBurstCount}
+              speed={config.fireBurstSpeed}
+              spread={config.fireBurstSpread}
+              maxHeight={config.sparkMaxHeight}
+              sway={config.sparkSway}
+              lifetime={config.fireBurstLifetime}
+              size={config.fireBurstSize}
+              opacity={config.fireBurstOpacity}
+              flashIntensity={config.fireFlashIntensity}
+              flashDuration={config.fireFlashDuration}
+              flashReach={config.fireFlashReach}
+            />
             <Sparks
               key={`sparks-${Math.max(1, Math.round(config.sparkCount))}`}
               opacity={config.sparkOpacity}
@@ -9219,6 +11185,15 @@ function CampfireWorld({
             />
             </NoPick>
           </group>
+
+          {/* The scripted animals live INSIDE location 0, so every waypoint is
+              written in the same local frame the campfire props use and the
+              whole performance travels with the ring. */}
+          <CampCritters
+            config={config}
+            act={act}
+            onDone={() => setAct(null)}
+          />
         </Location>
 
         {/* Ring slot -> scene number is just +1: slot 0 is scene 1, and so on.
@@ -9229,13 +11204,20 @@ function CampfireWorld({
             old_bear_camping and arcade_wooden_cabin - stayed exactly where
             they were, so both saved camera views still frame the right thing
             and cameraDefaults.json needed no change. */}
-        <Location index={LOCATION_ARCADE} config={config}>
+        <Location index={LOCATION_ARCADE} config={config} gate={panelled && !flying}>
           <SafeAsset label="arcade">
-            <ArcadeSector config={config} onSelect={onSelect} crtMenu={crtMenu} onCrtClick={onCrtClick} />
+            <ArcadeSector
+              config={config}
+              onSelect={onSelect}
+              crtMenu={crtMenu}
+              onCrtClick={onCrtClick}
+              onCrtHover={onCrtHover}
+              crtHot={crtStage === 0 && !editing}
+            />
           </SafeAsset>
         </Location>
 
-        <Location index={LOCATION_CABIN} config={config}>
+        <Location index={LOCATION_CABIN} config={config} gate={panelled && !flying}>
           <SafeAsset label="cabin">
             <CabinSector config={config} onSelect={onSelect} />
           </SafeAsset>
@@ -9261,6 +11243,7 @@ export default function CampfireScene({
   titleHeld = false,
   cameraSnapSignal,
   cameraLivePoseRef,
+  bearVoiceRef,
 }: {
   config: CampfireSceneConfig;
   onCameraChange?: (pos: [number, number, number], tgt: [number, number, number]) => void;
@@ -9288,35 +11271,143 @@ export default function CampfireScene({
   cameraLivePoseRef?: React.MutableRefObject<
     { pos: [number, number, number]; tgt: [number, number, number] } | null
   >;
+  /** Optional because the scene lab has no voice client. */
+  bearVoiceRef?: BearVoiceStateRef;
 }) {
   const cameraChangeHandler = onCameraChange ?? (() => {});
   const selectHandler = onSelect ?? (() => {});
   const translateHandler = onObjectTranslate ?? (() => {});
   const [flying, setFlying] = useState(intro);
 
-  // Ambience: fire crackling always, banjo layered on top. Volumes come from
-  // config; the master multiplier at the front lets a single knob quiet the
-  // whole scene without touching per-track balance. Autoplay unlocks on the
-  // first click anywhere (browsers require a gesture).
+  // ?perf turns on the readout. Nothing is measured, or mounted, without it.
+  const [perfOn, setPerfOn] = useState(false);
+  const [perf, setPerf] = useState<PerfSample | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setPerfOn(new URLSearchParams(window.location.search).has("perf"));
+  }, []);
+  /*
+   * Both of these are resolved SYNCHRONOUSLY, on the very first render, and
+   * that matters more than it looks.
+   *
+   * The first version put them in useState with a placeholder and corrected
+   * them from an effect. antialias is a WebGL context attribute, so the canvas
+   * is keyed on it - which meant the correction remounted the whole Canvas one
+   * frame after mount, tearing down the scene and restarting the intro flight
+   * on top of itself. That is what blanked the title screen.
+   *
+   * So: read matchMedia during render (it is a synchronous, side-effect-free
+   * query), and let the key change ONLY when the config value actually changes
+   * later, i.e. when someone moves the slider in the lab.
+   */
+  const gfxRef = useRef<{ dpr: number; aa: boolean } | null>(null);
+  const resolveGfx = () => {
+    const coarse =
+      typeof window !== "undefined" && (window.matchMedia?.("(pointer: coarse)").matches ?? false);
+    return {
+      dpr: coarse ? config.maxPixelRatioMobile : config.maxPixelRatio,
+      aa: (coarse ? config.antialiasMobile : config.antialias) >= 0.5,
+    };
+  };
+  if (gfxRef.current === null) gfxRef.current = resolveGfx();
+  const maxDpr = gfxRef.current.dpr;
+  const aaOn = gfxRef.current.aa;
+  // Starts at 0 on both server and client, so the first mount is never a
+  // remount; only a real toggle bumps it.
+  const [aaEpoch, setAaEpoch] = useState(0);
+  useEffect(() => {
+    const next = resolveGfx();
+    if (gfxRef.current && next.aa !== gfxRef.current.aa) {
+      gfxRef.current = next;
+      setAaEpoch((e) => e + 1);
+    } else if (gfxRef.current) {
+      gfxRef.current.dpr = next.dpr; // dpr changes in place, no remount needed
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.antialias, config.antialiasMobile, config.maxPixelRatio, config.maxPixelRatioMobile]);
+
+  // Ambience: fire crackling and banjo, both ONLY at the campfire (scene 1)
+  // - they used to play everywhere, which meant they were still going
+  // underneath the arcade's own music (or just droning on with nothing
+  // burning on screen) the moment you rang away. Volumes come from config;
+  // the master multiplier at the front lets a single knob quiet the whole
+  // scene without touching per-track balance. Autoplay unlocks on the first
+  // click anywhere (browsers require a gesture).
   const master = clampUnit(config.masterVolume);
   useCampsiteAudioLoop(FIRE_CRACKLING_URL, {
     volume: master * clampUnit(config.fireCracklingVolume),
-    enabled: true,
+    enabled: panel === LOCATION_CAMPFIRE,
   });
   useCampsiteAudioLoop(BANJO_URL_SOUND, {
     volume: master * clampUnit(config.banjoVolume),
-    enabled: true,
+    enabled: panel === LOCATION_CAMPFIRE,
   });
   const playClick = useCampsiteOneShot(CLICK_URL);
   const playHover = useCampsiteOneShot(HOVER_URL);
-  const onFishClickSound = () => playClick(master * clampUnit(config.clickVolume));
+  const playBack = useCampsiteOneShot(BACK_URL);
+  const playSelect = useCampsiteOneShot(SELECT_URL);
+  const playFishFlop = useCampsiteOneShot(FISH_FLOP_URL);
+  const playFireWhoosh = useCampsiteOneShot(FIRE_WHOOSH_URL);
+  const playCrtZoomIn = useCampsiteOneShot(CRT_ZOOM_IN_URL);
+  const playCrtZoomOut = useCampsiteOneShot(CRT_ZOOM_OUT_URL);
+  const onFishClickSound = () => playFishFlop(master * clampUnit(config.clickVolume));
+  // Shared by both ways of landing in the fire: clicking it directly, and the
+  // fish's own throw completing on it. The click side additionally cools down
+  // (see FIRE_CLICK_COOLDOWN_MS, applied where this is called) - the fish
+  // throw is already paced by its own multi-second flight, so it doesn't
+  // need one.
+  const onFireWhooshSound = () => playFireWhoosh(master * clampUnit(config.clickVolume));
   const playClickCue = () => playClick(master * clampUnit(config.clickVolume));
   const playHoverCue = () => playHover(master * clampUnit(config.hoverVolume));
+  const playBackCue = () => playBack(master * clampUnit(config.clickVolume));
+  // The CRT's own select/back/zoom cues, kept apart from the general
+  // playClickCue every other clickable object in the scene uses - the CRT is
+  // its own little device with its own sound set.
+  const playCrtSelectCue = () => playSelect(master * clampUnit(config.clickVolume));
+  const playCrtEnterCue = () => playCrtZoomIn(master * clampUnit(config.swooshVolume));
+  const playCrtExitCue = () => playCrtZoomOut(master * clampUnit(config.swooshVolume));
+
+  // Ambient arcade music. Loops only on the arcade panel (scene 2) -
+  // `enabled` drops it the moment you ring away to another campsite. Its
+  // volume itself starts at CRT_MUSIC_FAR_MULT and rises to
+  // CRT_MUSIC_FOCUS_BOOST as crtMusicMultiplierRef climbs, which
+  // CrtFocusCamera (inside the canvas) writes every frame in step with the
+  // actual camera flight onto the
+  // glass - so the loop is felt getting closer, not switched at the door.
+  const crtMusicActive = panel === LOCATION_ARCADE;
+  const crtMusicBase = master * clampUnit(config.swooshVolume);
+  // CrtFocusCamera (inside the canvas) writes the resolved FAR..BOOST
+  // multiplier into this ref every frame, in step with the actual camera
+  // flight onto the glass - see its own comment for why that lives there
+  // rather than the raw 0..1 progress being remapped out here.
+  const crtMusicMultiplierRef = useRef(CRT_MUSIC_FAR_MULT);
+  useCampsiteAudioLoop(CRT_MUSIC_URL, {
+    volume: crtMusicBase,
+    enabled: crtMusicActive,
+    liveMultiplier: crtMusicMultiplierRef,
+  });
   // Route selection through the click cue so every clickable object plays
-  // click.mp3, not just the fish. `selectHandler` still fires on empty-string
-  // (deselect via onPointerMissed); the guard here keeps that silent.
+  // click.mp3 in the LAB, where clicking something has a real purpose (it
+  // opens the object drawer) and an audible confirmation earns its keep.
+  //
+  // On the main site there is no drawer, no drag - editing is false there -
+  // so a "click" on a huge Selectable like old_bear_camping (which is most
+  // of the ground the whole diorama stands on) fired the same click.mp3 as
+  // actually picking a real object, with nothing to tell them apart. That
+  // read as noise on every random tap, not feedback. The genuinely
+  // interactive things on the site - the fish, the fire, the CRT - already
+  // play their own dedicated cue regardless of this flag, so gating the
+  // generic one to `editing` loses nothing there and stops it firing for
+  // everything else.
+  //
+  // The CRT screen mesh also deliberately does NOT stop its click from
+  // bubbling (see the comment on it in CampProps.tsx) - the Selectable
+  // wrapping the tube needs that bubble to pick the tube in the lab. Every
+  // click on the glass reaches here as a "crt_0" selection too, on top of
+  // whatever CRT-specific cue onCrtClick already played for it - excluded
+  // here for the same reason (its own sound set already covers it).
   const selectWithSound = (name: string) => {
-    if (name) playClickCue();
+    if (editing && name && !name.startsWith("crt_")) playClickCue();
     selectHandler(name);
   };
 
@@ -9329,13 +11420,29 @@ export default function CampfireScene({
   // offsetSize switches the measurement to offsetWidth/offsetHeight, which are
   // untransformed layout dimensions and so come back the right way round.
   return (
+    <>
     <Canvas
+      /*
+       * antialias is a CONTEXT attribute: WebGL fixes it when the drawing
+       * buffer is created and there is no way to change it afterwards. So the
+       * toggle has to remount the canvas, which is what keying on it does.
+       * Fine for an A/B in the lab, and the GLB cache survives the remount, so
+       * it comes back immediately.
+       */
+      key={`aa-${aaEpoch}`}
       className="absolute inset-0"
       resize={{ offsetSize: true }}
-      dpr={[1, 2]}
+      /*
+       * Every fragment of the colour pass is paid for at dpr^2. A phone
+       * reporting 3 was being clamped to 2, i.e. four times the pixels of a
+       * 1x render, to draw a scene whose whole readable content is firelight
+       * and silhouettes. Capping coarse-pointer devices lower is the single
+       * cheapest frame you can buy here, and it costs almost nothing visible.
+       */
+      dpr={[1, maxDpr]}
       shadows
       camera={{ position: [config.cameraX, config.cameraY, config.cameraZ], fov: config.fov, near: 0.01, far: 500 }}
-      gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
+      gl={{ antialias: aaOn, alpha: false, powerPreference: "high-performance" }}
       onPointerMissed={() => selectHandler("")}
     >
       <Matte />
@@ -9353,11 +11460,29 @@ export default function CampfireScene({
         onLocationViewChange={onLocationViewChange}
         titleHeld={titleHeld}
         onFishClickSound={onFishClickSound}
+        onFireWhooshSound={onFireWhooshSound}
         onHoverSound={playHoverCue}
+        onCrtEnterSound={playCrtEnterCue}
+        onCrtExitSound={playCrtExitCue}
+        onCrtBackSound={playBackCue}
+        onCrtSelectSound={playCrtSelectCue}
+        crtZoomRef={crtMusicMultiplierRef}
         cameraSnapSignal={cameraSnapSignal}
         cameraLivePoseRef={cameraLivePoseRef}
+        bearVoiceRef={bearVoiceRef}
       />
+      {perfOn ? <PerfProbe onSample={setPerf} /> : null}
     </Canvas>
+    {perfOn && perf ? (
+      <div className="pointer-events-none absolute left-2 top-2 z-50 rounded bg-black/70 px-2 py-1 font-mono text-[10px] leading-tight text-lime-300">
+        <div>{perf.fps.toFixed(0)} fps &middot; {perf.calls} calls &middot; {(perf.tris / 1000).toFixed(0)}k tris</div>
+        <div>{perf.lights} lights &middot; {perf.shadowMaps} shadow passes</div>
+        <div>shadow {(perf.shadowTexels / 1e6).toFixed(1)}M px &middot; screen {(perf.screenTexels / 1e6).toFixed(2)}M px</div>
+        <div>= {(perf.shadowTexels / Math.max(1, perf.screenTexels)).toFixed(1)}x the screen, per frame</div>
+        <div>{perf.progs} programs &middot; {perf.geoms} geom &middot; {perf.textures} tex</div>
+      </div>
+    ) : null}
+    </>
   );
 }
 
@@ -9370,7 +11495,6 @@ useGLTF.preload(RED_OWL_URL);
 useGLTF.preload(TOUCAN_URL);
 useGLTF.preload(DEER_URL);
 useGLTF.preload(DOE_URL);
-useGLTF.preload(RACCOON_URL);
 useGLTF.preload(BEAR_URL);
 useGLTF.preload(BEAR_URL_FRONT_LOG);
 useGLTF.preload(BEAR_URL_BACK_RIGHT_LOG);
@@ -9390,6 +11514,7 @@ useGLTF.preload(TENT_URL);
 useGLTF.preload(HONEY_WAND_URL);
 useGLTF.preload(WOOD_PILE_URL);
 useGLTF.preload(FISHING_ROD_URL);
+useGLTF.preload(RACCOON2_URL);
 useGLTF.preload(BACKPACK_URL);
 useGLTF.preload(HIKING_BACKPACK_URL);
 useGLTF.preload(BOOK_URL);
@@ -9432,5 +11557,4 @@ void CampingWithLamps;
 void UnlitGLB;
 void MirroredGLBModel;
 void GameCubeConsole;
-void ControllerWire;
 void BackgroundGlow;

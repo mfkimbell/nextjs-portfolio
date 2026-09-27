@@ -1,7 +1,7 @@
 import savedCampfire from "@/config/campfireScene.json";
 import savedCameraDefaults from "@/config/cameraDefaults.json";
 
-export interface CampfireSceneConfig {
+export interface CampfireSceneConfig extends BugSwarmTweaks {
   cameraX: number;
   cameraY: number;
   cameraZ: number;
@@ -11,6 +11,13 @@ export interface CampfireSceneConfig {
   fov: number;
   fogNear: number;
   fogFar: number;
+  /** Floor on the fog's far plane, as a multiple of the camera's distance from
+   *  the nearest camp. Stops a pulled-back shot (the title card) from sitting
+   *  entirely past the fog, which resolves every pixel to flat sky colour.
+   *  0 disables it and fogFar is used flat. */
+  fogPullbackMul: number;
+  /** How fast the far plane eases toward its target, per second. */
+  fogPullbackEase: number;
   ambientIntensity: number;
   moonIntensity: number;
   fireIntensity: number;
@@ -71,6 +78,22 @@ export interface CampfireSceneConfig {
   /** Shadow map resolution for the fire point light. Keep modest (512-1024)
    *  because it's already six times the cost of the directional. */
   fireShadowMapSize: number;
+  /** Map size for the campfire's warm SPOT shadow. One depth pass, so a texel
+   *  here costs a sixth of a texel on the point light's cube. */
+  warmShadowMapSize: number;
+  /** Ceiling on devicePixelRatio. Colour-pass cost scales with the SQUARE of
+   *  this, so it is the bluntest and most effective frame-rate knob there is. */
+  maxPixelRatio: number;
+  /** The same ceiling for coarse-pointer (touch) devices, which report the
+   *  highest ratios and have the least GPU to spend on them. */
+  maxPixelRatioMobile: number;
+  /** 1 = request an antialiased drawing buffer. This is a WebGL CONTEXT
+   *  attribute, so flipping it remounts the canvas rather than taking effect
+   *  in place - see the key on <Canvas>. */
+  antialias: number;
+  /** The same switch for coarse-pointer (touch) devices, where MSAA is at its
+   *  most expensive and, on flat-shaded art in the dark, least visible. */
+  antialiasMobile: number;
   fireShadowBias: number;
   fireShadowNormalBias: number;
   /** How dark the fire's cast shadow gets. Same LightShadow.intensity knob,
@@ -133,6 +156,16 @@ export interface CampfireSceneConfig {
   groundPatchSeed: number;
   groundPatchOffsetX: number;
   groundPatchOffsetZ: number;
+  /** A second copy of the same two-layer dirt clearing, centred on the cabin
+   *  (location 2) instead of the campfire. Shares every shape/colour/seed
+   *  knob above - Outer/Inner Sides, Radius, Jag, Spin, Round, colour, Y,
+   *  Opacity - so both clearings read as the same kind of worn ground; only
+   *  where this one sits is its own. Its own on/off, independent of
+   *  groundPatchOn above, so either clearing can be hidden without the
+   *  other. */
+  cabinGroundPatchOn: number;
+  cabinGroundPatchOffsetX: number;
+  cabinGroundPatchOffsetZ: number;
   groundPatchOuterRadius: number;
   groundPatchOuterOffsetX: number;
   groundPatchOuterOffsetZ: number;
@@ -178,6 +211,16 @@ export interface CampfireSceneConfig {
   /** Local-frame offset of the computer's screen-glow pointLight from the
    *  computer Selectable's origin. Lets the light be dialed onto the actual
    *  monitor face instead of hovering inside the case. */
+  /* --- the computer's SCREEN, as opposed to the light it throws ----------
+   * deskComputer* above is the spill onto the room. These are the panel
+   * itself: the GLB ships one shared "base" material for the whole machine,
+   * so the screen face gets a clone of its own and this is what drives it.
+   * Without them the monitor was a dark rectangle in a room lit by a monitor. */
+  deskComputerScreenOn: number;
+  deskComputerScreenBrightness: number;
+  deskComputerScreenR: number;
+  deskComputerScreenG: number;
+  deskComputerScreenB: number;
   deskComputerLightX: number;
   deskComputerLightY: number;
   deskComputerLightZ: number;
@@ -239,6 +282,28 @@ export interface CampfireSceneConfig {
   deskStringBulbBrightness: number;
   deskStringBulbWarmth: number;
   deskStringBulbOpacity: number;
+  /** Bloom on the string bulbs: a soft halo sprite drawn at each one.
+   *
+   *  NOT post-processing. A real bloom pass would re-render the whole scene
+   *  into extra targets and blur it several times over, which costs the same
+   *  whether one bulb or the whole camp is glowing - and it would bloom every
+   *  bright thing in the frame, not the lights you asked for. This is 26
+   *  additive sprites in a single points draw: one call, no depth writes, no
+   *  per-frame work on the CPU at all.
+   *
+   *  0 is off. Up to 1 it fades the halo in; past 1 it overdrives the colour
+   *  instead, because a blend factor is clamped at 1 and opacity alone stops
+   *  getting brighter. */
+  deskStringBulbBloom: number;
+  /** How wide each halo is, in world units. This is the knob that reads as
+   *  "more bloom" - the sprite is a soft radial falloff, so size carries the
+   *  glow much further than strength does.
+   *
+   *  Offset Y nudges every halo up (+) or down (-) from the bulb it sits on,
+   *  in world units - for when the sprite reads as floating above or below
+   *  the glass rather than wrapped around it. */
+  deskStringBulbBloomSize: number;
+  deskStringBulbBloomOffsetY: number;
   /** ---------------------------------------------------------------------
    *  3 - Fish. THREE independent shoals, ids from DESK_FISH_GROUPS.
    *
@@ -412,6 +477,14 @@ export interface CampfireSceneConfig {
   deskBugJitterSpeed: number;
   /** How hard they blink. 0 is a steady mote, 1 goes all the way to dark. */
   deskBugFlickerDepth: number;
+  /** How much brighter a bug flares on its lunge at the bulb.
+   *
+   *  The SECOND thing moving a bug's brightness, and it used to be a constant
+   *  0.6 buried in the frame loop - so turning Flicker depth down only ever
+   *  got you part of the way to a steady swarm, and the remaining pulse had no
+   *  knob at all. 0 keeps a lunging bug exactly as bright as a circling one;
+   *  0.6 is what it always did. */
+  deskBugLungeFlare: number;
   /** Slow vertical wander of the whole swarm, as a fraction of Column height. */
   deskBugDrift: number;
   /** 1 = additive blending, so they glow against the dark. 0 = normal, for bugs seen in daylight. */
@@ -827,6 +900,12 @@ export interface CampfireSceneConfig {
   arcadeCrtLightDecay: number;
   /** Multiplier on top of the screen glow — 0 kills the spot entirely. */
   arcadeCrtLightIntensity: number;
+  /** The live tube throws real shadows: anything standing in its cone - the
+   *  lawn chairs in front of it, most of all - gets its silhouette laid out
+   *  behind it. Only crt_0 does this, and only while the global shadow toggle
+   *  is on; the other three tubes are hidden scenery and a depth pass each
+   *  would be paid for nothing. */
+  arcadeCrtShadow: number;
   /** Local X/Y nudge of the light source relative to the screen center. */
   arcadeCrtLightOffsetX: number;
   arcadeCrtLightOffsetY: number;
@@ -951,6 +1030,29 @@ export interface CampfireSceneConfig {
   sparkBurstChance: number;
   sparkSize: number;
   sparkLifetime: number;
+  /** 1 = clicking the fire kicks embers up out of it. The click still
+   *  selects the campfire either way, so the lab can still drag it. */
+  fireClickBurstOn: number;
+  /** Height above the flame's origin that the embers leave from. */
+  fireBurstY: number;
+  /** Embers per click. */
+  fireBurstCount: number;
+  /** Initial ember speed. */
+  fireBurstSpeed: number;
+  /** Width of the ember cone. 0 is a vertical column. */
+  fireBurstSpread: number;
+  /** Seconds before the last ember dies and the burst parks itself. */
+  fireBurstLifetime: number;
+  /** Ember point size. */
+  fireBurstSize: number;
+  /** Ember brightness (additive, so >1 is meaningful). */
+  fireBurstOpacity: number;
+  /** Peak of the light flare on the click. */
+  fireFlashIntensity: number;
+  /** Seconds for the flare to decay. */
+  fireFlashDuration: number;
+  /** Distance falloff on the flare light. */
+  fireFlashReach: number;
   fireLightX: number;
   fireLightY: number;
   fireLightZ: number;
@@ -1013,6 +1115,10 @@ export interface CampfireSceneConfig {
   /** Outer radius of the forest ring. Trees are only sprinkled between the
    *  campsite ring and this distance. */
   forestOuterRadius: number;
+  /** 1 = pines cast shadows again. Off by default: the campfires' point lights
+   *  are cube shadows (6 faces each) and the forest opts out of frustum
+   *  culling, so this costs six full forest passes per fire. */
+  forestCastShadow: number;
   /** Spacing between flanking trees planted alongside each path. Smaller =
    *  denser lining. */
   pathFlankSpacing: number;
@@ -1047,6 +1153,148 @@ export interface CampfireSceneConfig {
   fishScale: number;
   /** action.timeScale during the flop phase; 0 during rest */
   fishFlopSpeed: number;
+  /** 1 = clicking the fish throws it in the fire. 0 keeps the plain
+   *  click-to-select behaviour, which is what the lab needs to position it. */
+  fishLaunchOn: number;
+  /** Seconds from click to landing. */
+  fishLaunchDuration: number;
+  /** Height of the throw's apex above the straight line between the
+   *  fish and the fire. 0 slides it along the ground. */
+  fishLaunchArc: number;
+  /** Full tumbles during the flight, about the axis across the
+   *  direction of travel. */
+  fishLaunchSpin: number;
+  /** How far ABOVE the flame's origin it lands. Aim for the middle of
+   *  the flame, not its base, or the fish vanishes into the logs. */
+  fishLaunchTargetY: number;
+  /** Multiplier on fishFlopSpeed while airborne - it should be
+   *  thrashing harder in the air than it ever did on the dirt. */
+  fishLaunchFlail: number;
+  /** Seconds until the fish comes back. 0 = gone for the rest of the
+   *  visit, which is the point. */
+  fishRespawnDelay: number;
+  /** Embers in the impact burst. */
+  fishBurstCount: number;
+  /** Initial ember speed. */
+  fishBurstSpeed: number;
+  /** Width of the ember cone. 0 is a vertical column. */
+  fishBurstSpread: number;
+  /** Seconds before the last ember dies and the burst parks itself. */
+  fishBurstLifetime: number;
+  /** Ember point size. */
+  fishBurstSize: number;
+  /** Ember brightness (additive, so >1 is meaningful). */
+  fishBurstOpacity: number;
+  /** Peak of the light flare on impact. */
+  fishFlashIntensity: number;
+  /** Seconds for the flare to decay. */
+  fishFlashDuration: number;
+  /** Distance falloff on the flare light. */
+  fishFlashReach: number;
+  /** 1 = clicking the two bags and the tent sets the animals off. */
+  critterActsOn: number;
+  /** Ground level in location-0 local space. CampfireGround is a plane at
+   *  world y -0.02 and the Location group sits at y 0, so this is where feet
+   *  belong. Each animal's root is derived from it, never written directly. */
+  critterGroundY: number;
+
+  /* ---- toppling props ------------------------------------------------
+   * All of these were measured off the real meshes in Blender, not tuned by
+   * eye: the pivots are where each prop meets the ground, `balance` is the
+   * angle at which its centre of mass crosses that pivot, `rest` is the angle
+   * at which it settles (the local minimum of centre-of-mass height), and
+   * `gravity` is m.g.d / I about the hinge, from interior point-sampling.
+   * See TipOver in CritterActs.tsx. */
+  /** world heading (atan2(x, z)) the bag's top falls toward */
+  bagTipHeading: number;
+  /* Angle at which the bag's lurch takes the rod down with it.
+   *
+   * Note this is a CUE, not a measured collision. It was one while the bag
+   * fell toward the rod; now that it falls forward, toward the camera, the two
+   * hulls never come closer than the 0.14 they already sit at - the bag moves
+   * AWAY from the rod the whole way down. Kept small (~7 degrees, about 30 ms
+   * in) so the two go over as one event rather than in sequence. */
+  bagTipContact: number;
+  rodTipHeading: number;
+  hikeBagTipHeading: number;
+  /** How hard the bag is shoved, as a MULTIPLE of the least it takes to get
+   *  over its own tipping point. 1 balances exactly on it, under 1 it rocks
+   *  back upright, 1.2 goes over with a visible hesitation. A multiple rather
+   *  than a raw rad/s because the barrier changes with the fall direction. */
+  bagTipShove: number;
+  hikeBagTipShove: number;
+  /** The rod has to be shoved back against its own lean to fall toward the
+   *  fire, so it wants a firmer knock than the bags. */
+  rodTipShove: number;
+  /** Fine trim on where each prop comes to rest, in radians, on top of the
+   *  `Fall` multiplier. Positive drives the far end down. This is the levelling
+   *  knob: a prop can land visibly nose-up at an angle less than 2 degrees. */
+  bagTipTilt: number;
+  hikeBagTipTilt: number;
+  rodTipTilt: number;
+  /** How far each prop is lifted, in world units, by the time it has fallen -
+   *  the fix for a shape that cannot land cleanly on rotation alone. The rod
+   *  needs 0.045: at the angle that puts its tip on the ground its reel is
+   *  5 cm under, with a fifth of the rod buried. */
+  bagTipLift: number;
+  hikeBagTipLift: number;
+  rodTipLift: number;
+  /** Judder on the bags. They are compact and soft rather than springy, so
+   *  this wants to be smaller and faster than the rod's whip - a thud that
+   *  shakes rather than a stick that rings. 0 = rigid. */
+  bagRattleAmp: number;
+  bagRattleFreq: number;
+  bagRattleDamp: number;
+  hikeBagRattleAmp: number;
+  hikeBagRattleFreq: number;
+  hikeBagRattleDamp: number;
+  /** How much the rod whips as it goes over and when it lands, in radians.
+   *  0.03 swings the tip about 8 cm - a rattle, not a wobble. 0 = rigid. */
+  rodRattleAmp: number;
+  /** Hz of that whip. */
+  rodRattleFreq: number;
+  /** How fast it dies away, per second. */
+  rodRattleDamp: number;
+  /** How far each prop goes over, as a multiple of the angle at which its hull
+   *  first touches the ground. 1 = exactly that contact. The rod needs 1.13
+   *  because its reel catches first and leaves the tip 0.46 in the air. */
+  bagTipFall: number;
+  hikeBagTipFall: number;
+  rodTipFall: number;
+  /** how much of the impact speed survives the bounce, shared by both */
+  tipRestitution: number;
+  /** Raccoon size. */
+  raccoonScale: number;
+  /** How far out of the tent the doughnut appears. */
+  tentMouthOut: number;
+  /** Doughnut height off the ground while it rolls. */
+  donutY: number;
+  /** How far it rolls before coming to rest. */
+  donutRoll: number;
+  /** Seconds of the roll. The raccoon waits inside the tent for exactly
+   *  this long, so the two stay in step however either is retuned. */
+  donutRollDur: number;
+  /** Doughnut size on the ground. */
+  donutScale: number;
+  /** Doughnut radius - sets the spin rate so it rolls instead of skidding. */
+  donutRadius: number;
+  /** How far short of the doughnut the raccoon stops. */
+  raccoonReach: number;
+  /** Seconds from the tent to the doughnut. */
+  raccoonOutDur: number;
+  /** Seconds to lower its head. */
+  raccoonReachDur: number;
+  /** Signed angle for the raccoon's head, radians. POSITIVE = local X+ = down
+   *  on this rig - the opposite sign to the moose. */
+  raccoonDip: number;
+  /** Seconds to lift the doughnut. */
+  raccoonTakeDur: number;
+  /** Seconds back into the tent. */
+  raccoonBackDur: number;
+  /** Doughnut size in the mouth, relative to raccoonScale. */
+  donutCarryScale: number;
+  /** Doughnut offset down the jaw. */
+  donutCarryDrop: number;
   /** glasses: up/down the face, in bear model units */
   glassesHeight: number;
   /** glasses: how far down the muzzle they ride, along the face-forward axis.
@@ -1205,6 +1453,13 @@ export interface CampfireSceneConfig {
   banjoBearGlassesTilt: number;
   banjoBearGlassesScale: number;
   swooshVolume: number;
+  /** How long to wait, in ms, after the panel actually changes before
+   *  playing the swoosh - lets it be pushed later so it doesn't land right
+   *  on the click. 0 plays immediately. */
+  swooshDelayMs: number;
+  /** HTMLMediaElement.playbackRate for the swoosh clone. 1 is the file's
+   *  native speed; under 1 stretches it slower without changing its volume. */
+  swooshRate: number;
   hoverVolume: number;
   clickVolume: number;
 
@@ -1358,7 +1613,69 @@ export interface OceanFloorSceneConfig {
  * The built-in defaults, written by hand. This is the floor the scene falls back to
  * and what "Reset sliders" returns you to - it is never overwritten by tuning.
  */
+/**
+ * Per-swarm bug controls.
+ *
+ * The deskBug* block is ONE swarm design - count, orbit, lunge, flicker, the
+ * lot - and every lamp wearing a swarm used to get it verbatim, identical
+ * bug for identical bug. That is wrong in two ways at once: a hooded lantern
+ * on a signpost and a pair of van headlights are different sizes and want
+ * different swarms, and two swarms built from the same seed are literally the
+ * same arrangement of insects twice, which reads as a copy-paste the moment
+ * both are on screen.
+ *
+ * So each site gets a block of its own, on top of the shared design rather
+ * than instead of it:
+ *
+ *  - the Mul knobs MULTIPLY the shared value, so 1 is "as designed" and the
+ *    global sliders still move every swarm together. That is what keeps one
+ *    design language across the camp while letting a fixture deviate.
+ *  - Off X/Y/Z are absolute world units, ADDED to the shared offset, because
+ *    where a swarm hangs relative to its bulb is a property of the fixture,
+ *    not of the design.
+ *  - Seed shifts who is who at this site only. Anything non-zero decorrelates
+ *    it from the other swarms; it does not change the swarm's shape.
+ */
+export const BUG_SWARM_SCOPES = [
+  "deskLampVanHeads",
+  "deskLampSmallA",
+  "deskLampSmallB",
+  "deskLampHood",
+  "arcadeCabinLamp",
+] as const;
+export type BugSwarmScope = (typeof BUG_SWARM_SCOPES)[number];
+
+export const BUG_SWARM_TWEAK_DEFAULTS = {
+  BugCountMul: 1,
+  BugRadiusMul: 1,
+  BugSpreadMul: 1,
+  BugHeightMul: 1,
+  BugSizeMul: 1,
+  BugSpeedMul: 1,
+  BugOpacityMul: 1,
+  BugSeedShift: 0,
+  BugOffX: 0,
+  BugOffY: 0,
+  BugOffZ: 0,
+} as const;
+export type BugSwarmTweak = keyof typeof BUG_SWARM_TWEAK_DEFAULTS;
+/** `deskLampHoodBugRadiusMul` and its 54 siblings, spelled out by the compiler
+ *  rather than by hand - the whole grid is scope x knob, and writing it out
+ *  invites exactly one typo that no test would catch. */
+export type BugSwarmTweaks = { [S in BugSwarmScope as `${S}${BugSwarmTweak}`]: number };
+
+const BUG_SWARM_TWEAK_BASE = ((): BugSwarmTweaks => {
+  const out: Record<string, number> = {};
+  for (const scope of BUG_SWARM_SCOPES) {
+    for (const [knob, value] of Object.entries(BUG_SWARM_TWEAK_DEFAULTS)) {
+      out[`${scope}${knob}`] = value;
+    }
+  }
+  return out as BugSwarmTweaks;
+})();
+
 export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
+  ...BUG_SWARM_TWEAK_BASE,
   // Free-look camera for the lab. Now that the middle is empty, this opens on the
   // campfire - location 0, out at -Z - with the same framing the panelled site
   // gives it, rather than staring at the hole in the centre.
@@ -1371,6 +1688,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   fov: 50,
   fogNear: 8,
   fogFar: 40,
+  fogPullbackMul: 4,
+  fogPullbackEase: 2.5,
   ambientIntensity: 0.085,
   moonIntensity: 0.35,
   fireIntensity: 3.1,
@@ -1396,6 +1715,11 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   moonZ: -6,
   fireCastShadow: 1,
   fireShadowMapSize: 1024,
+  warmShadowMapSize: 2048,
+  maxPixelRatio: 2,
+  maxPixelRatioMobile: 1.5,
+  antialias: 1,
+  antialiasMobile: 0,
   fireShadowBias: -0.003,
   fireShadowNormalBias: 0.04,
   fireShadowIntensity: 1,
@@ -1409,6 +1733,9 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   groundPatchSeed: 7,
   groundPatchOffsetX: 0,
   groundPatchOffsetZ: 0,
+  cabinGroundPatchOn: 1,
+  cabinGroundPatchOffsetX: 0,
+  cabinGroundPatchOffsetZ: 0,
   groundPatchOuterRadius: 6.4,
   groundPatchOuterOffsetX: 0,
   groundPatchOuterOffsetZ: 0,
@@ -1449,6 +1776,11 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   // Screen-face offset: computer is rotated 180 deg around Y (baseRotationY =
   // Math.PI), so a positive local Z ends up on world -Z. Dial these until the
   // glow spills off the monitor face and onto the desk in front of the bear.
+  deskComputerScreenOn: 1,
+  deskComputerScreenBrightness: 1.6,
+  deskComputerScreenR: 0.55,
+  deskComputerScreenG: 0.75,
+  deskComputerScreenB: 1,
   deskComputerLightX: 0,
   deskComputerLightY: 0.35,
   deskComputerLightZ: 0.2,
@@ -1477,6 +1809,9 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskStringBulbBrightness: 1,
   deskStringBulbWarmth: 1,
   deskStringBulbOpacity: 1,
+  deskStringBulbBloom: 0.85,
+  deskStringBulbBloomSize: 0.09,
+  deskStringBulbBloomOffsetY: 0,
   // Shoal · milling under the dock
   deskFishAOn: 1,
   deskFishACount: 12,
@@ -1553,7 +1888,10 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskBugLungeSharp: 8,
   deskBugLungeDepth: 0.8,
   deskBugJitterSpeed: 1,
-  deskBugFlickerDepth: 0.75,
+  // Flat by default now - both were the source of the swarm's brightness
+  // pulsing; dial either back up if the flicker/flare look is wanted again.
+  deskBugFlickerDepth: 0,
+  deskBugLungeFlare: 0,
   deskBugDrift: 0,
   deskBugAdditive: 1,
   deskBugSizeVary: 0,
@@ -1845,6 +2183,7 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   arcadeCrtLightDistance: 3.4,
   arcadeCrtLightDecay: 2,
   arcadeCrtLightIntensity: 1,
+  arcadeCrtShadow: 1,
   arcadeCrtLightOffsetX: 0,
   arcadeCrtLightOffsetY: 0,
   fireDecay: 2,
@@ -1940,6 +2279,17 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   sparkBurstChance: 0.12,
   sparkSize: 0.045,
   sparkLifetime: 1.6,
+  fireClickBurstOn: 1,
+  fireBurstY: 0.35,
+  fireBurstCount: 150,
+  fireBurstSpeed: 2.0,
+  fireBurstSpread: 0.75,
+  fireBurstLifetime: 1.5,
+  fireBurstSize: 0.026,
+  fireBurstOpacity: 2.4,
+  fireFlashIntensity: 2.4,
+  fireFlashDuration: 0.45,
+  fireFlashReach: 4.5,
   fireLightX: 0,
   fireLightY: 0.35,
   fireLightZ: 0,
@@ -1979,6 +2329,7 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   forestTreeCount: 320,
   forestClearRadius: 6,
   forestOuterRadius: 55,
+  forestCastShadow: 0,
   pathFlankSpacing: 2.5,
   animalScale: 1,
   animalY: 0,
@@ -2007,6 +2358,65 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   fishRotationZ: Math.PI / 2,
   fishScale: 0.09,
   fishFlopSpeed: 5.5,
+  fishLaunchOn: 1,
+  fishLaunchDuration: 0.85,
+  fishLaunchArc: 0.9,
+  fishLaunchSpin: 2.5,
+  fishLaunchTargetY: 0.5,
+  fishLaunchFlail: 2.2,
+  fishRespawnDelay: 0,
+  fishBurstCount: 110,
+  fishBurstSpeed: 2.3,
+  fishBurstSpread: 0.85,
+  fishBurstLifetime: 1.3,
+  fishBurstSize: 0.03,
+  fishBurstOpacity: 2.4,
+  fishFlashIntensity: 3.2,
+  fishFlashDuration: 0.5,
+  fishFlashReach: 4.5,
+  critterActsOn: 1,
+  critterGroundY: -0.02,
+  bagTipHeading: 3.1416,
+  bagTipContact: 0.12,
+  rodTipHeading: 2.0123,
+  hikeBagTipHeading: 3.1416,
+  bagTipShove: 1.22,
+  hikeBagTipShove: 1.18,
+  rodTipShove: 2.12,
+  bagTipTilt: 0.0,
+  hikeBagTipTilt: 0.0,
+  rodTipTilt: 0.063,
+  bagTipLift: 0.0,
+  hikeBagTipLift: 0.0,
+  rodTipLift: 0.04,
+  bagRattleAmp: 0.022,
+  bagRattleFreq: 9.0,
+  bagRattleDamp: 7.0,
+  hikeBagRattleAmp: 0.022,
+  hikeBagRattleFreq: 9.0,
+  hikeBagRattleDamp: 7.0,
+  rodRattleAmp: 0.03,
+  rodRattleFreq: 7.0,
+  rodRattleDamp: 4.0,
+  bagTipFall: 1.0,
+  hikeBagTipFall: 1.0,
+  rodTipFall: 1.143,
+  tipRestitution: 0.22,
+  raccoonScale: 0.35,
+  tentMouthOut: 0.45,
+  donutY: 0.09,
+  donutRoll: 0.85,
+  donutRollDur: 1.0,
+  donutScale: 0.41,
+  donutRadius: 0.176,
+  raccoonReach: 0.35,
+  raccoonOutDur: 2.8,
+  raccoonReachDur: 0.55,
+  raccoonDip: 0.7,
+  raccoonTakeDur: 0.5,
+  raccoonBackDur: 3.0,
+  donutCarryScale: 1.17,
+  donutCarryDrop: -0.02,
   glassesHeight: 0,
   glassesNoseRide: 0,
   glassesScale: 1,
@@ -2080,6 +2490,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   banjoBearGlassesTilt: 0,
   banjoBearGlassesScale: 1,
   swooshVolume: 0.6,
+  swooshDelayMs: 120,
+  swooshRate: 0.8,
   hoverVolume: 0.35,
   clickVolume: 0.6,
 

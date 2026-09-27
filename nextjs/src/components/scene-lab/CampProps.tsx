@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
@@ -414,6 +414,14 @@ const SCREEN_SIZE: [number, number] = [0.24, 0.20];
  */
 const SCREEN_VIDEO_RE = /\.(mp4|webm|ogv|mov)(\?|#|$)/i;
 
+/** The picture's colour. Held at module scope so it is not rebuilt each frame. */
+const SCREEN_PLAIN = new THREE.Color(1, 1, 1);
+/** How far the hover lifts the picture, as a screen blend: a black pixel comes
+ *  up by this much, a white one does not move. */
+const SCREEN_HOVER_LIFT = 0.26;
+
+
+
 /**
  * Paints whatever `url` points at into a canvas texture, one frame per render.
  *
@@ -439,6 +447,48 @@ export type CrtMenuItem = {
   subtitle?: string;
 };
 
+/** One line of a section screen: a bold heading and an optional detail under
+ *  it. Rows without a detail pack tighter, so a flat list fits more of them. */
+export type CrtPageRow = {
+  label: string;
+  /** Short form for the tile's name plate. Falls back to `label`, which for
+   *  anything longer than a word or two just truncates into noise. */
+  tag?: string;
+  sub?: string;
+  /** The full write-up, one string per paragraph. Wrapped into the band. */
+  body?: string[];
+  /** /public path to a square-ish icon. Only used by a grid page. */
+  icon?: string;
+  /** /public path to a wide image for a grid page's bottom band. */
+  diagram?: string;
+  /** Where this row GOES when it is clicked - a project's repository, say.
+   *  A row with one is a link: the board says so in the band's corner, and
+   *  the click opens it in a new tab rather than navigating the page the
+   *  scene is running in. */
+  href?: string;
+};
+
+export type CrtPage = {
+  /** Replaces "Main Menu" on the rail. */
+  title: string;
+  rows: CrtPageRow[];
+  /** Draw the rows as a grid of icon tiles - a character-select board -
+   *  instead of a list. Every row wants an `icon` for this to be worth it. */
+  grid?: boolean;
+  /** Tiles across. 7 x 3 puts 21 on the board. */
+  cols?: number;
+  /** Which tile is lit, and therefore whose diagram the band shows. */
+  activeRow?: number;
+  /** Tile proportions. Projects wants 21 small ones; Experience wants five
+   *  big enough to read an animated logo in. `showCaption: false` drops the
+   *  name plate, which is the right call when the band below already names
+   *  whatever is lit. */
+  tile?: { wellH?: number; capH?: number; showCaption?: boolean };
+  /** Share of the page's body given to the bottom band, 0..1. The grid gets
+   *  the rest. 0.6 makes the diagram the subject and the tiles the index. */
+  bandFrac?: number;
+};
+
 export type CrtMenu = {
   /** Small caps line along the top band. */
   title: string;
@@ -455,6 +505,42 @@ export type CrtMenu = {
    *  every frame. When set, the melee variant skips its synthetic starfield
    *  background and draws its UI on top of the video. */
   backgroundVideo?: string;
+  /** Optional /public path to a still painted under the overlay. Used for the
+   *  menu itself, where a moving background fights the plates for attention.
+   *  Drawn only when there is no video, so the two can coexist on one menu
+   *  object and be switched by clearing `backgroundVideo`. */
+  backgroundImage?: string;
+  /** How the background media is fitted to the tube. Default "cover" fills
+   *  the screen and lets the crop fall off the sides, which is right for a
+   *  backdrop the UI is drawn over.
+   *
+   *  "contain" is for media whose OWN CONTENT reaches the edges of its frame.
+   *  The attract video is 16:9 and the tube is 4:3, so cover scales it by
+   *  height and throws away 160 source pixels off each side - and the title
+   *  card's wordmark runs to x 1150 of 1280, so the end of it went over the
+   *  edge. Contain scales by width instead and letterboxes the difference
+   *  into black, which on a CRT is just how a widescreen picture looks. */
+  backgroundFit?: "cover" | "contain";
+  /** Paint the background media and nothing else - no plates, no readout.
+   *  This is the attract screen the tube shows until it is clicked. */
+  hideUi?: boolean;
+  /** When set, the tube shows this SECTION SCREEN instead of the plate
+   *  stack: its own heading on the rail, its rows down the body, and a single
+   *  Back plate. Picking a plate on the menu is what opens one. */
+  page?: CrtPage;
+  /** The ONE image allowed to animate. See the effect in useScreenTexture:
+   *  a GIF only runs while its <img> is inside the viewport, so this is what
+   *  decides which tile is spinning. */
+  liveImage?: string;
+  /** Lights the section screen's Back plate, for pointer hover. */
+  pageBackHover?: boolean;
+  /** Fixed text for the bottom strip. Unset and the strip shows the current
+   *  item's own subtitle instead. */
+  tagline?: string;
+  /** Everything this tube will EVER show, so it is all decoded up front.
+   *  The screen switches media on a click; anything not already resident would
+   *  start fetching at that moment and the tube would sit black through it. */
+  preloadMedia?: string[];
 };
 
 /**
@@ -493,6 +579,107 @@ const MELEE_PLATE_BASE_X = 20;
 /** Handplaced per-row x offsets that recreate the staircase-y wobble of the
  *  reference - not a formula, just eyeballed to feel like the original. */
 const MELEE_STAGGER = [10, -4, 2, -8, -2];
+/** How far the lit plate slides out to the right. In the reference the
+ *  current pick sits proud of the stack; it is the main thing that tells you
+ *  which row you are on at a glance. Hit-testing applies it too. */
+const MELEE_SELECT_JUT = 7;
+/*
+ * The menu's type, in the order the real thing uses it.
+ *
+ *   1. A-OTF Folk Pro Bold      Fontworks - the plate labels and headings
+ *   2. ITC Galliard Std Ultra   the italic serif in the sub-list and titling
+ *   3. Impact                   the small sub-logo / label overlays
+ *   4. DF Gothic / Contemporary secondary system pop-ups
+ *
+ * All four are named here in that order, with the spellings each one ships
+ * under on different platforms, because canvas resolves a family list exactly
+ * the way CSS does: first one INSTALLED wins. None of them is bundled with
+ * this site - there is no @font-face for them - so they only appear for a
+ * viewer who owns them. In practice Impact is the one that lands, since it
+ * ships with both macOS and Windows; everything before it is a commercial
+ * licence. The tail is a generic that at least keeps the weight and width in
+ * the right region.
+ */
+const MELEE_FAMILIES = [
+  '"A-OTF Folk Pro"', '"A-OTF FolkPro"', '"FolkPro-Bold"', '"Folk Pro"', '"FOT-Folk Pro"',
+  '"ITC Galliard Std"', '"ITC Galliard"', '"Galliard Std"', '"Galliard"',
+  '"Impact"',
+  '"DF Gothic"', '"DFGothic-EB"', '"DF Contemporary"', '"DFPGothic-EB"',
+].join(", ");
+
+/** Upright UI text: plate labels, the caption, the bottom strip. In the
+ *  reference these are Folk Pro Bold - a bold, slightly condensed gothic -
+ *  NOT an italic serif, which is what they used to be drawn in here. */
+const MELEE_UI_FONT = `${MELEE_FAMILIES}, "Arial Black", "Helvetica Neue", Arial, sans-serif`;
+/** The italic serif: the sub-list, which is Galliard in the original. Led by
+ *  Galliard so it wins here even though Folk Pro sits ahead of it overall. */
+const MELEE_SERIF_FONT = '"ITC Galliard Std", "ITC Galliard", "Galliard Std", "Galliard", '
+  + `${MELEE_FAMILIES}, Georgia, "Times New Roman", serif`;
+
+/* Section-screen layout. The body runs from under the rail down to the Back
+   plate; the strip keeps its place at the bottom. */
+/* Back sits TOP RIGHT, where the reference keeps it, which is what frees the
+   bottom of the screen for content. On a grid page that band is the selected
+   project's architecture diagram; on a list page it is just more rows. */
+const MELEE_PAGE_TOP = 36;
+const MELEE_BACK_X = 170;
+const MELEE_BACK_Y = 15;
+const MELEE_BACK_W = 66;
+const MELEE_BACK_H = 16;
+/** Grid pages stop here and hand the rest of the screen to the diagram. */
+const MELEE_GRID_WELL_H = 20;
+const MELEE_GRID_CAP_H = 11;
+const MELEE_PAGE_BOTTOM = 178;
+
+/**
+ * Where a grid page's grid stops and its band starts.
+ *
+ * One function, used by the renderer AND by the hit test, so what you point
+ * at is always what lights. They used to carry their own copies of these
+ * numbers, which is a bug waiting for the first time one of them is tuned.
+ */
+export function meleeGridLayout(page: CrtPage) {
+  const cols = Math.max(1, page.cols ?? 7);
+  const wellH = page.tile?.wellH ?? MELEE_GRID_WELL_H;
+  const capH = page.tile?.showCaption === false ? 0 : (page.tile?.capH ?? MELEE_GRID_CAP_H);
+  const cellH = wellH + capH + 1;
+  const bodyH = MELEE_PAGE_BOTTOM - MELEE_PAGE_TOP;
+  const bandH = Math.round(bodyH * (page.bandFrac ?? 0.3));
+  const bandTop = MELEE_PAGE_BOTTOM - bandH;
+  return {
+    cols, wellH, capH, cellH,
+    showCaption: capH > 0,
+    gridTop: MELEE_PAGE_TOP,
+    gridBottom: bandTop - 4,
+    bandTop,
+    bandBottom: MELEE_PAGE_BOTTOM,
+  };
+}
+
+/** Which tile of a grid page is under this UV, or null. Mirrors the layout
+ *  drawGrid uses, so what you point at is what lights. */
+export function meleeGridHit(u: number, v: number, page: CrtPage): number | null {
+  const L = meleeGridLayout(page);
+  const x = u * MELEE_CANVAS_W;
+  const y = (1 - v) * MELEE_CANVAS_H;
+  const gridX = 20;
+  const cellW = (MELEE_CANVAS_W - gridX - 20) / L.cols;
+  const col = Math.floor((x - gridX) / cellW);
+  const row = Math.floor((y - L.gridTop) / L.cellH);
+  if (col < 0 || col >= L.cols || row < 0) return null;
+  if (y > L.gridBottom) return null;
+  const i = row * L.cols + col;
+  return i >= 0 && i < page.rows.length ? i : null;
+}
+
+/** True when a click on a SECTION screen landed on its Back plate. */
+export function meleePageBackHit(u: number, v: number): boolean {
+  const x = u * MELEE_CANVAS_W;
+  const y = (1 - v) * MELEE_CANVAS_H;
+  return x >= MELEE_BACK_X && x <= MELEE_BACK_X + MELEE_BACK_W
+      && y >= MELEE_BACK_Y && y <= MELEE_BACK_Y + MELEE_BACK_H;
+}
+
 const MELEE_CANVAS_W = 256;
 const MELEE_CANVAS_H = 192;
 
@@ -504,7 +691,12 @@ const MELEE_CANVAS_H = 192;
  * what you want here: the notched tips are 6-8px of a 110px plate, and losing a
  * click because the pointer sat in a corner would just feel broken.
  */
-export function meleeMenuHit(u: number, v: number, itemCount: number): number | null {
+export function meleeMenuHit(
+  u: number,
+  v: number,
+  itemCount: number,
+  activeIndex = -1,
+): number | null {
   const x = u * MELEE_CANVAS_W;
   const y = (1 - v) * MELEE_CANVAS_H;
   const row = Math.floor((y - MELEE_PLATE_TOP) / (MELEE_PLATE_H + MELEE_PLATE_GAP));
@@ -512,7 +704,8 @@ export function meleeMenuHit(u: number, v: number, itemCount: number): number | 
   // Reject the gap between rows, so a click there misses rather than snapping
   // to whichever plate happens to be nearer.
   if (y > MELEE_PLATE_TOP + row * (MELEE_PLATE_H + MELEE_PLATE_GAP) + MELEE_PLATE_H) return null;
-  const px = MELEE_PLATE_BASE_X + (MELEE_STAGGER[row] ?? 0);
+  const px = MELEE_PLATE_BASE_X + (MELEE_STAGGER[row] ?? 0)
+    + (row === activeIndex ? MELEE_SELECT_JUT : 0);
   if (x < px || x > px + MELEE_PLATE_W) return null;
   return row;
 }
@@ -528,12 +721,30 @@ export function meleeMenuHit(u: number, v: number, itemCount: number): number | 
  * a 256x192 buffer for the same reason the classic variant is - at this size a
  * half-pixel rounds into a visibly wrong glyph.
  */
+/** Break `text` into lines that each fit `maxW` at the context's current font. */
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const out: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/)) {
+    const next = line ? `${line} ${word}` : word;
+    if (ctx.measureText(next).width > maxW && line) {
+      out.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
 function drawMeleeMenu(
   ctx: CanvasRenderingContext2D,
   W: number,
   H: number,
   t: number,
-  menu: CrtMenu
+  menu: CrtMenu,
+  image?: (url: string) => CanvasImageSource | null,
 ) {
   const items = menu.items;
   const n = Math.max(1, items.length);
@@ -546,8 +757,6 @@ function drawMeleeMenu(
     ? Math.max(0, Math.min(n - 1, Math.round(menu.activeIndex as number)))
     : Math.floor(t / dwell) % n;
 
-  const YELLOW = "#f2c53a";
-  const CYAN = "#7fdcff";
   const INK = "#eaf6ff";
   const BG_TOP = "#0b1a3a";
   const BG_MID = "#050e24";
@@ -556,7 +765,7 @@ function drawMeleeMenu(
   // If a background video is already painted onto the canvas by the caller,
   // leave those pixels alone — we're an overlay in that case. Otherwise
   // paint the synthetic starfield ground.
-  if (!menu.backgroundVideo) {
+  if (!menu.backgroundVideo && !menu.backgroundImage) {
     const bg = ctx.createRadialGradient(W * 0.35, H * 0.55, 8, W * 0.5, H * 0.5, W * 0.85);
     bg.addColorStop(0, BG_TOP);
     bg.addColorStop(0.55, BG_MID);
@@ -590,56 +799,85 @@ function drawMeleeMenu(
     ctx.stroke();
   }
 
-  // --- outer double frame --------------------------------------------------
-  // A big rounded cyan rectangle that hugs the whole HUD area, plus a
-  // thinner inner line a few pixels inside for the double-outline look. The
-  // frame breaks around the title area on the top edge, so text sits ON the
-  // frame rather than boxed by it - draw it BEFORE the caption below.
+  // --- outer frame, with the STEPPED top rail ------------------------------
+  /*
+   * The top edge is not one straight line.
+   *
+   * In the reference the rail runs low across the left - just under the "Main
+   * Menu" label - then kicks up a diagonal right after the slashes and
+   * carries on at a higher level to the top-right corner. That step is the
+   * whole signature of the frame, and drawing a plain rounded rectangle threw
+   * it away: the label ended up floating over a flat line with nothing tying
+   * it to the HUD.
+   *
+   * The kink is placed off the MEASURED width of the title, so the diagonal
+   * always lands just past the slashes however long the title is.
+   */
+  ctx.font = `italic 900 15px ${MELEE_UI_FONT}`;
+  ctx.textBaseline = "middle";
+  const capText = menu.page ? menu.page.title : menu.title;
+  const capX = 20;
+  const capY = 11;
+  const capW = ctx.measureText(capText).width;
+
   const fX = 8;
-  const fY = 8;
+  const fY = 21;                 // low rail, under the caption
+  const fYHigh = 11;             // high rail, right of the step
   const fW = W - fX * 2;
-  const fH = H - fY * 2;
+  const fH = H - fY - 8;
   const fR = 8;
+  const slashX = capX + capW + 7;
+  const kinkX = slashX + 17;     // diagonal starts just past the slashes
+  const kinkRun = 9;             // its horizontal length
+
+  function framePath(x: number, y: number, w: number, h: number, r: number,
+                     kx: number, krun: number, yHi: number) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(kx, y);
+    ctx.lineTo(kx + krun, yHi);          // the step
+    ctx.lineTo(x + w - r, yHi);
+    ctx.quadraticCurveTo(x + w, yHi, x + w, yHi + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.5)";
   ctx.shadowBlur = 4;
   ctx.strokeStyle = "#8ad4ff";
   ctx.lineWidth = 2;
-  roundRect(ctx, fX, fY, fW, fH, fR);
+  ctx.lineJoin = "round";
+  framePath(fX, fY, fW, fH, fR, kinkX, kinkRun, fYHigh);
   ctx.stroke();
   ctx.restore();
+
+  // Inner hairline, following the same stepped silhouette.
   ctx.strokeStyle = "rgba(140,210,255,0.65)";
   ctx.lineWidth = 1;
-  roundRect(ctx, fX + 3, fY + 3, fW - 6, fH - 6, fR - 2);
+  ctx.lineJoin = "round";
+  framePath(fX + 3, fY + 3, fW - 6, fH - 6, fR - 2, kinkX + 3, kinkRun, fYHigh + 3);
   ctx.stroke();
+  ctx.lineJoin = "miter";
 
-  // Corner accent brackets - short cyan hooks in each corner of the frame,
-  // the "tech HUD" detail the reference wears at every corner.
+  // Corner accents. The top pair sit on their OWN rails - left on the low
+  // one, right on the high one - or they float off the line at the step.
   ctx.strokeStyle = "#bfe8ff";
   ctx.lineWidth = 1;
   const cornerLen = 6;
-  const corners = [
-    { x: fX + fR, y: fY, dx: 1, dy: 0 },
-    { x: fX + fW - fR, y: fY, dx: -1, dy: 0 },
-    { x: fX + fR, y: fY + fH, dx: 1, dy: 0 },
-    { x: fX + fW - fR, y: fY + fH, dx: -1, dy: 0 },
-  ];
   ctx.beginPath();
-  for (const c of corners) {
-    ctx.moveTo(c.x, c.y);
-    ctx.lineTo(c.x + c.dx * cornerLen, c.y);
-  }
+  ctx.moveTo(fX + fR, fY);               ctx.lineTo(fX + fR + cornerLen, fY);
+  ctx.moveTo(fX + fW - fR, fYHigh);      ctx.lineTo(fX + fW - fR - cornerLen, fYHigh);
+  ctx.moveTo(fX + fR, fY + fH);          ctx.lineTo(fX + fR + cornerLen, fY + fH);
+  ctx.moveTo(fX + fW - fR, fY + fH);     ctx.lineTo(fX + fW - fR - cornerLen, fY + fH);
   ctx.stroke();
 
-  // --- "Main Menu" caption (top, no box) -----------------------------------
-  // Silver italic serif text floating over the background, with a subtle
-  // dark drop shadow and three angled slashes to the right of the label.
-  const capX = 24;
-  const capY = 14;
-  const capText = menu.title;
-  ctx.textBaseline = "middle";
-  ctx.font = 'italic 900 15px "Georgia", "Times New Roman", serif';
-
+  // --- "Main Menu" caption, riding ABOVE the low rail ----------------------
   // Drop shadow, offset down-right one pixel, dark blue-black.
   ctx.fillStyle = "rgba(4,10,22,0.9)";
   ctx.fillText(capText, capX + 1, capY + 1);
@@ -651,30 +889,22 @@ function drawMeleeMenu(
   ctx.fillStyle = silver;
   ctx.fillText(capText, capX, capY);
 
-  // Triple parallel slashes to the right of the label, angled up-right, the
-  // decorative flourish the reference wears in that corner.
-  const capW = ctx.measureText(capText).width;
-  const slashX = capX + capW + 8;
+  // The slashes bridge the caption to the step, leaning at the same angle as
+  // the diagonal so they read as part of the same rail.
   ctx.strokeStyle = "#7f9bc4";
   ctx.lineWidth = 2;
   ctx.lineCap = "round";
   for (let i = 0; i < 3; i += 1) {
     const sx = slashX + i * 5;
     ctx.beginPath();
-    ctx.moveTo(sx, capY + 5);
-    ctx.lineTo(sx + 6, capY - 4);
+    ctx.moveTo(sx, fY - 1);
+    ctx.lineTo(sx + kinkRun, fYHigh - 1);
     ctx.stroke();
   }
   ctx.lineCap = "butt";
 
-  // --- five chevron plates down the left column ----------------------------
-  // The plate silhouette from the reference: pointed on BOTH ends, but the
-  // top and bottom edges are slightly angled inward from the tips instead of
-  // running perfectly flat — so it reads as a stretched flag/parallelogram
-  // with sharp points, not a hexagon with a flat centre. Each row is nudged
-  // sideways by a small handplaced offset so the column doesn't stack into a
-  // straight-edged block; the original menu breathes because the plates
-  // stagger. Every plate carries a soft yellow bloom behind it too.
+  /* The plate silhouette, shared by the menu's rows and the section
+     screen's Back plate so the two are the same object. */
   const NOSE_R = 8; // right-side chevron depth
   const NOSE_L = 6; // left-side chevron depth
   const EDGE_DIP = 1; // how much the top/bottom edges bow inward from the tips
@@ -694,232 +924,607 @@ function drawMeleeMenu(
     ctx.closePath();
   }
 
-  for (let i = 0; i < n; i += 1) {
-    const y = MELEE_PLATE_TOP + i * (MELEE_PLATE_H + MELEE_PLATE_GAP);
-    const px = MELEE_PLATE_BASE_X + (MELEE_STAGGER[i] ?? 0);
-    const on = i === idx;
+  /* The Back plate, shared by both page layouts - same silhouette, bevel
+     and ">" tail as a menu plate, so it is plainly the same object. */
+  function drawPageBack(c: CanvasRenderingContext2D) {
+  const lit = !!menu.pageBackHover;
+  // The Back plate - same silhouette and bevel as a menu plate, so it is
+  // obviously the same kind of object and obviously clickable.
+  c.save();
+  c.shadowColor = "rgba(0,0,0,0.6)";
+  c.shadowBlur = 2;
+  c.shadowOffsetX = 2;
+  c.shadowOffsetY = 2;
+  c.fillStyle = "#000";
+  platePath(MELEE_BACK_X, MELEE_BACK_Y, MELEE_BACK_W, MELEE_BACK_H);
+  c.fill();
+  c.restore();
+  platePath(MELEE_BACK_X, MELEE_BACK_Y, MELEE_BACK_W, MELEE_BACK_H);
+  if (lit) {
+    const lf = c.createLinearGradient(0, MELEE_BACK_Y, 0, MELEE_BACK_Y + MELEE_BACK_H);
+    lf.addColorStop(0, "#fff29a");
+    lf.addColorStop(0.45, "#f7cf28");
+    lf.addColorStop(1, "#dca400");
+    c.fillStyle = lf;
+  } else {
+    c.fillStyle = "#050505";
+  }
+  c.fill();
+  c.lineJoin = "miter";
+  c.strokeStyle = "#5e400b";
+  c.lineWidth = 3.4;
+  c.stroke();
+  const backRim = c.createLinearGradient(0, MELEE_BACK_Y, 0, MELEE_BACK_Y + MELEE_BACK_H);
+  backRim.addColorStop(0, "#ffd964");
+  backRim.addColorStop(0.5, "#d9a417");
+  backRim.addColorStop(1, "#8a6410");
+  c.strokeStyle = backRim;
+  c.lineWidth = 1.6;
+  c.stroke();
 
-    // Soft yellow bloom behind every plate — the halo the reference wears
-    // whether the row is lit or not. Drawn as a blurred fill of the plate
-    // path in transparent yellow so it feathers past the border cleanly.
-    ctx.save();
-    ctx.shadowColor = on ? "rgba(255,190,40,0.95)" : "rgba(240,180,40,0.55)";
-    ctx.shadowBlur = on ? 12 : 7;
-    ctx.shadowOffsetY = on ? 2 : 1;
-    ctx.fillStyle = on ? "rgba(255,180,40,0.9)" : "rgba(210,150,30,0.65)";
-    platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
-    ctx.fill();
-    ctx.restore();
+  c.font = `900 13px ${MELEE_UI_FONT}`;
+  const bkX = MELEE_BACK_X + NOSE_L + 6;
+  const bkY = MELEE_BACK_Y + MELEE_BACK_H / 2 + 1;
+  c.fillStyle = lit ? "#120d00" : "rgba(0,0,0,0.95)";
+  c.fillText("Back", lit ? bkX : bkX + 1, lit ? bkY : bkY + 1);
+  const bkG = c.createLinearGradient(0, MELEE_BACK_Y + 3, 0, MELEE_BACK_Y + MELEE_BACK_H - 3);
+  bkG.addColorStop(0, "#ffe27a");
+  bkG.addColorStop(1, "#d9a11a");
+  if (!lit) {
+    c.fillStyle = bkG;
+    c.fillText("Back", bkX, bkY);
+  }
 
-    if (on) {
-      // Bright yellow face, no border.
-      platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
-      const face = ctx.createLinearGradient(0, y, 0, y + MELEE_PLATE_H);
-      face.addColorStop(0, "#ffe066");
-      face.addColorStop(0.5, "#f5cf2a");
-      face.addColorStop(1, "#e6b311");
-      ctx.fillStyle = face;
-      ctx.fill();
-      // Subtle upper highlight sliver so it doesn't read flat.
-      ctx.save();
-      platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
-      ctx.clip();
-      ctx.fillStyle = "rgba(255,255,220,0.35)";
-      ctx.fillRect(px, y, MELEE_PLATE_W, 2);
-      ctx.restore();
-    } else {
-      // Black core.
-      platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
-      ctx.fillStyle = "#000";
-      ctx.fill();
-      // Fat gold border. Two passes: outer darker, inner brighter, so the
-      // rim reads as beveled at 256×192 where a single 1px stroke muddies.
-      ctx.lineJoin = "miter";
-      ctx.strokeStyle = "#7a5510";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-      ctx.strokeStyle = "#e6b322";
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
+  // and its ">" tail, matching the menu plates
+  const bax = MELEE_BACK_X + MELEE_BACK_W - NOSE_R - 7;
+  const bay = MELEE_BACK_Y + MELEE_BACK_H / 2;
+  c.lineCap = "round";
+  c.lineJoin = "round";
+  const backArrow = () => {
+    c.beginPath();
+    c.moveTo(bax, bay - 4.5);
+    c.lineTo(bax + 4.5, bay);
+    c.lineTo(bax, bay + 4.5);
+  };
+  backArrow();
+  c.strokeStyle = "rgba(0,0,0,0.95)";
+  c.lineWidth = 3.2;
+  c.stroke();
+  backArrow();
+  c.strokeStyle = bkG;
+  c.lineWidth = 1.6;
+  c.stroke();
+  c.lineCap = "butt";
+  c.lineJoin = "miter";
+  }
+
+  // --- section screen ------------------------------------------------------
+  /*
+   * A picked section gets the whole tube to itself: heading on the rail, its
+   * rows down the body, one Back plate. Drawn instead of the plate stack, not
+   * over it, so the two can never fight for the same pixels.
+   */
+  if (menu.page && menu.page.grid) {
+    /*
+     * Character-select board: a grid of icon tiles, each with a name plate
+     * under it. Lifted straight from the reference's roster - a bevelled
+     * frame, the art cover-fit inside it, and a dark caption bar across the
+     * bottom edge carrying the name in small caps.
+     *
+     * 7 x 3 is chosen so all 21 projects land on one board with nothing
+     * cut. Names are wrapped to two lines the way the reference wraps
+     * "ICE CLIMBERS" and "JIGGLY-PUFF" rather than being clipped.
+     */
+    const rows = menu.page.rows;
+    const L = meleeGridLayout(menu.page);
+    const cols = L.cols;
+    const gridX = 20;
+    const gridW = W - gridX - 20;
+    const cellW = gridW / cols;
+    const tileW = Math.floor(cellW) - 2;
+    const { wellH, capH, cellH } = L;
+    const maxRows = Math.max(1, Math.floor((L.gridBottom - L.gridTop) / cellH));
+    const shown = rows.slice(0, cols * maxRows);
+    const active = menu.page.activeRow ?? -1;
+
+    ctx.textAlign = "center";
+    for (let i = 0; i < shown.length; i += 1) {
+      const cx = gridX + (i % cols) * cellW + 1;
+      const cy = L.gridTop + Math.floor(i / cols) * cellH;
+      const on = i === active;
+
+      /*
+       * The well behind the art: near-black blue-grey, and the SAME for every
+       * tile, picked or not.
+       *
+       * It has to be the same, because the role clips carry this exact colour
+       * baked in - they are the transparent source GIFs flattened onto it, so
+       * that the animation sits on the well instead of on the white card the
+       * flattening used to produce. Light the picked tile's well and that
+       * square of baked-in backing would suddenly read as a darker patch
+       * inside a lighter frame. The selection is carried by the rim, the name
+       * plate and the art's own strength instead, none of which touch this.
+       */
+      ctx.fillStyle = "#0e141c";
+      ctx.fillRect(cx, cy, tileW, wellH);
+      const art = shown[i].icon ? image?.(shown[i].icon as string) ?? null : null;
+      if (art) {
+        const aw = (art as HTMLImageElement).naturalWidth || tileW;
+        const ah = (art as HTMLImageElement).naturalHeight || wellH;
+        const k = Math.min((tileW - 4) / aw, (wellH - 4) / ah);   // contain
+        const dw = aw * k;
+        const dh = ah * k;
+        ctx.imageSmoothingEnabled = true;
+        // The unselected tiles sit BACK; the pick is the only one at full
+        // strength. That is the whole selection cue on the art itself, and it
+        // replaces the translucent grey puck that used to be drawn over the
+        // current tile - a cursor that covered up the very thing it was
+        // pointing at, on a tile that is only 17px tall to begin with.
+        ctx.globalAlpha = on ? 1 : 0.68;
+        ctx.drawImage(art, cx + (tileW - dw) / 2, cy + (wellH - dh) / 2, dw, dh);
+        ctx.globalAlpha = 1;
+      }
+      // One rim, and it is drawn INSIDE the tile's own box. The selected tile
+      // used to get a second ring 1.5px outside its bounds, and with the
+      // cells only two pixels apart that read as the tile swelling into its
+      // neighbours rather than as a highlight - the grid lost its rhythm on
+      // whichever tile you were looking at.
+      ctx.strokeStyle = on ? "#ffd964" : "#6f89a8";
+      ctx.lineWidth = on ? 2 : 1;
+      const inset = on ? 1 : 0.5;
+      ctx.strokeRect(cx + inset, cy + inset, tileW - inset * 2, wellH - inset * 2);
+
+      if (!L.showCaption) continue;
+      // The name plate carries the selection too: gold bar with dark letters
+      // for the pick, the roster's own dark plate for the rest. Two cues that
+      // agree (rim + plate) read as one clear state; the old treatment had
+      // three that did not (rim, outer ring, puck).
+      const capY = cy + wellH;
+      if (on) {
+        const capG = ctx.createLinearGradient(0, capY, 0, capY + capH);
+        capG.addColorStop(0, "#ffe27a");
+        capG.addColorStop(1, "#d9a11a");
+        ctx.fillStyle = capG;
+      } else {
+        ctx.fillStyle = "rgba(6,12,24,0.92)";
+      }
+      ctx.fillRect(cx, capY, tileW, capH);
+      ctx.font = `bold 5px ${MELEE_UI_FONT}`;
+      const words = (shown[i].tag ?? shown[i].label).toUpperCase().split(/\s+/);
+      const lines: string[] = [];
+      let line = "";
+      for (const w of words) {
+        const next = line ? `${line} ${w}` : w;
+        if (ctx.measureText(next).width > tileW - 3 && line) {
+          lines.push(line);
+          line = w;
+          if (lines.length === 2) break;
+        } else {
+          line = next;
+        }
+      }
+      if (lines.length < 2 && line) lines.push(line);
+      const midX = cx + tileW / 2;
+      ctx.fillStyle = on ? "#1c1303" : "#c9d9ea";
+      if (lines.length > 1) {
+        ctx.fillText(fitText(ctx, lines[0], tileW - 3), midX, capY + 4);
+        ctx.fillText(fitText(ctx, lines[1], tileW - 3), midX, capY + 9);
+      } else {
+        ctx.fillText(fitText(ctx, lines[0] ?? "", tileW - 3), midX, capY + 7);
+      }
     }
+    ctx.textAlign = "left";
 
-    // Label: heavy italic serif, black on lit / gold on dark. A tiny drop
-    // shadow on the dark plates lifts the letters off the black core.
-    ctx.font = 'italic 900 12px "Georgia", "Times New Roman", serif';
-    if (on) {
-      ctx.fillStyle = "#0a0800";
-      ctx.fillText(items[i].label, px + 10, y + MELEE_PLATE_H / 2 + 1);
-    } else {
+    /*
+     * No cursor is drawn over the board.
+     *
+     * There used to be a translucent grey disc here, on the theory that at
+     * 17px a border alone is easy to lose. It was worse than the problem: the
+     * puck covered most of the icon it was marking, so the one tile you were
+     * actually looking at was the one you could not see. The pick now shows
+     * as a gold rim, a gold name plate and full-strength art while every
+     * other tile is held back at 0.68 - all of it inside the tile's own box,
+     * none of it on top of the art.
+     */
+
+    /*
+     * The band along the bottom: the selected project's architecture diagram,
+     * which is the whole reason the grid is packed into the top two thirds.
+     * Kept as a framed well even with nothing selected, so the screen has the
+     * same shape whether or not something is under the pointer.
+     */
+    const dX = gridX;
+    const dY = L.bandTop;
+    const dW = gridW;
+    const dH = L.bandBottom - L.bandTop;
+    /*
+     * A page can ask for NO band (bandFrac 0), and Skills does: it is a board
+     * of icons and nothing else. Everything below this line draws the band,
+     * so leave now rather than framing an empty well under the tiles - which
+     * is a hole in the screen, not a panel.
+     */
+    if (dH < 8) { drawPageBack(ctx); return; }
+    ctx.fillStyle = "rgba(8,16,30,0.72)";
+    ctx.fillRect(dX, dY, dW, dH);
+    ctx.strokeStyle = "rgba(150,225,255,0.65)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(dX + 0.5, dY + 0.5, dW - 1, dH - 1);
+
+    const pick = active >= 0 ? shown[active] : undefined;
+    const diag = pick?.diagram ? image?.(pick.diagram) ?? null : null;
+    if (diag) {
+      const aw = (diag as HTMLImageElement).naturalWidth || dW;
+      const ah = (diag as HTMLImageElement).naturalHeight || dH;
+      // 2px of margin, not 6: this panel is the point of the screen, so the
+      // art gets as close to the frame as it can without touching it.
+      const k = Math.min((dW - 4) / aw, (dH - 4) / ah);          // contain
+      const dw = aw * k;
+      const dh = ah * k;
+      ctx.imageSmoothingEnabled = true;
+      // Nothing lettered over the art. The reference's "STAGE SELECT" mark
+      // used to sit in this corner, but the heading already names the screen
+      // on the rail above - repeating it here only covered up the corner of
+      // the diagram the panel exists to show.
+      ctx.drawImage(diag, dX + (dW - dw) / 2, dY + (dH - dh) / 2, dw, dh);
+    } else if (pick) {
+      /*
+       * No diagram, so the panel carries the whole write-up instead.
+       *
+       * It used to print one centred line and ellipsize it, which threw away
+       * everything past the job title - and on a panel this size there is
+       * room for all of it. Left-aligned and wrapped: heading, then the role
+       * and dates, then the bullets, each one flowed to the panel's width and
+       * cut off only when the panel genuinely runs out of height.
+       */
+      const tx = dX + 8;
+      const tw = dW - 16;
+      let ty = dY + 14;
+
+      ctx.font = `900 13px ${MELEE_UI_FONT}`;
+      const lg = ctx.createLinearGradient(0, ty - 9, 0, ty + 3);
+      lg.addColorStop(0, "#ffe27a");
+      lg.addColorStop(1, "#d9a11a");
       ctx.fillStyle = "rgba(0,0,0,0.9)";
-      ctx.fillText(items[i].label, px + 11, y + MELEE_PLATE_H / 2 + 2);
-      ctx.fillStyle = YELLOW;
-      ctx.fillText(items[i].label, px + 10, y + MELEE_PLATE_H / 2 + 1);
-    }
+      ctx.fillText(fitText(ctx, pick.label, tw), tx + 1, ty + 1);
+      ctx.fillStyle = lg;
+      ctx.fillText(fitText(ctx, pick.label, tw), tx, ty);
+      ty += 12;
 
-    // Trailing bead: a mini plate with the same chevron nose, sitting just
-    // past the plate's right tip. It's the "P" bumper that trails every row.
-    const bX = px + MELEE_PLATE_W + 3;
-    const bY = y + 3;
-    const bW = 11;
-    const bH = MELEE_PLATE_H - 6;
-    ctx.beginPath();
-    ctx.moveTo(bX, bY + bH / 2);
-    ctx.lineTo(bX + 3, bY);
-    ctx.lineTo(bX + bW - 3, bY);
-    ctx.lineTo(bX + bW, bY + bH / 2);
-    ctx.lineTo(bX + bW - 3, bY + bH);
-    ctx.lineTo(bX + 3, bY + bH);
-    ctx.closePath();
+      if (pick.sub) {
+        ctx.font = `italic 9px ${MELEE_SERIF_FONT}`;
+        ctx.fillStyle = "#a8c4de";
+        for (const ln of wrapText(ctx, pick.sub, tw).slice(0, 2)) {
+          ctx.fillText(ln, tx, ty);
+          ty += 10;
+        }
+      }
 
-    // Bead glow too, matching the plate.
-    ctx.save();
-    ctx.shadowColor = on ? "rgba(255,190,40,0.9)" : "rgba(240,180,40,0.5)";
-    ctx.shadowBlur = on ? 8 : 5;
-    ctx.fillStyle = on ? "rgba(255,180,40,0.85)" : "rgba(210,150,30,0.55)";
-    ctx.fill();
-    ctx.restore();
-
-    // Redraw the bead path (shadow-fill above lost the crisp edge).
-    ctx.beginPath();
-    ctx.moveTo(bX, bY + bH / 2);
-    ctx.lineTo(bX + 3, bY);
-    ctx.lineTo(bX + bW - 3, bY);
-    ctx.lineTo(bX + bW, bY + bH / 2);
-    ctx.lineTo(bX + bW - 3, bY + bH);
-    ctx.lineTo(bX + 3, bY + bH);
-    ctx.closePath();
-    if (on) {
-      const bf = ctx.createLinearGradient(0, bY, 0, bY + bH);
-      bf.addColorStop(0, "#ffe066");
-      bf.addColorStop(1, "#e6b311");
-      ctx.fillStyle = bf;
-      ctx.fill();
+      ty += 3;
+      ctx.font = `8px ${MELEE_UI_FONT}`;
+      // Only the FIRST line of a paragraph wears a bullet. The old loop said
+      // so in a comment and then drew one on every wrapped line, so a bullet
+      // arrived with each spilled word - "conferences" and "solutions" each
+      // came out looking like a point of their own.
+      for (const para of pick.body ?? []) {
+        const lines = wrapText(ctx, para, tw - 6);
+        let spilled = false;
+        for (let li = 0; li < lines.length; li += 1) {
+          if (ty > dY + dH - 5) { spilled = true; break; }
+          if (li === 0) {
+            ctx.fillStyle = "#7fb4d8";
+            ctx.fillText("\u2022", tx, ty);
+          }
+          ctx.fillStyle = "#dce8f4";
+          ctx.fillText(lines[li], tx + 6, ty);
+          ty += 9;
+        }
+        if (spilled || ty > dY + dH - 5) break;
+      }
     } else {
-      ctx.fillStyle = "#000";
-      ctx.fill();
-      ctx.strokeStyle = "#7a5510";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.strokeStyle = "#e6b322";
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      ctx.textAlign = "center";
+      ctx.font = `italic 9px ${MELEE_SERIF_FONT}`;
+      ctx.fillStyle = "rgba(150,180,215,0.7)";
+      ctx.fillText("Point at one", dX + dW / 2, dY + dH / 2);
+      ctx.textAlign = "left";
     }
 
-    // Selected row: concentric target reticle floating off the bead.
-    if (on) {
-      const rx = bX + bW + 10;
-      const ry = y + MELEE_PLATE_H / 2;
-      const bob = Math.sin(t * 5) * 0.8;
-      // outer soft glow
+    drawPageBack(ctx);
+    return;
+  }
+
+  if (menu.page) {
+    const rows = menu.page.rows;
+    const hasSub = rows.some((r) => !!r.sub);
+    const rowH = hasSub ? 21 : 14;
+    const avail = MELEE_BACK_Y - 6 - MELEE_PAGE_TOP;
+    const shown = rows.slice(0, Math.max(1, Math.floor(avail / rowH)));
+    const listX = 22;
+    const listW = W - listX - 20;
+
+    for (let i = 0; i < shown.length; i += 1) {
+      const ry = MELEE_PAGE_TOP + i * rowH;
+
+      // A short gold tick before each heading, so the column has an edge.
+      ctx.fillStyle = "#d9a417";
+      ctx.fillRect(listX - 8, ry - 3, 3, hasSub ? 12 : 7);
+
+      ctx.font = `900 12px ${MELEE_UI_FONT}`;
+      ctx.fillStyle = "rgba(0,0,0,0.9)";
+      ctx.fillText(fitText(ctx, shown[i].label, listW), listX + 1, ry + 4);
+      const lg = ctx.createLinearGradient(0, ry - 5, 0, ry + 7);
+      lg.addColorStop(0, "#ffe27a");
+      lg.addColorStop(1, "#d9a11a");
+      ctx.fillStyle = lg;
+      ctx.fillText(fitText(ctx, shown[i].label, listW), listX, ry + 3);
+
+      if (shown[i].sub) {
+        ctx.font = `italic 9px ${MELEE_SERIF_FONT}`;
+        ctx.fillStyle = "rgba(0,0,0,0.85)";
+        ctx.fillText(fitText(ctx, shown[i].sub as string, listW), listX + 1, ry + 14);
+        ctx.fillStyle = "#cfe3f2";
+        ctx.fillText(fitText(ctx, shown[i].sub as string, listW), listX, ry + 13);
+      }
+    }
+
+    // "+N more" when the list runs past what the tube can hold.
+    if (shown.length < rows.length) {
+      ctx.font = `italic 9px ${MELEE_SERIF_FONT}`;
+      ctx.fillStyle = "rgba(180,205,230,0.85)";
+      ctx.fillText(`+${rows.length - shown.length} more`, listX, MELEE_BACK_Y - 8);
+    }
+
+    drawPageBack(ctx);
+  } else {
+    // --- five chevron plates down the left column ----------------------------
+    // The plate silhouette from the reference: pointed on BOTH ends, but the
+    // top and bottom edges are slightly angled inward from the tips instead of
+    // running perfectly flat — so it reads as a stretched flag/parallelogram
+    // with sharp points, not a hexagon with a flat centre. Each row is nudged
+    // sideways by a small handplaced offset so the column doesn't stack into a
+    // straight-edged block; the original menu breathes because the plates
+    // stagger. Every plate carries a soft yellow bloom behind it too.
+
+    for (let i = 0; i < n; i += 1) {
+      const y = MELEE_PLATE_TOP + i * (MELEE_PLATE_H + MELEE_PLATE_GAP);
+      const on = i === idx;
+      const px = MELEE_PLATE_BASE_X + (MELEE_STAGGER[i] ?? 0) + (on ? MELEE_SELECT_JUT : 0);
+
+      /*
+       * A DARK drop shadow, not a glow.
+       *
+       * The plates in the reference are lit objects sitting above the
+       * background, and what sells that is a hard black shadow thrown down and
+       * right - the same offset on every row, lit or not. A yellow bloom behind
+       * each plate (what this used to do) made the whole column look like it
+       * was smouldering and washed the gold rim out into the background.
+       */
       ctx.save();
-      ctx.shadowColor = "rgba(160,255,180,0.9)";
-      ctx.shadowBlur = 6;
-      ctx.fillStyle = "rgba(210,255,220,0.9)";
-      ctx.beginPath();
-      ctx.arc(rx, ry + bob, 5, 0, Math.PI * 2);
+      ctx.shadowColor = "rgba(0,0,0,0.6)";
+      ctx.shadowBlur = 2;
+      ctx.shadowOffsetX = 2;
+      ctx.shadowOffsetY = 2;
+      ctx.fillStyle = "#000";
+      platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
       ctx.fill();
       ctx.restore();
-      // green ring
-      ctx.strokeStyle = "#4dd07a";
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.arc(rx, ry + bob, 4, 0, Math.PI * 2);
-      ctx.stroke();
-      // black core
-      ctx.fillStyle = "#0a1f14";
-      ctx.beginPath();
-      ctx.arc(rx, ry + bob, 2.4, 0, Math.PI * 2);
-      ctx.fill();
-      // inner bright dot
-      ctx.fillStyle = "#eaffd8";
-      ctx.beginPath();
-      ctx.arc(rx, ry + bob, 1, 0, Math.PI * 2);
-      ctx.fill();
+
+      if (on) {
+        // Lit: solid yellow face, black label. No rim - the fill IS the shape.
+        platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
+        const face = ctx.createLinearGradient(0, y, 0, y + MELEE_PLATE_H);
+        face.addColorStop(0, "#fff29a");
+        face.addColorStop(0.45, "#f7cf28");
+        face.addColorStop(1, "#dca400");
+        ctx.fillStyle = face;
+        ctx.fill();
+        ctx.save();
+        platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
+        ctx.clip();
+        ctx.fillStyle = "rgba(255,255,235,0.45)";
+        ctx.fillRect(px, y, MELEE_PLATE_W, 2);
+        ctx.restore();
+      } else {
+        // Unlit: near-black core inside a BEVELLED gold rim. Two strokes, the
+        // outer dark and the inner a top-lit gradient, so at 256x192 the rim
+        // reads as a raised metal edge instead of a flat yellow outline.
+        platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
+        ctx.fillStyle = "#050505";
+        ctx.fill();
+        ctx.lineJoin = "miter";
+        ctx.strokeStyle = "#5e400b";
+        ctx.lineWidth = 3.4;
+        ctx.stroke();
+        const rim = ctx.createLinearGradient(0, y, 0, y + MELEE_PLATE_H);
+        rim.addColorStop(0, "#ffd964");
+        rim.addColorStop(0.5, "#d9a417");
+        rim.addColorStop(1, "#8a6410");
+        ctx.strokeStyle = rim;
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+      }
+
+      // Label: heavy italic serif, black on lit / gold on dark.
+      // Upright, not italic: the plates in the reference are set in Folk Pro
+      // Bold standing straight up. The italic serif they used to carry is the
+      // sub-list's face, not theirs.
+      ctx.font = `900 13px ${MELEE_UI_FONT}`;
+      const tx = px + NOSE_L + 6;
+      const ty = y + MELEE_PLATE_H / 2 + 1;
+      if (on) {
+        ctx.fillStyle = "#120d00";
+        ctx.fillText(items[i].label, tx, ty);
+      } else {
+        ctx.fillStyle = "rgba(0,0,0,0.95)";
+        ctx.fillText(items[i].label, tx + 1, ty + 1);
+        const lg = ctx.createLinearGradient(0, y + 3, 0, y + MELEE_PLATE_H - 3);
+        lg.addColorStop(0, "#ffe27a");
+        lg.addColorStop(1, "#d9a11a");
+        ctx.fillStyle = lg;
+        ctx.fillText(items[i].label, tx, ty);
+      }
+
+      /*
+       * The ">" at the tail of the plate.
+       *
+       * This was a little hexagonal bead floating past the plate's tip, which
+       * is not what the reference has: each unlit row carries a chevron ARROW
+       * tucked just inside its right end, pointing onward. Same bevel as the
+       * rim - dark stroke under, gold over - so it reads as part of the same
+       * pressed-metal plate rather than a separate ornament.
+       */
+      const ax = px + MELEE_PLATE_W - NOSE_R - 7;
+      const ay = y + MELEE_PLATE_H / 2;
+      const aw = 4.5;
+      const ah = 4.5;
+      const arrow = () => {
+        ctx.beginPath();
+        ctx.moveTo(ax, ay - ah);
+        ctx.lineTo(ax + aw, ay);
+        ctx.lineTo(ax, ay + ah);
+      };
+      if (!on) {
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        arrow();
+        ctx.strokeStyle = "rgba(0,0,0,0.95)";
+        ctx.lineWidth = 3.2;
+        ctx.stroke();
+        arrow();
+        const ag = ctx.createLinearGradient(0, ay - ah, 0, ay + ah);
+        ag.addColorStop(0, "#ffe27a");
+        ag.addColorStop(1, "#d9a11a");
+        ctx.strokeStyle = ag;
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        ctx.lineCap = "butt";
+        ctx.lineJoin = "miter";
+      } else {
+        // The lit row swaps the arrow for the glowing target from the
+        // reference - you are already here, so there is nothing to point on to.
+        const rx = ax + 1;
+        const pulse = 0.85 + 0.15 * Math.sin(t * 5);
+        ctx.save();
+        ctx.shadowColor = "rgba(255,225,110,0.95)";
+        ctx.shadowBlur = 8 * pulse;
+        ctx.fillStyle = "rgba(255,240,170,0.95)";
+        ctx.beginPath();
+        ctx.arc(rx, ay, 5.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        ctx.strokeStyle = "#fff6c4";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(rx, ay, 3.4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = "#f7cf28";
+        ctx.beginPath();
+        ctx.arc(rx, ay, 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
+
+    // --- right-side sub-list panel -------------------------------------------
+    const panelX = 160;
+    const panelY = 34;
+    const panelW = 90;
+    const panelH = 88;
+    /* A translucent SLANTED pane, not an opaque rounded box. In the reference
+       you can see the background moving through it, and its left edge leans -
+       it reads as a sheet of glass held at an angle rather than a dialog. */
+    const LEAN = 5;
+    const pane = () => {
+      ctx.beginPath();
+      ctx.moveTo(panelX + LEAN, panelY);
+      ctx.lineTo(panelX + panelW, panelY);
+      ctx.lineTo(panelX + panelW - LEAN, panelY + panelH);
+      ctx.lineTo(panelX, panelY + panelH);
+      ctx.closePath();
+    };
+    pane();
+    const glass = ctx.createLinearGradient(panelX, panelY, panelX + panelW, panelY + panelH);
+    glass.addColorStop(0, "rgba(22,74,96,0.55)");
+    glass.addColorStop(1, "rgba(12,40,66,0.45)");
+    ctx.fillStyle = glass;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(150,225,255,0.8)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Vertical caption down the left edge of the panel. Small silver caps,
+    // one letter per line, matching the "NEXT SCREEN" gutter in the reference.
+    const gutter = "NEXT SCREEN";
+    ctx.font = `bold 8px ${MELEE_UI_FONT}`;
+    ctx.textBaseline = "middle";
+    const gutterTop = panelY + 8;
+    const gutterStep = (panelH - 20) / (gutter.length - 1);
+    for (let i = 0; i < gutter.length; i += 1) {
+      // Skip drawing the space, but keep its slot so letters stay evenly spaced.
+      if (gutter[i] === " ") continue;
+      // ride the pane's lean so the gutter stays parallel to its edge
+      const gx = panelX - 8 + LEAN * (1 - i / (gutter.length - 1));
+      ctx.fillStyle = "rgba(6,10,22,0.85)";
+      ctx.fillText(gutter[i], gx + 1, gutterTop + i * gutterStep + 1);
+      ctx.fillStyle = "#cfe3f2";
+      ctx.fillText(gutter[i], gx, gutterTop + i * gutterStep);
+    }
+
+    // Sub-lines for the current selection, drawn in italic serif to match.
+    const sublines = items[idx].lines.slice(0, 4);
+    ctx.font = `italic 10px ${MELEE_SERIF_FONT}`;
+    ctx.fillStyle = INK;
+    const listX = panelX + 10;
+    for (let i = 0; i < sublines.length; i += 1) {
+      ctx.fillText(fitText(ctx, sublines[i], panelW - 22), listX, panelY + 14 + i * 15);
+    }
+
   }
 
-  // --- right-side sub-list panel -------------------------------------------
-  const panelX = 160;
-  const panelY = 34;
-  const panelW = 90;
-  const panelH = 88;
-  // Rounded frame with a slight blue wash and a cyan outline.
-  ctx.fillStyle = "rgba(10,28,58,0.85)";
-  roundRect(ctx, panelX, panelY, panelW, panelH, 6);
-  ctx.fill();
-  ctx.strokeStyle = CYAN;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Vertical caption down the left edge of the panel. Small silver caps,
-  // one letter per line, matching the "NEXT SCREEN" gutter in the reference.
-  const gutter = "NEXT SCREEN";
-  ctx.font = 'bold 8px "Arial", "Helvetica", sans-serif';
-  ctx.textBaseline = "middle";
-  const gutterTop = panelY + 8;
-  const gutterStep = (panelH - 16) / (gutter.length - 1);
-  for (let i = 0; i < gutter.length; i += 1) {
-    // Skip drawing the space, but keep its slot so letters stay evenly spaced.
-    if (gutter[i] === " ") continue;
-    ctx.fillStyle = "rgba(6,10,22,0.85)";
-    ctx.fillText(gutter[i], panelX + 5, gutterTop + i * gutterStep + 1);
-    ctx.fillStyle = "#d6e6f4";
-    ctx.fillText(gutter[i], panelX + 4, gutterTop + i * gutterStep);
-  }
-
-  // Sub-lines for the current selection, drawn in italic serif to match.
-  const sublines = items[idx].lines.slice(0, 4);
-  ctx.font = 'italic 10px "Georgia", "Times New Roman", serif';
-  ctx.fillStyle = INK;
-  const listX = panelX + 18;
-  for (let i = 0; i < sublines.length; i += 1) {
-    ctx.fillText(fitText(ctx, sublines[i], panelW - 22), listX, panelY + 14 + i * 15);
-  }
+  // A section screen has no strip: the body needs that band, and the Back
+  // plate already says what the one control is.
+  if (menu.page) return;
 
   // --- bottom tagline bar --------------------------------------------------
-  // A pale off-white pill with a soft gray double-line stroke and dark italic
-  // serif text - the strip along the bottom of the reference reads as a
-  // sheet of paper, not a lit yellow plate. No decorative brackets.
-  const bY = H - 24;
+  /* A translucent strip with a light outline and LIGHT text, matching the
+     reference. It used to be a cream pill with dark text, which read as a
+     sheet of paper stapled to the HUD; in the original the bar is part of the
+     same glass frame as everything else and you can see through it. */
+  /* Measured off the reference: the strip is inset about 17% of the frame's
+     width on EACH side and sits just clear of the frame's bottom rail. It used
+     to run nearly the frame's full width, 6px shy at either end, which read as
+     a strip crammed against the edges rather than a caption floating under the
+     menu. Derived from the frame so the two can never drift apart. */
+  const bInset = Math.round(fW * 0.17);
+  const bX = fX + bInset;
+  const bW2 = fW - bInset * 2;
   const bH = 14;
-  const bX = 14;
-  const bW2 = W - bX * 2;
+  const bY = fY + fH - bH - 4;
   const br = 3;
 
-  // Soft outer glow around the pill so it lifts off the dark background.
   ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.55)";
-  ctx.shadowBlur = 6;
+  ctx.shadowColor = "rgba(0,0,0,0.5)";
+  ctx.shadowBlur = 4;
   ctx.shadowOffsetY = 2;
-  ctx.fillStyle = "rgba(0,0,0,0.4)";
+  const strip = ctx.createLinearGradient(0, bY, 0, bY + bH);
+  strip.addColorStop(0, "rgba(28,48,86,0.72)");
+  strip.addColorStop(1, "rgba(10,22,46,0.72)");
+  ctx.fillStyle = strip;
   roundRect(ctx, bX, bY, bW2, bH, br);
   ctx.fill();
   ctx.restore();
 
-  // Cream/paper fill with a subtle top-to-bottom gradient.
-  const pill = ctx.createLinearGradient(0, bY, 0, bY + bH);
-  pill.addColorStop(0, "#fbfbf3");
-  pill.addColorStop(1, "#e6e6d6");
-  ctx.fillStyle = pill;
+  ctx.strokeStyle = "rgba(210,235,255,0.9)";
+  ctx.lineWidth = 1;
   roundRect(ctx, bX, bY, bW2, bH, br);
-  ctx.fill();
-
-  // Double stroke: an outer mid-gray and an inner light gray a pixel inside,
-  // so the border reads as beveled rather than a single flat line.
-  ctx.strokeStyle = "#5a5a4a";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.strokeStyle = "#c8c8b6";
-  ctx.lineWidth = 1;
-  roundRect(ctx, bX + 1.5, bY + 1.5, bW2 - 3, bH - 3, br - 1);
   ctx.stroke();
 
-  const tagline = items[idx].subtitle ?? items[idx].label;
-  ctx.font = 'italic bold 12px "Georgia", "Times New Roman", serif';
-  ctx.fillStyle = "#141414";
-  const tw = ctx.measureText(tagline).width;
-  const tx = (W - tw) / 2;
-  ctx.fillText(tagline, tx, bY + bH / 2 + 1);
+  const tagline = menu.tagline ?? items[idx].subtitle ?? items[idx].label;
+  ctx.font = `bold 12px ${MELEE_UI_FONT}`;
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(0,0,0,0.85)";
+  ctx.fillText(fitText(ctx, tagline, bW2 - 14), W / 2 + 1, bY + bH / 2 + 1);
+  ctx.fillStyle = "#eef6ff";
+  ctx.fillText(fitText(ctx, tagline, bW2 - 14), W / 2, bY + bH / 2);
+  ctx.textAlign = "left";
 
   // --- tube character: roll bar + vignette so it reads as a CRT -----------
   const rollT = (t % 9) / 9;
@@ -934,7 +1539,7 @@ function drawMeleeMenu(
   }
   const vig = ctx.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.82);
   vig.addColorStop(0, "rgba(0,0,0,0)");
-  vig.addColorStop(1, menu.backgroundVideo ? "rgba(0,0,0,0.28)" : "rgba(0,0,0,0.55)");
+  vig.addColorStop(1, (menu.backgroundVideo || menu.backgroundImage) ? "rgba(0,0,0,0.28)" : "rgba(0,0,0,0.55)");
   ctx.fillStyle = vig;
   ctx.fillRect(0, 0, W, H);
 }
@@ -980,10 +1585,13 @@ export function drawCrtMenu(
   W: number,
   H: number,
   t: number,
-  menu: CrtMenu
+  menu: CrtMenu,
+  /** Looks a /public path up in the screen's own preloaded media. Grid pages
+   *  need it to paint their tiles; everything else ignores it. */
+  image?: (url: string) => CanvasImageSource | null,
 ) {
   if (menu.variant === "melee") {
-    drawMeleeMenu(ctx, W, H, t, menu);
+    drawMeleeMenu(ctx, W, H, t, menu, image);
     return;
   }
   const items = menu.items;
@@ -1148,16 +1756,52 @@ export function drawCrtMenu(
   ctx.fillRect(0, 0, W, H);
 }
 
+/*
+ * How many device pixels the tube gets per LOGICAL pixel.
+ *
+ * Every layout number in this file is written against a 256x192 screen, and
+ * that is the right space to think in - it is what the hit tests use and what
+ * the original menu's proportions come from. But 256 pixels is not enough to
+ * SHOW it: a 6px caption has about four pixels of actual letterform, so the
+ * project names came out as grey mush once the tube was magnified on screen.
+ *
+ * So the canvas is drawn at THREE times that and the context is scaled to
+ * match. The layout code is untouched and still thinks in 256x192; the glyphs
+ * just get nine times the pixels to land on, which is the difference between
+ * a 6px caption having four pixels of letterform and having eighteen.
+ *
+ * That is 1.8MB of texture per upload instead of 196KB, so it is paid for by
+ * the refresh cap below rather than by running it every frame.
+ */
+const SCREEN_SS = 3;
+
+/*
+ * The tube redraws at 24fps, not at the render loop's rate.
+ *
+ * Nothing on a CRT needs 60: the background is video, the plates pulse
+ * slowly, and a slightly steppy refresh is what the thing being imitated
+ * actually looked like. Capping it means the big texture goes up 24 times a
+ * second instead of 60, which is what makes 3x supersampling affordable -
+ * without this, the upload alone would be ~106MB/s for one screen.
+ */
+const SCREEN_FPS = 24;
+
 function useScreenTexture(
   url: string | undefined,
   menu: CrtMenu | undefined,
   width = 256,
-  height = 192
+  height = 192,
+  /** Hover lift: brighten the PICTURE, in the canvas, while this is true. */
+  lit = false,
 ) {
+  // Read inside the frame loop rather than closed over, so toggling it never
+  // re-subscribes the draw.
+  const litRef = useRef(lit);
+  litRef.current = lit;
   const canvas = useMemo(() => {
     const c = document.createElement("canvas");
-    c.width = width;
-    c.height = height;
+    c.width = width * SCREEN_SS;
+    c.height = height * SCREEN_SS;
     return c;
   }, [width, height]);
 
@@ -1169,92 +1813,285 @@ function useScreenTexture(
     return t;
   }, [canvas]);
 
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const vidRef = useRef<HTMLVideoElement | null>(null);
+  /*
+   * Every source this screen can show, alive at once, keyed by url.
+   *
+   * The tube is a little state machine - attract video, then the same video
+   * held while the camera flies in, then a different video behind the buttons
+   * - and each of those is a separate file. Tearing an element down and
+   * building the next one at the moment of the click is exactly when the
+   * screen must not go black, so they are all created once and simply
+   * selected between.
+   */
+  const mediaRef = useRef<Map<string, HTMLVideoElement | HTMLImageElement>>(new Map());
 
-  // A menu can pair with a background video; a plain screen uses `url` directly.
-  const mediaUrl = menu?.backgroundVideo ?? (menu ? undefined : url);
+  const sources = useMemo(() => {
+    const out: string[] = [];
+    const add = (u?: string) => { if (u && !out.includes(u)) out.push(u); };
+    if (menu) {
+      add(menu.backgroundVideo);
+      add(menu.backgroundImage);
+      for (const u of menu.preloadMedia ?? []) add(u);
+    } else {
+      add(url);
+    }
+    return out;
+    // the JOINED list is the identity that matters, not the array object
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menu ? [menu.backgroundVideo, menu.backgroundImage, ...(menu.preloadMedia ?? [])].join("|") : url]);
 
   useEffect(() => {
-    if (!mediaUrl) return;
-
-    if (SCREEN_VIDEO_RE.test(mediaUrl)) {
-      const vid = document.createElement("video");
-      vid.src = mediaUrl;
-      vid.loop = true;
-      vid.muted = true;
-      vid.defaultMuted = true;
-      vid.playsInline = true;
-      vid.crossOrigin = "anonymous";
-      vid.preload = "auto";
-      const play = () => { void vid.play().catch(() => {}); };
-      play();
-      window.addEventListener("pointerdown", play, { once: true });
-      vidRef.current = vid;
-      return () => {
-        window.removeEventListener("pointerdown", play);
-        vid.pause();
-        vid.removeAttribute("src");
-        vid.load();
-        vidRef.current = null;
-      };
+    const store = mediaRef.current;
+    // drop anything no longer listed
+    for (const [key, el] of Array.from(store.entries())) {
+      if (sources.includes(key)) continue;
+      if (el instanceof HTMLVideoElement) {
+        el.pause(); el.removeAttribute("src"); el.load();
+      } else if (el.parentNode) {
+        el.parentNode.removeChild(el);
+      }
+      store.delete(key);
     }
+    const plays: Array<() => void> = [];
+    for (const src of sources) {
+      if (store.has(src)) continue;
+      if (SCREEN_VIDEO_RE.test(src)) {
+        const vid = document.createElement("video");
+        vid.src = src;
+        vid.loop = true;
+        vid.muted = true;
+        vid.defaultMuted = true;
+        vid.playsInline = true;
+        vid.crossOrigin = "anonymous";
+        vid.preload = "auto";
+        const play = () => { void vid.play().catch(() => {}); };
+        play();
+        // Autoplay is commonly blocked until the page has been interacted
+        // with, so retry on the first pointer down.
+        window.addEventListener("pointerdown", play, { once: true });
+        plays.push(play);
+        store.set(src, vid);
+      } else {
+        const img = document.createElement("img");
+        img.crossOrigin = "anonymous";
+        img.decoding = "async";
+        img.src = src;
+        /*
+         * Parked OUTSIDE the viewport, which freezes any GIF on frame one.
+         *
+         * That used to be an accident - the comment here claimed the image
+         * was "still visible so browsers keep animating", but left:-9999px is
+         * exactly what stops them. Now it is deliberate: every tile shows a
+         * still, and the effect below walks the selected one back into the
+         * viewport so that one, and only one, runs.
+         */
+        img.style.position = "fixed";
+        img.style.left = "-9999px";
+        img.style.top = "-9999px";
+        img.style.width = "1px";
+        img.style.height = "1px";
+        img.style.pointerEvents = "none";
+        img.style.zIndex = "-1";
+        img.style.opacity = "0";
+        document.body.appendChild(img);
+        store.set(src, img);
+      }
+    }
+    return () => { for (const play of plays) window.removeEventListener("pointerdown", play); };
+  }, [sources]);
 
-    const img = document.createElement("img");
-    img.crossOrigin = "anonymous";
-    img.decoding = "async";
-    img.src = mediaUrl;
-    // Off-screen but still "visible" so browsers keep animating the GIF.
-    img.style.position = "fixed";
-    img.style.left = "-9999px";
-    img.style.top = "-9999px";
-    img.style.width = "1px";
-    img.style.height = "1px";
-    img.style.pointerEvents = "none";
-    img.style.opacity = "0";
-    document.body.appendChild(img);
-    imgRef.current = img;
+  /*
+   * Exactly one image animates: whichever the screen nominates.
+   *
+   * A browser pauses GIF playback for an <img> that is scrolled out of view,
+   * so position IS the play/pause control here. The live one is moved to the
+   * top-left corner at 1x1 and almost-zero opacity - rendered, therefore
+   * running, but invisible - and everything else stays parked far off-screen
+   * showing its first frame.
+   */
+  const liveImage = menu?.liveImage;
+  useEffect(() => {
+    for (const [key, el] of mediaRef.current.entries()) {
+      const live = key === liveImage;
+
+      if (el instanceof HTMLVideoElement) {
+        /*
+         * Videos are the reliable way to do this, and the reason the logos
+         * are mp4 rather than gif.
+         *
+         * A browser decides for ITSELF whether to animate a GIF, based on
+         * whether it thinks the <img> is on screen - and an <img> parked at
+         * 1x1 with almost no opacity does not qualify, however you position
+         * it. There is no API to override that. A <video> has play() and
+         * pause(), so which logo is moving is a decision this code makes
+         * rather than one it hopes for.
+         *
+         * The tube's own background is exempt from being NOMINATED away -
+         * unlike a tile logo, it's never paused for losing liveImage. But it
+         * still has to be RESUMED here: the attract video is background one
+         * moment (stage 0/1) and just a bystander the next (stage 2/3, when
+         * background_buttons.mp4 takes over) - at which point the branch
+         * below sees it as "not live" and pauses it, same as any unselected
+         * tile. Coming back out just re-exempts it without ever calling
+         * play() again, so without this it would sit frozen on whatever
+         * frame it happened to pause on the first time you opened the menu.
+         */
+        if (key === menu?.backgroundVideo) {
+          if (el.paused) void el.play().catch(() => {});
+          continue;
+        }
+        if (live) {
+          void el.play().catch(() => {});
+        } else if (!el.paused) {
+          el.pause();
+          el.currentTime = 0;     // unselected tiles sit on frame one
+        }
+        continue;
+      }
+
+      if (!(el instanceof HTMLImageElement)) continue;
+      el.style.left = live ? "0px" : "-9999px";
+      el.style.top = live ? "0px" : "-9999px";
+      el.style.opacity = live ? "0.01" : "0";
+    }
+  }, [liveImage, sources, menu?.backgroundVideo]);
+
+  // Tear everything down when the screen itself goes away.
+  useEffect(() => {
+    const store = mediaRef.current;
     return () => {
-      if (img.parentNode) img.parentNode.removeChild(img);
-      imgRef.current = null;
+      for (const el of store.values()) {
+        if (el instanceof HTMLVideoElement) {
+          el.pause(); el.removeAttribute("src"); el.load();
+        } else if (el.parentNode) {
+          el.parentNode.removeChild(el);
+        }
+      }
+      store.clear();
     };
-  }, [mediaUrl]);
+  }, []);
+
+  const lastDraw = useRef(0);
 
   useFrame(({ clock }) => {
+    // Refresh cap. Everything below - the video blit included - is skipped
+    // between ticks, so this gates the canvas work AND the texture upload.
+    const now = clock.elapsedTime;
+    if (now - lastDraw.current < 1 / SCREEN_FPS) return;
+    lastDraw.current = now;
+
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    // Background media is painted in DEVICE pixels so it fills the whole
+    // texture; the UI below switches to logical units.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
 
     // Paint background media (if any) into the canvas as a `cover`ing fill so
     // it fills the tube rather than letterboxing — the menu overlay will
     // cover the edge crop.
-    const vid = vidRef.current;
-    const img = imgRef.current;
-    let src: CanvasImageSource | null = null;
-    let sw = 0;
-    let sh = 0;
-    if (vid && vid.readyState >= 2 && vid.videoWidth) {
-      src = vid; sw = vid.videoWidth; sh = vid.videoHeight;
-    } else if (img && img.complete && img.naturalWidth) {
-      src = img; sw = img.naturalWidth; sh = img.naturalHeight;
-    }
+    /*
+     * Pick the source by what the screen ASKED for, not by whatever happens to
+     * be loaded. Every source is resident, so a rule like "video if ready,
+     * else image" would keep handing back the attract video while the buttons
+     * screen was asking for its own - and its background would never draw.
+     *
+     * The still is a fallback UNDER the requested video, not an alternative to
+     * it: if the video has not decoded a frame yet, a matching poster keeps
+     * the tube from flashing black on the switch.
+     */
+    /*
+     * The hover lift, done to the PICTURE rather than to anything in the
+     * scene.
+     *
+     * It has to be a SCREEN blend, and that is the whole point. The obvious
+     * moves both fail on this image: multiplying the frame by a brighter
+     * colour leaves black at black - and the title card is mostly black, so
+     * nothing visible happens - while adding a flat value blows the wordmark
+     * out to a flat white smear. Screen does neither: result = 1-(1-dst)(1-k)
+     * lifts a black pixel by the full k, lifts a white one by nothing, and
+     * cannot clip. The dark tube gets visibly brighter and the art still
+     * reads.
+     *
+     * Applied in DEVICE pixels, after the UI is drawn, so the whole frame -
+     * background video, plates, tiles - lifts together. And it only touches
+     * the canvas: the spot this tube throws into the room is a light of its
+     * own and is not driven by these pixels, so it does not move.
+     */
+    const hoverLift = () => {
+      if (!litRef.current) return;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const prev = ctx.globalCompositeOperation;
+      ctx.globalCompositeOperation = "screen";
+      ctx.fillStyle = `rgba(255,255,255,${SCREEN_HOVER_LIFT})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = prev;
+    };
+
+    const pick = (u?: string): [CanvasImageSource, number, number] | null => {
+      if (!u) return null;
+      const el = mediaRef.current.get(u);
+      if (!el) return null;
+      if (el instanceof HTMLVideoElement) {
+        return el.readyState >= 2 && el.videoWidth ? [el, el.videoWidth, el.videoHeight] : null;
+      }
+      return el.complete && el.naturalWidth ? [el, el.naturalWidth, el.naturalHeight] : null;
+    };
+    const chosen = menu
+      ? (pick(menu.backgroundVideo) ?? pick(menu.backgroundImage))
+      : pick(url);
+    const wants = menu ? !!(menu.backgroundVideo || menu.backgroundImage) : !!url;
+    const src: CanvasImageSource | null = chosen ? chosen[0] : null;
+    const sw = chosen ? chosen[1] : 0;
+    const sh = chosen ? chosen[2] : 0;
 
     if (menu) {
-      // The menu wants a rectangle painted for it. Prefer the video (cover
-      // fit, cropped) so the overlay sits on top of moving pixels; otherwise
-      // clear to black — drawMeleeMenu paints its own starfield when there's
-      // no video underneath.
-      if (menu.backgroundVideo && src) {
-        const k = Math.max(canvas.width / sw, canvas.height / sh);
+      /*
+       * Background first, UI on top.
+       *
+       * The video wins when the menu asks for one - that is the attract screen
+       * the tube plays until it is clicked. The still is the menu's own
+       * backdrop: a moving picture behind the plates fights them for
+       * attention, and the plates are what you are meant to be reading once
+       * you are in. Whichever is chosen is drawn COVER-fit by default, so it
+       * fills the tube and the crop falls off the edges rather than
+       * letterboxing - see `backgroundFit` for when that is the wrong call.
+       */
+      if (wants && src) {
+        const contain = menu.backgroundFit === "contain";
+        const k = contain
+          ? Math.min(canvas.width / sw, canvas.height / sh)
+          : Math.max(canvas.width / sw, canvas.height / sh);
         const w = sw * k;
         const h = sh * k;
+        // Contain leaves bars, and they have to be painted: the canvas still
+        // holds the previous frame, so an unpainted margin keeps whatever was
+        // there before - on the attract loop, a smear of the last frame.
+        if (contain) {
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
         ctx.imageSmoothingEnabled = true;
         ctx.drawImage(src, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
-      } else if (menu.backgroundVideo) {
-        // Video not ready yet — clear so we don't hold last frame.
+      } else if (wants) {
+        // Not decoded yet - clear so we don't hold the last frame of whatever
+        // was on the tube before.
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
-      drawCrtMenu(ctx, canvas.width, canvas.height, clock.elapsedTime, menu);
+      // hideUi: background only. This is the first screen - the video plays
+      // with nothing drawn over it, and the plates arrive on the click.
+      if (!menu.hideUi) {
+        // Into logical space: the whole HUD is authored against `width` x
+        // `height`, whatever the texture is actually sized at.
+        ctx.setTransform(SCREEN_SS, 0, 0, SCREEN_SS, 0, 0);
+        drawCrtMenu(ctx, width, height, clock.elapsedTime, menu, (u) => {
+          const el = mediaRef.current.get(u);
+          if (!el) return null;
+          if (el instanceof HTMLVideoElement) return el.readyState >= 2 ? el : null;
+          return el.complete && el.naturalWidth ? el : null;
+        });
+      }
+      hoverLift();
       texture.needsUpdate = true;
       return;
     }
@@ -1267,6 +2104,7 @@ function useScreenTexture(
     const h = sh * k;
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(src, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+    hoverLift();
     texture.needsUpdate = true;
   });
 
@@ -1303,6 +2141,15 @@ export interface CrtLightConfig {
    *  the glass falls back to when there is no picture - so the light can be
    *  dialled without changing how a dead screen reads. */
   color?: string;
+  /** Throw real shadows from this tube: whatever stands in the cone gets its
+   *  silhouette laid out behind it. One depth pass - a spot's shadow is a
+   *  single frustum, not a point light's six faces - but it is still a whole
+   *  extra render of the casters each frame, so it is off unless asked for. */
+  castShadow?: boolean;
+  /** Hook to shape that shadow map. The scene owns the quality settings (they
+   *  are shared with the camp's lamps), and CampProps cannot import them back
+   *  without a cycle, so the caller reaches in here instead. */
+  tuneShadow?: (light: THREE.SpotLight) => void;
 }
 
 export function RetroCrtTv({
@@ -1313,6 +2160,8 @@ export function RetroCrtTv({
   seed = 0,
   light: lightCfg = {},
   onScreenClick,
+  onScreenHover,
+  hot = false,
 }: {
   position?: [number, number, number];
   rotationY?: number;
@@ -1320,13 +2169,32 @@ export function RetroCrtTv({
   screen?: CrtScreen;
   seed?: number;
   light?: CrtLightConfig;
+  /** Fired as the pointer moves across the picture, with the UV under it, and
+   *  null when it leaves. Lets the caller light whatever is under it. */
+  onScreenHover?: (uv: { x: number; y: number } | null) => void;
   /** Fired when the picture itself is clicked, not the chassis, with the UV
    *  of the hit so the caller can work out what was under the pointer.
    *  Null when three didn't hand us one (no uv attribute on the hit). */
   onScreenClick?: (uv: { x: number; y: number } | null) => void;
+  /** True while clicking this tube does something - i.e. while it is still a
+   *  prop rather than a screen you are already inside. The picture lifts
+   *  under the pointer while it is set, the way the chassis does. */
+  hot?: boolean;
 }) {
+  const [glassHot, setGlassHot] = useState(false);
+  // `hot` drops its onPointerOver/Out handlers below rather than just
+  // ignoring them (see the JSX), so a pointer sitting on the glass at the
+  // exact moment `hot` goes false (clicking in) leaves glassHot stuck true -
+  // nothing is left to ever clear it. Harmless while hot stays false, since
+  // the picture's hover lift is gated on `hot &&` below too - but the
+  // moment the CRT is exited and `hot` comes back true, the stale flag lit
+  // the screen again with no real hover behind it. Same fix SelectableInner
+  // already uses for the chassis's own (separate) hover state.
+  useEffect(() => { if (!hot) setGlassHot(false); }, [hot]);
   const tint = screen.tint ?? "#8be8ff";
   const lightColor = lightCfg.color ?? tint;
+  const castShadow = lightCfg.castShadow ?? false;
+  const tuneShadow = lightCfg.tuneShadow;
   const glow = screen.glow ?? 1;
 
   const { scene: gltfScene } = useGLTF(LITTLE_TV_URL);
@@ -1337,15 +2205,23 @@ export function RetroCrtTv({
       if (m.isMesh) {
         m.castShadow = true;
         m.receiveShadow = true;
-        // Hide the model's flat screen mesh so our animated overlay isn't fighting it
-        // for the same pixels.
-        if (m.name.toLowerCase().includes("screen")) m.visible = false;
+        // Hide the model's flat screen mesh so our animated overlay isn't
+        // fighting it for the same pixels - and take it out of the raycast
+        // too. three's Raycaster tests LAYERS ONLY: `intersect()` in
+        // Raycaster.js never looks at `visible`, so an invisible mesh still
+        // registers hits. Left in, this one sits right where the picture plane
+        // does and can win the depth sort, which hands the click to the
+        // <Selectable> wrapper instead of to the screen.
+        if (m.name.toLowerCase().includes("screen")) {
+          m.visible = false;
+          m.raycast = () => null;
+        }
       }
     });
     return cloned;
   }, [gltfScene]);
 
-  const gifTex = useScreenTexture(screen.content, screen.menu);
+  const gifTex = useScreenTexture(screen.content, screen.menu, 256, 192, hot && glassHot);
   const scanlines = useScanlines();
 
   // Light shape: forward-firing spot (not a point). A point light lit
@@ -1373,6 +2249,17 @@ export function RetroCrtTv({
     }
   }, []);
 
+  // Shadow on, and shaped in the same breath - see the spotLight below for
+  // why the two cannot be separated. No dep array: the quality knobs live in
+  // the caller's config and change under a slider, and re-applying them is a
+  // handful of property writes.
+  useEffect(() => {
+    const light = lightRef.current;
+    if (!light) return;
+    light.castShadow = castShadow;
+    if (castShadow) tuneShadow?.(light);
+  });
+
   useFrame(({ clock }) => {
     const t = clock.elapsedTime + seed * 3.1;
     // mains hum: a small, fast flicker so the throw never sits perfectly still
@@ -1392,7 +2279,20 @@ export function RetroCrtTv({
   const lightZ = SCREEN_CENTER[2] + forwardOffset;
 
   return (
-    <group position={position} rotation={[0, rotationY, 0]} scale={scale} name="crt">
+    <group
+      position={position}
+      rotation={[0, rotationY, 0]}
+      scale={scale}
+      name="crt"
+      /*
+       * Hover for the WHOLE tube, cabinet and glass together, rather than per
+       * mesh. Point at any part of it and the picture lifts here while the
+       * <Selectable> wrapping this group lights the chassis off the same
+       * pointerover - one object, one highlight.
+       */
+      onPointerOver={hot ? () => setGlassHot(true) : undefined}
+      onPointerOut={hot ? () => setGlassHot(false) : undefined}
+    >
       <primitive object={chassis} />
       {/* the picture — unlit, so scene lighting can never dim it */}
       <mesh
@@ -1401,16 +2301,72 @@ export function RetroCrtTv({
         // bubbling to the Selectable wrapper, which is what selects the tube
         // in the lab. That handler stops it, so nothing behind is hit either.
         onClick={onScreenClick ? (e) => onScreenClick(e.uv ? { x: e.uv.x, y: e.uv.y } : null) : undefined}
+        /*
+         * Deliberately NOT stopping propagation, and this one is subtle.
+         *
+         * r3f derives onPointerOver from the MOVE pass: for each hit it walks
+         * up the parent chain, and a handler that stops propagation `break`s
+         * that walk (events-*.js, "Event bubbling may be interrupted by
+         * stopPropagation"). This handler is the deepest one on the tube, so
+         * stopping here meant no ancestor ever saw the move - the <Selectable>
+         * around the tube never got its pointerover, and the chassis stayed
+         * dark the moment the pointer crossed onto the glass. Worse, the move
+         * pass had already un-hovered it, so pointing at the screen actively
+         * TURNED OFF the highlight.
+         */
+        onPointerMove={onScreenHover
+          ? (e) => { onScreenHover(e.uv ? { x: e.uv.x, y: e.uv.y } : null); }
+          : undefined}
+        // Leaving the GLASS specifically drops the menu's own hover state -
+        // the plate under the pointer stops being lit. The tube's glow is a
+        // separate thing, handled on the group above.
+        onPointerOut={onScreenHover ? () => onScreenHover(null) : undefined}
       >
         <planeGeometry args={SCREEN_SIZE} />
         <meshBasicMaterial
           map={hasPicture ? gifTex : undefined}
-          color={hasPicture ? "#ffffff" : tint}
+          /*
+           * The picture is UNLIT, so the emissive lift every other prop wears
+           * cannot touch it - a MeshBasicMaterial has no `emissive` at all.
+           * Its colour multiplies the texture instead, so the lift is a colour
+           * a little past white.
+           *
+           * A THREE.Color rather than a hex string, and that is the whole
+           * trick: a string goes through setStyle, which is sRGB-decoded and
+           * can never exceed white. A Color is copied verbatim, so 1.5 stays
+           * 1.5 and the picture reads about a fifth brighter once the frame is
+           * encoded back to sRGB. `toneMapped` is already false here, so
+           * nothing pulls it back down again.
+           *
+           * Note what this does NOT do: it scales the FRAME, so black stays
+           * black and the bright parts carry the lift. Adding light instead -
+           * a sheet over the glass - would raise the menu's black background
+           * too, and that reads as the tube throwing more light rather than as
+           * the picture answering the pointer.
+           */
+          color={hasPicture ? SCREEN_PLAIN : tint}
           toneMapped={false}
         />
       </mesh>
-      {/* scanlines just in front of the picture */}
-      <mesh position={[SCREEN_CENTER[0], SCREEN_CENTER[1], SCREEN_CENTER[2] + 0.002]}>
+      {/*
+        Scanlines just in front of the picture.
+
+        `raycast` is disabled, and that is what makes the screen clickable at
+        all. This plane sits 2 mm PROUD of the picture, so it is always the
+        nearer hit. It carries no handler of its own, so r3f resolves it to the
+        nearest ancestor that does - the <Selectable> wrapping the whole tube -
+        whose onClick calls stopPropagation to keep the lab from selecting
+        whatever is behind it. In r3f's event loop that sets `stopped` and
+        `break`s out of the intersection list (events-*.js: "Event bubbling may
+        be interrupted by stopPropagation"), so the picture plane behind it was
+        never reached and onScreenClick never fired. The overlay is pure
+        decoration; taking it out of the raycast costs nothing and hands every
+        click on the glass to the picture.
+      */}
+      <mesh
+        raycast={() => null}
+        position={[SCREEN_CENTER[0], SCREEN_CENTER[1], SCREEN_CENTER[2] + 0.002]}
+      >
         <planeGeometry args={SCREEN_SIZE} />
         <meshBasicMaterial
           color="#000000"
@@ -1421,7 +2377,15 @@ export function RetroCrtTv({
           toneMapped={false}
         />
       </mesh>
-      {/* Forward-firing spot: only lights what's IN FRONT of the screen. */}
+      {/*
+        Forward-firing spot: only lights what's IN FRONT of the screen.
+
+        castShadow is set imperatively rather than as a prop because the map
+        has to be shaped in the same breath - near/far especially. A spot's
+        shadow camera defaults to near 0.5, and everything this tube lights is
+        closer than that, so switched on without tuning it produces a perfectly
+        correct shadow map of nothing at all.
+      */}
       <spotLight
         ref={lightRef}
         position={[lightX, lightY, lightZ]}
