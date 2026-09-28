@@ -58,6 +58,120 @@ function applyRemoteVolume(call: VoiceCall | null, volume: number): void {
   if (audio) audio.volume = clampVolume(volume);
 }
 
+/**
+ * Real-time lip-sync features from one analyser frame. No phoneme recognition -
+ * the approach the browser lip-sync libraries (wawa-lipsync, lipsync-engine)
+ * and the avatar write-ups converge on: three continuous mouth parameters
+ * instead of 15 discrete visemes, because a stylized low-poly face can only
+ * show ~three shapes anyway and continuous values never "pop".
+ *
+ * Calibrated offline against recorded speech (three macOS voices, low/mid/high
+ * pitched, isolated words beet/boot/bot/bait/boat/bat/see/sue/saw/... plus
+ * running sentences) with a Python replica of this exact chain - see
+ * .lipsync-renders/lip2.py. What that showed, and why the features are what
+ * they are:
+ *
+ *   open  - NOT raw loudness. Running speech barely dips in RMS between
+ *           syllables, so a loudness-driven jaw plateaus half-open. Instead:
+ *           60% "syllabic contrast" (fast envelope above its own ~300ms
+ *           floor) + 40% level vs a slowly-decaying peak (automatic gain),
+ *           scaled by F1 height - share of sub-1kHz energy above 500Hz, ~0 for
+ *           ee/oo/m, 0.4-0.65 for ah/aw - and cut on hiss (s/sh/f). Gives
+ *           ~3-4 real closures per second of speech, i.e. syllable rate.
+ *   wide / round - F2 brightness, log10(E[1.4-3.2kHz] / E[250Hz-1kHz]),
+ *           relative to THIS voice's running median. (A power-weighted
+ *           spectral centroid, the first thing tried, just tracks pitch: ~400Hz
+ *           medians, useless.) Round vowels sit ~1.3-1.7 decades below front
+ *           ones in every voice tested, but the absolute values shift by a
+ *           decade between voices - hence the per-voice median. Wide needs a
+ *           LOW F1 as well (ee/ih, not ah); round needs dark + low-ish F1
+ *           (oo/oh/w). Shapes fade in over the first ~2.5s of voiced audio
+ *           while the median settles, so a cold start can't pucker an "ee".
+ *   onset - fast/slow envelope ratio crossing a threshold = a new syllable,
+ *           with a refractory gap so one syllable can't fire twice. Drives the
+ *           head nods, blink timing and per-syllable variation in the scene.
+ */
+function createLipSyncAnalyzer(sampleRate: number, fftSize: number) {
+  const binHz = sampleRate / fftSize;
+  const bin = (hz: number) => Math.max(1, Math.round(hz / binHz));
+  const B = {
+    b150: bin(150), b250: bin(250), b500: bin(500), b1000: bin(1000),
+    b1400: bin(1400), b3200: bin(3200), b3500: bin(3500), b7500: bin(7500),
+  };
+  const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+  let last = 0;
+  let peak = 0.05;
+  let fast = 0;
+  let slow = 0;
+  let floor = 0;
+  let median = -1.5;     // log10 F2 brightness; typical mid-voice starting point
+  let voicedTime = 0;
+  let lastOnset = 0;
+  // power summed over [a, b) bins, from the analyser's dB spectrum
+  const band = (db: Float32Array, a: number, b: number) => {
+    let sum = 1e-12;
+    for (let i = a; i < b && i < db.length; i++) {
+      const v = db[i];
+      if (Number.isFinite(v)) sum += Math.pow(10, v / 10);
+    }
+    return sum;
+  };
+  return (rms: number, spectrumDb: Float32Array, now: number) => {
+    const dt = last ? Math.min(0.1, (now - last) / 1000) : 1 / 60;
+    last = now;
+    // envelopes (time-constant based, frame-rate independent)
+    fast += (rms - fast) * (1 - Math.exp(-dt / 0.025));
+    slow += (rms - slow) * (1 - Math.exp(-dt / 0.18));
+    peak = Math.max(rms, peak * Math.exp(-dt * 0.35), 0.035);
+    floor = fast < floor ? fast : floor + (fast - floor) * (1 - Math.exp(-dt / 0.3));
+
+    const voiced = rms > 0.012;
+    const level = clamp01((rms - 0.012) / Math.max(0.02, peak * 0.8 - 0.012));
+    const contrast = clamp01((fast - floor) / Math.max(0.01, peak * 0.8 - floor));
+
+    const lo = band(spectrumDb, B.b150, B.b500);
+    const f1 = band(spectrumDb, B.b500, B.b1000);
+    const f2 = band(spectrumDb, B.b1400, B.b3200);
+    const base = band(spectrumDb, B.b250, B.b1000);
+    const hiss = band(spectrumDb, B.b3500, B.b7500);
+    const total = band(spectrumDb, B.b150, B.b7500);
+    const f1Open = clamp01(f1 / (lo + f1));
+    const brightness = Math.log10(f2 / base);
+    const sibilant = clamp01((hiss / total - 0.08) / 0.25);
+
+    // Per-voice running median of F2 brightness over vowel nuclei: moves a
+    // fixed step toward each sample (converges on the median, shrugs off the
+    // outliers consonant transitions throw), fast for the first 2.5s.
+    if (voiced && level > 0.3) {
+      voicedTime += dt;
+      const rate = voicedTime < 2.5 ? 2.0 : 0.6;
+      median += rate * dt * (brightness > median ? 1 : -1);
+    }
+    const dev = brightness - median;
+    const confidence = 0.35 + 0.65 * clamp01(voicedTime / 2.5);
+
+    const drive = 0.4 * level + 0.6 * contrast;
+    const open = voiced
+      ? clamp01(Math.pow(drive, 0.85) * (0.55 + 0.75 * f1Open) * (1 - 0.6 * sibilant))
+      : 0;
+    const wide = voiced
+      ? clamp01(clamp01((dev + 0.4) / 0.5) * clamp01(1 - 1.8 * f1Open) + sibilant * 0.8) * confidence
+      : 0;
+    const round = voiced
+      ? clamp01((-dev - 0.6) / 0.5) * clamp01(1.3 - 1.3 * f1Open) * confidence
+      : 0;
+
+    let onset = false;
+    let onsetStrength = 0;
+    if (fast > 0.02 && fast > slow * 1.35 && now - lastOnset > 160) {
+      onset = true;
+      lastOnset = now;
+      onsetStrength = clamp01((fast / Math.max(slow, 1e-4) - 1.35) / 1.2 * 0.6 + (fast / peak) * 0.5);
+    }
+    return { open, wide, round, onset, onsetStrength };
+  };
+}
+
 const parseEventData = (event: MessageEvent<string>) => {
   try {
     const parsed: unknown = JSON.parse(event.data);
@@ -135,6 +249,9 @@ export function useBearVoiceAgent({
     }
     voiceRef.current.isRemoteSpeaking = false;
     voiceRef.current.remoteAudioLevel = 0;
+    voiceRef.current.mouthOpen = 0;
+    voiceRef.current.mouthWide = 0;
+    voiceRef.current.mouthRound = 0;
     voiceRef.current.activeBearId = "back_left_log";
     voiceRef.current.segmentId = 0;
     voiceRef.current.speakerSource = "default";
@@ -232,10 +349,17 @@ export function useBearVoiceAgent({
         applyRemoteVolume(call, speechVolumeRef.current.master * trim);
         const source = audioContext.createMediaStreamSource(stream);
         const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 256;
+        // 1024 at 48kHz = ~47Hz bins: fine enough to separate F1 (~300-900Hz)
+        // from F2 (~900-2500Hz), which is what the mouth-shape features need.
+        // Light analyser smoothing only - the scene smooths per channel with
+        // its own attack/release, and double smoothing reads as lag.
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.25;
         source.connect(analyser);
         audioContextRef.current = audioContext;
         const samples = new Float32Array(analyser.fftSize);
+        const spectrum = new Float32Array(analyser.frequencyBinCount);
+        const lipsync = createLipSyncAnalyzer(audioContext.sampleRate, analyser.fftSize);
         let lastAudibleAt = 0;
         let lastStatePublishAt = 0;
 
@@ -244,6 +368,15 @@ export function useBearVoiceAgent({
           let sum = 0;
           for (const sample of samples) sum += sample * sample;
           const rms = Math.sqrt(sum / samples.length);
+          analyser.getFloatFrequencyData(spectrum);
+          const lip = lipsync(rms, spectrum, performance.now());
+          voiceRef.current.mouthOpen = lip.open;
+          voiceRef.current.mouthWide = lip.wide;
+          voiceRef.current.mouthRound = lip.round;
+          if (lip.onset) {
+            voiceRef.current.syllable = (voiceRef.current.syllable ?? 0) + 1;
+            voiceRef.current.syllableStrength = lip.onsetStrength;
+          }
           const now = Date.now();
           if (rms > 0.012) lastAudibleAt = now;
           const speaking = now - lastAudibleAt < 350;

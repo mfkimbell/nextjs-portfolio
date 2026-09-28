@@ -3,7 +3,7 @@
 /**
  * Small campsite audio surface. Two hooks and one function:
  *
- *   useCampsiteAudioLoop(url, { volume, enabled, liveMultiplier?, fadeMs? })
+ *   useCampsiteAudioLoop(url, { volume, enabled, liveMultiplier?, fadeMs?, panRef? })
  *     Long-running background loop (fire crackling, banjo, CRT music).
  *     Creates a single HTMLAudioElement, sets loop=true, and drives its
  *     volume off one continuous requestAnimationFrame loop: base `volume` x
@@ -16,6 +16,15 @@
  *     starts after the first user gesture - modern browsers block
  *     silent-page audio, and the title-card click on entry is the gesture
  *     we use to unlock it.
+ *
+ *     `panRef` opts a loop into stereo panning: pass a ref the CALLER
+ *     updates every frame with a -1 (hard left) .. 1 (hard right) value
+ *     (e.g. computed from an emitter's world position relative to the
+ *     camera - see CampfireAnimals' banjo pan tracker). Only loops that
+ *     pass panRef get routed through Web Audio at all (createMediaElementSource
+ *     + a StereoPannerNode) - a loop without it keeps playing exactly as
+ *     before, straight out of the <audio> element, so this is zero-risk for
+ *     fire crackling / CRT music / anything that doesn't ask for it.
  *
  *   useCampsiteOneShot(url)
  *     Returns a play(volume, rate?) callback for short cues (swoosh, click,
@@ -47,10 +56,32 @@ function installGestureUnlock() {
     window.removeEventListener("touchstart", unlock);
     gestureListeners.forEach((fn) => fn());
     gestureListeners.clear();
+    // Same gesture that unlocks <audio> autoplay also has to resume the
+    // shared Web Audio context - it's born "suspended" until one lands.
+    sharedAudioContext?.resume().catch(() => {});
   };
   window.addEventListener("pointerdown", unlock, { once: true });
   window.addEventListener("keydown", unlock, { once: true });
   window.addEventListener("touchstart", unlock, { once: true });
+}
+
+/**
+ * One AudioContext for the whole page, created lazily (constructing it is
+ * fine before a gesture; only *resuming* it needs one, handled above and in
+ * getAudioContext()). Shared because a page is only allowed a small, finite
+ * number of these - every panned loop reuses this one rather than making
+ * its own.
+ */
+let sharedAudioContext: AudioContext | null = null;
+function getAudioContext(): AudioContext | null {
+  if (typeof window === "undefined") return null;
+  const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctor) return null;
+  if (!sharedAudioContext) sharedAudioContext = new Ctor();
+  if (sharedAudioContext.state === "suspended" && gestureUnlocked) {
+    sharedAudioContext.resume().catch(() => {});
+  }
+  return sharedAudioContext;
 }
 
 function onGesture(cb: () => void) {
@@ -64,6 +95,33 @@ function clampVolume(v: number) {
   if (v < 0) return 0;
   if (v > 1) return 1;
   return v;
+}
+
+/**
+ * Every volume knob in the lab (master, banjo, fire crackling, clicks,
+ * hover, swoosh, ...) is a 0..1 "how loud does this feel" slider, but
+ * HTMLMediaElement.volume is LINEAR amplitude, and loudness perception is
+ * not linear - amplitude 0.2 only measures about -14dB down, which barely
+ * reads as "quiet" against a normalized source file (measured banjo.mp3:
+ * peaks at -0dB, so slider .2 x default master .7 = .14 linear = only
+ * -17dB, still clearly audible). This is why "everything at .2" still
+ * sounded loud - the knobs were multiplying correctly, they just weren't
+ * cutting the PERCEIVED level anywhere near as much as the number implied.
+ *
+ * Cubing the combined slider value before it reaches a.volume/node.volume
+ * fixes that: same combined value, ~-51dB down instead of ~-17dB. Safe to
+ * apply to an already-multiplied value like `master * bananjoVolume`
+ * because (a*b)^3 == a^3*b^3 - cubing the product is identical to cubing
+ * each slider and then multiplying them, so every call site that passes in
+ * `master * config.xVolume` gets this for free with no other code changes.
+ * Deliberately NOT applied to liveMultiplier/gainRef in the loop below -
+ * those are structural ramps (fade transitions, the CRT zoom boost that
+ * goes above 1), not user-facing loudness preferences, and cubing them
+ * alongside the slider value would distort those separately-tuned curves.
+ */
+function perceptualGain(v: number) {
+  const c = clampVolume(v);
+  return c * c * c;
 }
 
 /** How long a loop's enabled/disabled transition takes to fade by default -
@@ -84,6 +142,7 @@ export function useCampsiteAudioLoop(
     enabled,
     liveMultiplier,
     fadeMs = DEFAULT_LOOP_FADE_MS,
+    panRef,
   }: {
     volume: number;
     enabled: boolean;
@@ -98,9 +157,14 @@ export function useCampsiteAudioLoop(
     /** Fade time, in ms, for the enabled/disabled transition. 0 snaps
      *  instantly instead of crossfading. */
     fadeMs?: number;
+    /** -1 (hard left) .. 1 (hard right), updated every frame by the caller.
+     *  Presence alone opts this loop into the Web Audio graph - see the
+     *  header comment. */
+    panRef?: MutableRefObject<number>;
   }
 ) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pannerRef = useRef<StereoPannerNode | null>(null);
   // 0..1, eased toward `enabled` over fadeMs. A plain ref rather than state:
   // it moves every frame a transition is running, and driving that through
   // React would mean a re-render per frame for no reason - nothing else
@@ -114,12 +178,38 @@ export function useCampsiteAudioLoop(
     a.loop = true;
     a.preload = "auto";
     audioRef.current = a;
+
+    // Only stand up the Web Audio graph for loops that actually asked to be
+    // panned - createMediaElementSource can only be called once per element
+    // and, once called, that element's sound ONLY comes out through
+    // whatever the graph connects to, so an un-panned loop must never touch
+    // this path. a.volume (the fade/gain logic below) still applies as a
+    // pre-graph stage either way, so nothing about the existing volume
+    // behavior changes for a panned loop.
+    if (panRef) {
+      const ctx = getAudioContext();
+      if (ctx) {
+        try {
+          const source = ctx.createMediaElementSource(a);
+          const panner = ctx.createStereoPanner();
+          source.connect(panner);
+          panner.connect(ctx.destination);
+          pannerRef.current = panner;
+        } catch {
+          // Web Audio unavailable/blocked for this element - loop still
+          // plays, just centered instead of panned.
+          pannerRef.current = null;
+        }
+      }
+    }
+
     return () => {
       a.pause();
       a.src = "";
       audioRef.current = null;
+      pannerRef.current = null;
     };
-  }, [url]);
+  }, [url, panRef]);
 
   // One continuous loop for the life of the hook, owning a.volume and
   // a.play()/a.pause() outright. This used to be three separate effects (set
@@ -154,10 +244,14 @@ export function useCampsiteAudioLoop(
           playingRef.current = true;
           tryPlay();
         }
-        a.volume = clampVolume(volume) * (liveMultiplier ? liveMultiplier.current : 1) * gainRef.current;
+        a.volume = perceptualGain(volume) * (liveMultiplier ? liveMultiplier.current : 1) * gainRef.current;
         if (gainRef.current <= 0 && target === 0 && playingRef.current) {
           a.pause();
           playingRef.current = false;
+        }
+        if (pannerRef.current && panRef) {
+          const p = panRef.current;
+          pannerRef.current.pan.value = Number.isFinite(p) ? Math.max(-1, Math.min(1, p)) : 0;
         }
       }
       raf = requestAnimationFrame(tick);
@@ -167,7 +261,7 @@ export function useCampsiteAudioLoop(
       cancelAnimationFrame(raf);
       offGesture?.();
     };
-  }, [url, volume, enabled, liveMultiplier, fadeMs]);
+  }, [url, volume, enabled, liveMultiplier, fadeMs, panRef]);
 }
 
 /**
@@ -188,7 +282,7 @@ export function useCampsiteOneShot(url: string) {
   return useCallback((volume: number, rate = 1) => {
     const template = templateRef.current;
     if (!template) return;
-    const v = clampVolume(volume);
+    const v = perceptualGain(volume);
     if (v <= 0) return;
     const node = template.cloneNode(true) as HTMLAudioElement;
     node.volume = v;

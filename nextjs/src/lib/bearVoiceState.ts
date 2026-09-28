@@ -15,6 +15,21 @@ export type BearVoiceState = {
   speakerSource?: "default" | "backend";
   /** Lets future transport interruptions end a segment without inventing a new speaker. */
   isInterrupted?: boolean;
+  /**
+   * Lip-sync features, 0..1, derived per audio frame from the remote stream's
+   * spectrum (see useBearVoiceAgent's measure()). Raw targets - the scene does
+   * its own attack/release smoothing so this stays cheap and frame-agnostic.
+   *   mouthOpen  - jaw opening: loudness vs a rolling peak, boosted by F1 energy
+   *   mouthWide  - brighter-than-this-voice's-average spectrum (E, I, S, T)
+   *   mouthRound - darker-than-average spectrum (O, U, W)
+   */
+  mouthOpen?: number;
+  mouthWide?: number;
+  mouthRound?: number;
+  /** Increments once per detected syllable onset - drives nods, blinks, variation. */
+  syllable?: number;
+  /** 0..1 strength of the most recent onset (stressed syllables are bigger). */
+  syllableStrength?: number;
 };
 
 export type BearVoiceStateRef = MutableRefObject<BearVoiceState>;

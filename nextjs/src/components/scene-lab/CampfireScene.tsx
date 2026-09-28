@@ -7369,6 +7369,34 @@ function Animal({
   const mouthMixerQRef = useRef(new THREE.Quaternion());
   const mouthJawQRef = useRef(new THREE.Quaternion());
   const mouthEnvelopeRef = useRef(0);
+  // Face morphs authored in Blender (scripts/bear-mouth/bear_mouth_shapes.blend,
+  // injected by scripts/add_bear_mouth_morphs.py): jawOpen / mouthWide /
+  // mouthRound / eyeBlink. Null on a GLB that predates them - the jaw-bone
+  // path below is the fallback.
+  const faceMeshRef = useRef<{
+    influences: number[];
+    jaw: number; wide: number; round: number; blink: number;
+  } | null>(null);
+  // Per-bear talking state: smoothed mouth channels, the syllable-driven nod
+  // spring, blink scheduling. One object, mutated in place every frame.
+  const talkRef = useRef({
+    open: 0, wide: 0, round: 0,
+    gain: 1,
+    lastSyllable: -1,
+    nod: 0, nodVel: 0,
+    speak: 0,            // 0..1 eased "is speaking" blend for sway
+    t: seed * 1.37,
+    blinkClock: 1.5 + ((seed * 0.618) % 1) * 3,
+    blinkT: -1,          // <0 = not blinking; else seconds into the blink
+    doubleBlink: false,
+    // secondary motion
+    wasSpeaking: false,
+    silentFor: 10,       // seconds since this bear last spoke
+    breath: 0,           // 1 -> 0 after a phrase starts: chest swell
+    ear: 0,              // 1 -> 0 after a stressed syllable: ear flick
+    listen: 0, listenVel: 0, listenClock: 1.5,   // slow "mm-hm" nods while the other bear talks
+  });
+  const talkRng = useMemo(() => seededRandom(311 + seed * 29), [seed]);
 
   // Banjo-bear arm override: eight arm bones + their rest quaternions, so the
   // picking loop can compose `rest * userEuler` each frame and hard-replace
@@ -7426,6 +7454,22 @@ function Animal({
     handRRef.current = null;
     handRRestQRef.current = null;
     mouthBoneRef.current = null;
+    faceMeshRef.current = null;
+
+    // Every bear GLB carrying the Blender face morphs gets them wired up -
+    // the blink runs on all of them, the mouth only moves on voice bears.
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      const dict = m.morphTargetDictionary;
+      if (faceMeshRef.current || !m.isMesh || !dict || dict.jawOpen === undefined || !m.morphTargetInfluences) return;
+      faceMeshRef.current = {
+        influences: m.morphTargetInfluences,
+        jaw: dict.jawOpen,
+        wide: dict.mouthWide ?? -1,
+        round: dict.mouthRound ?? -1,
+        blink: dict.eyeBlink ?? -1,
+      };
+    });
 
     // The model has no shared skeleton between placements; cache its jaw once
     // so voice motion can layer over the mixer's current jaw pose each frame.
@@ -7557,6 +7601,11 @@ function Animal({
   // Only the bears take part; everything else ignores all of this.
   const social = placement.animation === "sit_log";
   const headRef = useRef<THREE.Object3D | null>(null);
+  // chest is a leaf bone (shoulders/head hang off `center`), so scaling it
+  // swells the ribcage without dragging the arms or head along.
+  const chestRef = useRef<THREE.Object3D | null>(null);
+  const earLRef = useRef<THREE.Object3D | null>(null);
+  const earRRef = useRef<THREE.Object3D | null>(null);
   const glance = useRef({ t: 0, next: 2.5 + seed * 1.7, phase: "wait" as "wait" | "turn" | "hold" | "back", w: 0, target: "" });
   const tmpV = useMemo(() => new THREE.Vector3(), []);
   const tmpV2 = useMemo(() => new THREE.Vector3(), []);
@@ -7567,8 +7616,19 @@ function Animal({
   useEffect(() => {
     if (!social) return;
     let head: THREE.Object3D | null = null;
-    model.traverse((o) => { if (o.name === "head") head = o; });
+    let chest: THREE.Object3D | null = null;
+    let earL: THREE.Object3D | null = null;
+    let earR: THREE.Object3D | null = null;
+    model.traverse((o) => {
+      if (o.name === "head") head = o;
+      else if (o.name === "chest") chest = o;
+      else if (o.name === "ear01_L") earL = o;
+      else if (o.name === "ear01_R") earR = o;
+    });
     headRef.current = head;
+    chestRef.current = chest;
+    earLRef.current = earL;
+    earRRef.current = earR;
   }, [social, model]);
 
   useEffect(() => {
@@ -7833,24 +7893,124 @@ function Animal({
       for (const name of ROCKING_CHAIR_BONE_NAMES) applyPart(name);
     }
 
-    const mouth = mouthBoneRef.current;
+    // ---- talking ------------------------------------------------------------
+    // Research-backed rather than a loudness flap: three continuous mouth
+    // channels (open / wide / round) from the voice hook's spectral analysis,
+    // each eased with its own attack/release (jaw snaps open fast and closes a
+    // bit slower, lip SHAPE changes slower still - lips lag the jaw in real
+    // speech), a little per-syllable size variation so repeated syllables don't
+    // look stamped, syllable-onset nods on a damped spring, and blinks biased
+    // toward emphasis. Everything writes after the mixer, so sit_log keeps
+    // playing underneath.
     const voice = bearVoiceRef?.current;
-    if (mouth) {
-      const isActiveSpeaker = voice?.isRemoteSpeaking && placement.bearId === voice.activeBearId;
-      const rms = voice?.remoteAudioLevel ?? 0;
-      const target = isActiveSpeaker && rms > 0.01
-        ? Math.min(1, (rms - 0.01) / 0.045)
-        : 0;
-      const envelope = mouthEnvelopeRef.current;
-      const rate = target > envelope ? 20 : 16;
-      const nextEnvelope = envelope + (target - envelope) * (1 - Math.exp(-rate * Math.min(delta, 0.1)));
-      mouthEnvelopeRef.current = nextEnvelope < 0.001 ? 0 : nextEnvelope;
+    const talk = talkRef.current;
+    const face = faceMeshRef.current;
+    const dtTalk = Math.min(delta, 0.1);
+    talk.t += dtTalk;
+    const isVoiceBear = placement.bearId === "back_left_log" || placement.bearId === "back_right_log";
+    const speaking = Boolean(isVoiceBear && voice?.isRemoteSpeaking && placement.bearId === voice.activeBearId);
+    const ease = (cur: number, target: number, up: number, down: number) =>
+      cur + (target - cur) * (1 - Math.exp(-(target > cur ? up : down) * dtTalk));
 
-      // Capture the mixer result first, then apply the jaw delta. This preserves
-      // any baked/clip mouth pose instead of snapping back to a static rest pose.
-      mouthMixerQRef.current.copy(mouth.quaternion);
-      mouthJawQRef.current.setFromAxisAngle(FACE_RIGHT_LOCAL, mouthEnvelopeRef.current * 0.075);
-      mouth.quaternion.copy(mouthMixerQRef.current).multiply(mouthJawQRef.current);
+    // syllable onsets -> per-syllable gain, nod impulse, emphasis blink, ear flick
+    const syl = voice?.syllable ?? 0;
+    if (speaking && talk.lastSyllable >= 0 && syl !== talk.lastSyllable) {
+      const strength = voice?.syllableStrength ?? 0.5;
+      talk.gain = 0.82 + talkRng() * 0.3 + strength * 0.18;
+      talk.nodVel += 0.6 + strength * 0.8;           // +angle = chin down (FACE_RIGHT_LOCAL)
+      if (strength > 0.65 && talk.blinkT < 0 && talkRng() < 0.3) { talk.blinkT = 0; talk.doubleBlink = false; }
+      if (strength > 0.75 && talk.ear < 0.2) talk.ear = 1;
+    }
+    talk.lastSyllable = syl; // also resyncs while silent so a stale count never fires a burst
+
+    // a phrase starting after a real pause swells the chest (the breath you
+    // take to speak), then settles
+    if (speaking && !talk.wasSpeaking && talk.silentFor > 0.5) talk.breath = 1;
+    talk.silentFor = speaking ? 0 : talk.silentFor + dtTalk;
+    talk.wasSpeaking = speaking;
+    talk.breath = Math.max(0, talk.breath - dtTalk / 0.7);
+    talk.ear = Math.max(0, talk.ear - dtTalk / 0.28);
+
+    // the OTHER voice bear, while this one talks: slow acknowledging nods on
+    // a softer, slower spring (~0.9Hz) than the speaker's syllable nods
+    const listening = Boolean(isVoiceBear && voice?.isRemoteSpeaking && placement.bearId !== voice.activeBearId);
+    if (listening) {
+      talk.listenClock -= dtTalk;
+      if (talk.listenClock <= 0) {
+        talk.listenVel += 0.28 + talkRng() * 0.22;
+        talk.listenClock = 2.2 + talkRng() * 3.4;
+      }
+    } else {
+      talk.listenClock = 1 + talkRng() * 1.5;
+    }
+    talk.listenVel += (-talk.listen * 30 - talk.listenVel * 6) * dtTalk;
+    talk.listen += talk.listenVel * dtTalk;
+
+    // mouth channels
+    let rawOpen = 0, rawWide = 0, rawRound = 0;
+    if (speaking && voice) {
+      if (voice.mouthOpen !== undefined) {
+        rawOpen = voice.mouthOpen;
+        rawWide = voice.mouthWide ?? 0;
+        rawRound = voice.mouthRound ?? 0;
+      } else {
+        const rms = voice.remoteAudioLevel ?? 0;   // older hook: loudness only
+        rawOpen = rms > 0.01 ? Math.min(1, (rms - 0.01) / 0.045) : 0;
+      }
+    }
+    talk.open = ease(talk.open, Math.min(1, rawOpen * talk.gain), 32, 15);
+    talk.wide = ease(talk.wide, rawWide, 12, 8);
+    talk.round = ease(talk.round, rawRound, 12, 8);
+    talk.speak = ease(talk.speak, speaking ? 1 : 0, 4, 2);
+
+    // nod spring (integrated here, applied to the head in the social pass below)
+    talk.nodVel += (-talk.nod * 90 - talk.nodVel * 11) * dtTalk;
+    talk.nod += talk.nodVel * dtTalk;
+
+    // blink: idle rhythm every ~2.5-7s (a touch faster while talking),
+    // occasionally a double blink. 60ms close, 30ms hold, 90ms open.
+    let blink = 0;
+    if (talk.blinkT < 0) {
+      talk.blinkClock -= dtTalk;
+      if (talk.blinkClock <= 0) {
+        talk.blinkT = 0;
+        talk.doubleBlink = talkRng() < 0.15;
+        talk.blinkClock = speaking ? 1.8 + talkRng() * 2.8 : 2.5 + talkRng() * 4.5;
+      }
+    }
+    if (talk.blinkT >= 0) {
+      const b = talk.blinkT;
+      blink = b < 0.06 ? b / 0.06 : b < 0.09 ? 1 : b < 0.18 ? 1 - (b - 0.09) / 0.09 : 0;
+      talk.blinkT += dtTalk;
+      if (talk.blinkT >= 0.18) {
+        if (talk.doubleBlink) { talk.doubleBlink = false; talk.blinkT = -0.0001; talk.blinkClock = 0.08; }
+        else talk.blinkT = -1;
+      }
+    }
+
+    if (face) {
+      const inf = face.influences;
+      const openShape = Math.min(1, talk.open * 1.5);
+      let wide = talk.wide * (0.35 + 0.65 * openShape);
+      let round = talk.round * (0.45 + 0.55 * openShape);
+      if (wide + round > 1) { const k = 1 / (wide + round); wide *= k; round *= k; }
+      // Speech never uses the full roar: 0.9 of the authored jaw, and a pucker
+      // pulls the jaw in a little (lips round over a narrower opening).
+      inf[face.jaw] = talk.open * 0.9 * (1 - 0.25 * round);
+      if (face.wide >= 0) inf[face.wide] = wide;
+      if (face.round >= 0) inf[face.round] = round;
+      if (face.blink >= 0) inf[face.blink] = blink;
+    } else {
+      // Fallback for a GLB without the face morphs: the old jaw-bone tilt,
+      // with a usable range this time (the mouth bone only owns the 31-vertex
+      // lower-lip flap, so 0.075rad was invisible).
+      const mouth = mouthBoneRef.current;
+      if (mouth) {
+        mouthEnvelopeRef.current = talk.open;
+        mouthMixerQRef.current.copy(mouth.quaternion);
+        mouthJawQRef.current.setFromAxisAngle(FACE_RIGHT_LOCAL, mouthEnvelopeRef.current * 0.35);
+        mouth.quaternion.copy(mouthMixerQRef.current).multiply(mouthJawQRef.current);
+      }
     }
   });
 
@@ -7937,11 +8097,34 @@ function Animal({
         head.quaternion.slerp(tmpQ2, targetWeight);
       }
     }
-    if (isActiveSpeaker) {
-      // A small additive nod keeps the speaker alive without competing with the
-      // mixer, social-glance rotation, or the banjo/pose bone overrides.
-      tmpQ.setFromAxisAngle(FACE_RIGHT_LOCAL, Math.sin(state.clock.elapsedTime * 2.4) * 0.028);
+    // Talking head motion, additive on top of the mixer + glance: the
+    // syllable-driven nod spring (integrated in the mouth pass above) plus a
+    // slow, never-repeating yaw/roll drift while speaking - incommensurate
+    // sine frequencies so it never settles into a visible loop the way the
+    // old single 2.4rad/s wobble did.
+    const talk = talkRef.current;
+    if (talk.speak > 0.001 || Math.abs(talk.nod) > 1e-4 || Math.abs(talk.listen) > 1e-4) {
+      const tt = talk.t;
+      const sway = talk.speak;
+      tmpQ.setFromAxisAngle(FACE_RIGHT_LOCAL, talk.nod + talk.listen + sway * 0.012 * Math.sin(tt * 1.7 + 0.4));
       head.quaternion.multiply(tmpQ);
+      tmpQ.setFromAxisAngle(FACE_UP_LOCAL, sway * (0.045 * Math.sin(tt * 0.83 + seed) + 0.02 * Math.sin(tt * 2.21)));
+      head.quaternion.multiply(tmpQ);
+      tmpQ.setFromAxisAngle(FACE_FWD_LOCAL, sway * 0.025 * Math.sin(tt * 1.31 + 1.1));
+      head.quaternion.multiply(tmpQ);
+    }
+    // breath: a quick 0 -> 1 -> 0 swell of the chest after a phrase starts
+    const chest = chestRef.current;
+    if (chest && talk.breath > 0) {
+      chest.scale.multiplyScalar(1 + 0.04 * Math.sin(Math.PI * (1 - talk.breath)));
+    }
+    // ear flick on stressed syllables - direction doesn't matter much for a
+    // twitch, so both ears tip the same way about their own local X
+    if (talk.ear > 0) {
+      const flick = 0.22 * Math.sin(Math.PI * (1 - talk.ear));
+      tmpQ.setFromAxisAngle(FACE_RIGHT_LOCAL, flick);
+      earLRef.current?.quaternion.multiply(tmpQ);
+      earRRef.current?.quaternion.multiply(tmpQ);
     }
   });
 
@@ -8584,14 +8767,46 @@ function CampfireAnimals({
   config,
   onSelect,
   bearVoiceRef,
+  banjoPanRef,
 }: {
   config: CampfireSceneConfig;
   onSelect: (name: string) => void;
   bearVoiceRef?: BearVoiceStateRef;
+  /** -1 (hard left) .. 1 (hard right), written every frame from the banjo
+   *  bear's live head position relative to the camera - read by the outer
+   *  CampfireScene's banjo useCampsiteAudioLoop call via the same ref. */
+  banjoPanRef?: React.MutableRefObject<number>;
 }) {
   // Live head positions, written and read by the bears each frame, so they can find
   // each other wherever the config sliders have put them.
   const heads = useRef<HeadRegistry>(new Map());
+
+  // Stereo-pans the banjo loop to whichever side the banjo bear (back_left_log)
+  // is actually on, from the CAMERA's point of view - not a fixed "he's on
+  // the left" assumption, since the camera orbits/reframes between locations
+  // and in the lab. heads already tracks his live head position (every
+  // sit_log bear registers there - see the Animal component's social-glance
+  // effect), so this just reads it back and projects it onto the camera's
+  // own right axis: lateral/dist is sin(the angle off dead ahead), 0 =
+  // centered, +-1 = hard left/right. No bear registered yet (first frame,
+  // or he's hidden/deleted) leaves the pan wherever it last was rather than
+  // snapping to center.
+  const panToBearVec = useRef(new THREE.Vector3());
+  const panRightVec = useRef(new THREE.Vector3());
+  useFrame(({ camera }) => {
+    if (!banjoPanRef) return;
+    let bearPos: THREE.Vector3 | null = null;
+    for (const entry of heads.current.values()) {
+      if (entry.bearId === "back_left_log") { bearPos = entry.position; break; }
+    }
+    if (!bearPos) return;
+    const toBear = panToBearVec.current.copy(bearPos).sub(camera.position);
+    const dist = toBear.length();
+    if (dist < 0.001) return;
+    const right = panRightVec.current.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    const pan = toBear.dot(right) / dist;
+    banjoPanRef.current = Math.max(-1, Math.min(1, pan));
+  });
 
   // Cache-bust versions for the baked pose GLBs. Poll /api/dev/bake-bear-pose
   // so that when the pose lab triggers a rebake, useGLTF sees a new URL
@@ -10281,6 +10496,7 @@ function CampfireWorld({
   onCrtSelectSound,
   onCrtFocusChange,
   crtZoomRef,
+  banjoPanRef,
   cameraSnapSignal,
   cameraLivePoseRef,
   bearVoiceRef,
@@ -10327,6 +10543,10 @@ function CampfireWorld({
    *  close-up flight - read outside the canvas to ramp CRT_MUSIC's volume
    *  with the actual dolly rather than snapping it at the endpoints. */
   crtZoomRef?: React.MutableRefObject<number>;
+  /** -1..1, written every frame by CampfireAnimals from the banjo bear's
+   *  live position relative to the camera - read outside the canvas to pan
+   *  the banjo loop. */
+  banjoPanRef?: React.MutableRefObject<number>;
   cameraLivePoseRef?: React.MutableRefObject<
     { pos: [number, number, number]; tgt: [number, number, number] } | null
   >;
@@ -10883,7 +11103,7 @@ function CampfireWorld({
             <SafeAsset label="tent"><Tent config={config} onSelect={onSelect} /></SafeAsset>
           )}
           <Benches config={config} onSelect={onSelect} />
-          <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} />
+          <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} banjoPanRef={banjoPanRef} />
           {/* Wood pile near the bonfire, as if stacked ready to feed the fire. */}
           <Selectable
             name="campfire_wood_pile"
@@ -11461,9 +11681,16 @@ export default function CampfireScene({
     volume: master * clampUnit(config.fireCracklingVolume),
     enabled: panel === LOCATION_CAMPFIRE,
   });
+  // -1..1, written every frame inside the canvas (CampfireAnimals) from the
+  // banjo bear's live head position relative to the camera - makes the loop
+  // genuinely space-aware instead of centered: orbit around him and he
+  // audibly moves across the stereo field like the rest of the scene does
+  // visually.
+  const banjoPanRef = useRef(0);
   useCampsiteAudioLoop(BANJO_URL_SOUND, {
     volume: master * clampUnit(config.banjoVolume),
     enabled: panel === LOCATION_CAMPFIRE,
+    panRef: banjoPanRef,
   });
   const playClick = useCampsiteOneShot(CLICK_URL);
   const playHover = useCampsiteOneShot(HOVER_URL);
@@ -11590,6 +11817,7 @@ export default function CampfireScene({
         onCrtBackSound={playBackCue}
         onCrtSelectSound={playCrtSelectCue}
         crtZoomRef={crtMusicMultiplierRef}
+        banjoPanRef={banjoPanRef}
         cameraSnapSignal={cameraSnapSignal}
         cameraLivePoseRef={cameraLivePoseRef}
         bearVoiceRef={bearVoiceRef}

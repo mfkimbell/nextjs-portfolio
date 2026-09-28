@@ -18,7 +18,7 @@ DEV_AGENT_BASE_URL=https://your-dev-agent.example.com
 PROD_AGENT_BASE_URL=https://your-production-agent.example.com
 PORT=3001
 # Optional native ConversationRelay ElevenLabs voice; this is the default.
-SMOKEY_ELEVENLABS_VOICE_ID=75DchiXtNUXnu3lra8pV
+SMOKEY_ELEVENLABS_VOICE_ID=DQuoFsZ3oda1diTerwpq
 # Documented for a future distinct-voice transport; see the limitation below.
 MAPLE_ELEVENLABS_VOICE_ID=oubi7HGxNVjXMnWLgwBT
 # Optional. Without a key, fixed greetings work and final prompts receive a two-bear configuration message.

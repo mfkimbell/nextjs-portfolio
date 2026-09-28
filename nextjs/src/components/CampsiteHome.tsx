@@ -97,6 +97,23 @@ export default function CampsiteHome() {
     });
   }, []);
 
+  const playSwoosh = useCampsiteOneShot(SWOOSH_URL);
+
+  // Shared by the panel-change effect below AND the title card's "enter"
+  // click (see onEnter on CampsiteTitleIntro) - that one doesn't change
+  // `panel` (it's already 0/campfire before AND after clicking start, only
+  // showTitle flips), so it can't ride the panel-change effect's dependency
+  // and has to fire the same swoosh explicitly instead.
+  const fireSwoosh = useCallback(() => {
+    const master = clampUnit(config.masterVolume);
+    const vol = master * clampUnit(config.swooshVolume);
+    if (vol <= 0) return;
+    const delay = Number.isFinite(config.swooshDelayMs) ? Math.max(0, config.swooshDelayMs) : 0;
+    const rate = Number.isFinite(config.swooshRate) && config.swooshRate > 0 ? config.swooshRate : 1;
+    const timer = window.setTimeout(() => playSwoosh(vol, rate), delay);
+    return () => window.clearTimeout(timer);
+  }, [config.masterVolume, config.swooshVolume, config.swooshDelayMs, config.swooshRate, playSwoosh]);
+
   // Swoosh between the three sites. Played every time the panel index changes,
   // not on the click handlers alone, so it also fires from keyboard arrows.
   // swooshDelayMs holds it back from the exact instant the panel flips - the
@@ -105,19 +122,12 @@ export default function CampsiteHome() {
   // ahead of the motion it's supposed to be selling. swooshRate is just
   // HTMLMediaElement.playbackRate on the clone - under 1 stretches the cue
   // slower without touching its volume.
-  const playSwoosh = useCampsiteOneShot(SWOOSH_URL);
   const lastPanelRef = useRef(panel);
   useEffect(() => {
     if (lastPanelRef.current === panel) return;
     lastPanelRef.current = panel;
-    const master = clampUnit(config.masterVolume);
-    const vol = master * clampUnit(config.swooshVolume);
-    if (vol <= 0) return;
-    const delay = Number.isFinite(config.swooshDelayMs) ? Math.max(0, config.swooshDelayMs) : 0;
-    const rate = Number.isFinite(config.swooshRate) && config.swooshRate > 0 ? config.swooshRate : 1;
-    const timer = window.setTimeout(() => playSwoosh(vol, rate), delay);
-    return () => window.clearTimeout(timer);
-  }, [panel, config.masterVolume, config.swooshVolume, config.swooshDelayMs, config.swooshRate, playSwoosh]);
+    return fireSwoosh();
+  }, [panel, fireSwoosh]);
 
   const next = useCallback(() => setPanel((p) => (p + 1) % PANELS.length), []);
   const prev = useCallback(() => setPanel((p) => (p - 1 + PANELS.length) % PANELS.length), []);
@@ -169,7 +179,15 @@ export default function CampsiteHome() {
       {showTitle ? (
         <CampsiteTitleIntro
           onUnmute={() => setTitleHeld(false)}
-          onEnter={() => setShowTitle(false)}
+          onEnter={() => {
+            setShowTitle(false);
+            // Same swoosh the scene-to-scene switches use, hand-fired here
+            // because this transition doesn't change `panel` (already 0)
+            // for the panel-change effect above to catch - it's the camera
+            // pulling IN to the campfire for the first time, not moving
+            // between two already-framed locations.
+            fireSwoosh();
+          }}
           timing={{
             blackHoldDuration: config.titleBlackHoldDuration,
             fadeInDuration: config.titleFadeInDuration,

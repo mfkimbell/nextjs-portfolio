@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Blender lip-sync verification renders, GLB backups, scratch test files
+.lipsync-renders/

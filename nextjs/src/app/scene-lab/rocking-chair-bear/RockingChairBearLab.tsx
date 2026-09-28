@@ -546,9 +546,12 @@ export default function RockingChairBearLab() {
                       reset
                     </button>
                   </div>
-                  <Slider label="x" min={-3.14} max={3.14} step={0.01} value={pose.parts[bone].x} onChange={(v) => patchBone(bone, "x", v)} />
-                  <Slider label="y" min={-3.14} max={3.14} step={0.01} value={pose.parts[bone].y} onChange={(v) => patchBone(bone, "y", v)} />
-                  <Slider label="z" min={-3.14} max={3.14} step={0.01} value={pose.parts[bone].z} onChange={(v) => patchBone(bone, "z", v)} />
+                  <Slider label="rotate x" min={-3.14} max={3.14} step={0.01} value={pose.parts[bone].rx} onChange={(v) => patchBone(bone, "rx", v)} />
+                  <Slider label="rotate y" min={-3.14} max={3.14} step={0.01} value={pose.parts[bone].ry} onChange={(v) => patchBone(bone, "ry", v)} />
+                  <Slider label="rotate z" min={-3.14} max={3.14} step={0.01} value={pose.parts[bone].rz} onChange={(v) => patchBone(bone, "rz", v)} />
+                  <Slider label="length (scale y)" min={0.1} max={3} step={0.01} value={pose.parts[bone].sy} onChange={(v) => patchBone(bone, "sy", v)} />
+                  <Slider label="thickness (scale x)" min={0.1} max={3} step={0.01} value={pose.parts[bone].sx} onChange={(v) => patchBone(bone, "sx", v)} />
+                  <Slider label="thickness (scale z)" min={0.1} max={3} step={0.01} value={pose.parts[bone].sz} onChange={(v) => patchBone(bone, "sz", v)} />
                 </div>
               ))}
             </details>

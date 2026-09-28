@@ -3,12 +3,17 @@ import express, { type Request, type Response } from "express";
 import expressWs from "express-ws";
 import OpenAI from "openai";
 import { dirname, resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import twilio from "twilio";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(sourceDirectory, "../../nextjs/.env") });
+const portfolioContext = readFileSync(
+  resolve(sourceDirectory, "../knowledge/mitchell-kimbell-context.md"),
+  "utf8",
+);
 
 type BearLine = { bear: "bear1" | "bear2"; text: string };
 type RelaySocket = {
@@ -88,7 +93,7 @@ if (!Number.isFinite(sessionTtlMs) || sessionTtlMs < 1_000) {
 const sessions = new Map<string, Session>();
 const { app } = expressWs(express());
 
-const bear1VoiceId = process.env.SMOKEY_ELEVENLABS_VOICE_ID?.trim() || "75DchiXtNUXnu3lra8pV";
+const bear1VoiceId = process.env.SMOKEY_ELEVENLABS_VOICE_ID?.trim() || "DQuoFsZ3oda1diTerwpq";
 const bear1Language = process.env.SMOKEY_TTS_LANGUAGE?.trim() || "en-US";
 const bear2VoiceId = process.env.MAPLE_ELEVENLABS_VOICE_ID?.trim() || "oubi7HGxNVjXMnWLgwBT";
 const bear2Language = process.env.MAPLE_TTS_LANGUAGE?.trim() || "en-GB";
@@ -270,7 +275,10 @@ async function completePersona(
   const completion = await openai.chat.completions.create({
     model: openaiModel,
     temperature: 0.7,
-    messages: [{ role: "system", content: system }, ...history],
+    messages: [{
+      role: "system",
+      content: `${system}\n\nAPPROVED MITCHELL KIMBELL PORTFOLIO CONTEXT:\n${portfolioContext}`,
+    }, ...history],
   });
   const text = completion.choices[0]?.message.content?.trim().slice(0, 600);
   if (!text) throw new Error("OpenAI returned an empty bear response");
