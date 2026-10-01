@@ -224,6 +224,18 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   deskComputerLightX: number;
   deskComputerLightY: number;
   deskComputerLightZ: number;
+  /** Cabin computer's light on the room: on (1) / off (0). */
+  deskComputerLightOn: number;
+  /** Width of the screen's light cone, degrees. */
+  deskComputerAngle: number;
+  /** How soft the cone's edge is, 0 (hard) .. 1 (soft). */
+  deskComputerPenumbra: number;
+  /** Tip the light's aim up (+) / down (-), units along the screen's facing. */
+  deskComputerAimY: number;
+  /** Screen light casts shadows (1) / doesn't (0). */
+  deskComputerShadow: number;
+  /** Brightness of the desktop picture on the glass itself (1 = as drawn). */
+  deskComputerGlassBrightness: number;
   /** Warm ambient fill just for the desk scene - a HemisphereLight parented
    *  inside ContactSector, so it only lights the desk without touching the
    *  campfire or arcade. Tunable so the whole desk can read cozier or dim. */
@@ -859,6 +871,75 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
    *  1.07 back is exactly full-frame at fov 50. */
   crtFocusBack: number;
   crtFocusHeight: number;
+  /** Cabin computer close-up: standoff from the glass, in screen heights. */
+  pcFocusBack: number;
+  /** Cabin computer close-up: camera raised/lowered, in screen heights. */
+  pcFocusHeight: number;
+  /** Cabin computer's synthesized hardware sounds (mouse, keys, drive,
+   *  monitor), on top of master. */
+  pcSoundVolume: number;
+  /** OnlyBears reveal shot: how far back from the glass, in screen heights. */
+  pcRevealBack: number;
+  /** OnlyBears reveal shot: camera height above the screen centre, screen heights. */
+  pcRevealHeight: number;
+  /** OnlyBears reveal shot: aim point above the screen centre, screen heights. */
+  pcRevealAimUp: number;
+  /** How grey the old bear's coat is: 0 = his original brown, 1 = fully grey. */
+  oldBearGrey: number;
+  /** Old bear coat brightness multiplier. */
+  oldBearBrightness: number;
+  /** How pale the old bear's face / muzzle goes, 0..1. */
+  oldBearFaceLight: number;
+  /** Old bear coat tint: negative = cool/blue grey, positive = warm/brown grey. */
+  oldBearWarmth: number;
+  /** Old bear glasses on (1) / off (0). */
+  oldBearGlassesShow: number;
+  /** Old bear glasses size multiplier. */
+  oldBearGlassesScale: number;
+  /** Old bear glasses: move up (+) / down (-) the face, model units. */
+  oldBearGlassesUp: number;
+  /** Old bear glasses: slide out along (+) / back up (-) the snout, model units. */
+  oldBearGlassesFwd: number;
+  /** Old bear eyebrows on (1) / off (0). */
+  oldBearBrowShow: number;
+  /** Old bear eyebrow size multiplier. */
+  oldBearBrowScale: number;
+  /** Old bear beard on (1) / off (0). */
+  oldBearBeardShow: number;
+  /** Old bear beard overall size. */
+  oldBearBeardScale: number;
+  /** Old bear beard length (down from the chin). */
+  oldBearBeardLength: number;
+  /** Old bear beard width. */
+  oldBearBeardWidth: number;
+  /** Old bear coat colour, sRGB 0..1 (mid-tone fur is recoloured to this). */
+  oldBearCoatR: number;
+  oldBearCoatG: number;
+  oldBearCoatB: number;
+  /** Old bear beard + eyebrow colour, sRGB 0..1. */
+  oldBearHairR: number;
+  oldBearHairG: number;
+  oldBearHairB: number;
+  /** Old bear glasses: 0 = clear lenses, 1 = milky / fogged. */
+  oldBearLensCloud: number;
+  /** OnlyBears gag playback speed (0.5 = twice as slow). */
+  onlyBearsSpeed: number;
+  /** OnlyBears: how big the paw grows on the way over. */
+  onlyBearsPawScale: number;
+  /** OnlyBears bear size multiplier. */
+  onlyBearsScale: number;
+  /** OnlyBears bear position nudge, computer units (x right). */
+  onlyBearsX: number;
+  /** OnlyBears bear position nudge, computer units (y up). */
+  onlyBearsY: number;
+  /** OnlyBears bear position nudge, computer units (z toward viewer). */
+  onlyBearsZ: number;
+  /** OnlyBears extra forward lean at the cover pose, degrees. */
+  onlyBearsLean: number;
+  /** OnlyBears: how far his head turns to look at you, 0..1. */
+  onlyBearsLook: number;
+  /** OnlyBears: chest breathing while he holds the pose (arms stay put). */
+  onlyBearsBreath: number;
   /** Rigid offset applied to the whole arcade set inside scene 2 - CRTs,
    *  cubs, consoles, picnic table, snacks and the arcade fire. Moves them as
    *  one unit without disturbing their relative layout. */
@@ -1438,6 +1519,13 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
    mapleSpeechVolume: number;
    fireCracklingVolume: number;
   banjoVolume: number;
+  /** How fast the banjo fades with distance: 1 = real-world 1/distance,
+   *  0 = same loudness everywhere, 2 = drops off hard. Measured from scene 1's
+   *  own shot, where it plays at exactly banjoVolume. */
+  banjoDistanceRolloff: number;
+  /** Most the banjo can grow when the camera is closer than scene 1's shot,
+   *  as a multiple of banjoVolume. */
+  banjoMaxBoost: number;
   /* --- banjo prop (held by the back-left log bear) -------------------------
    * Offsets in the "Food" socket frame, applied on top of the prop's baseline
    * position/rotation/scale. Lets us nudge the banjo in the paws at runtime
@@ -1449,6 +1537,16 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   banjoPropRotY: number;
   banjoPropRotZ: number;
   banjoPropScale: number;
+  /** Tempo for the fingers-only banjo picking layer. */
+  banjoPickingBpm: number;
+  /** Strength of the fingers-only banjo picking layer. */
+  banjoPickingAmount: number;
+  /** Right wrist pitch layered over the authored banjo hand pose. */
+  banjoPickingWristPitch: number;
+  /** Right wrist roll layered over the authored banjo hand pose. */
+  banjoPickingWristRoll: number;
+  /** Left fingers' fret-pressure curl layered over the authored fretting pose. */
+  banjoFretFingerAmount: number;
   /** Additive per-bear offset for the banjo bear's glasses (bearId
    *  "back_left_log"). Stacks on top of the shared glasses config so tuning
    *  the shared fit still moves both, but this quartet lets the banjo bear
@@ -1468,6 +1566,96 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   swooshRate: number;
   hoverVolume: number;
   clickVolume: number;
+
+  /* --- bear talking (lip-sync + body language) ------------------------------
+   * Driven by the shared analyser in src/lib/bearLipSync.ts. Amount knobs are
+   * multipliers (1 = the tuned default, 0 = off); the lab's "Bear talking"
+   * group has a mic / audio-file test source so these can be dialled in
+   * without a live call. */
+  /** Max jaw opening while talking, as a fraction of the Blender jawOpen shape (1 = full roar). */
+  bearTalkJawMax: number;
+  /** Mouth sensitivity - scales the analysed opening before the max clamps it. */
+  bearTalkJawGain: number;
+  /** "ee / s" lip stretch amount. */
+  bearTalkWide: number;
+  /** "oo / w" pucker amount. */
+  bearTalkRound: number;
+  /** Existing jaw sculpt corrective layered under the primary jaw bone. */
+  bearTalkJawCorrective: number;
+  /** Existing wide/round sculpt corrective contribution layered over lip bones. */
+  bearTalkShapeCorrective: number;
+  /** How fast the jaw opens / closes (1/s). Higher = snappier. */
+  bearTalkOpenSpeed: number;
+  bearTalkCloseSpeed: number;
+  /** How fast the lip shape (wide/round) follows (1/s). */
+  bearTalkShapeSpeed: number;
+  /** Head nod on accented syllables. */
+  bearTalkNod: number;
+  /** Tiny head bob on every syllable. */
+  bearTalkBeat: number;
+  /** Head lifts with voice pitch (visual prosody). */
+  bearTalkPitchHead: number;
+  /** Slow head drift while speaking. */
+  bearTalkSway: number;
+  /** Ear flick on accents. */
+  bearTalkEars: number;
+  /** Listening bear's nods / backchannels. */
+  bearTalkListener: number;
+  /** Blink frequency multiplier (0 = never blink). */
+  bearBlinkRate: number;
+  /** How much the lip bones (upper/lower lip, corners) move for wide/round/open shapes. */
+  bearTalkLips: number;
+  /** Rest lip seal: lower lip pressed up to the upper lip when quiet (1 = sealed, 0 = model's raw rest). */
+  bearMouthRestSeal: number;
+  /** Normalized opening where the authored lip seal starts releasing. */
+  bearMouthSealStart: number;
+  /** Normalized opening where the authored lip seal is fully released. */
+  bearMouthSealEnd: number;
+  /** Voice bears' gaze: how fully the head turns to its target (the user, or
+   *  the other bear during conversation). 0 = no turning, 1 = full turn. */
+  bearLookAmount: number;
+  /** Seconds (time constant) for a head turn between targets. */
+  bearLookTurnTime: number;
+  /** World-space vertical offset for the user's gaze target. Negative looks lower. */
+  bearLookUserYOffset: number;
+  /** Delay before turning toward the other bear after their speech begins. */
+  bearLookPartnerDelay: number;
+  bearFishLookTurnTime: number;
+  bearFishHeadTurnTime: number;
+  bearFishImpactDelay: number;
+  bearFishFireLookTime: number;
+  bearFishMouthHoldTime: number;
+  bearFishReturnTime: number;
+  bearFishJawAmount: number;
+  /** LEFT back bear (Smokey, back-left log): where he looks while the fish
+   *  is in the air, as an offset (world units) from the FISH ITSELF - he
+   *  follows it. 0,0,0 = eyes on the fish. The right bear has its own
+   *  (bearFishFlightLookR*), since they sit on opposite sides of the fire. */
+  bearFishFlightLookX: number;
+  bearFishFlightLookY: number;
+  bearFishFlightLookZ: number;
+  /** LEFT back bear: where he stares after it lands, as an offset from the
+   *  spot the fish hit the FIRE. 0,0,0 = right at it. */
+  bearFishFireLookX: number;
+  bearFishFireLookY: number;
+  bearFishFireLookZ: number;
+  /** RIGHT back bear (Maple, back-right log): the same two aim offsets. */
+  bearFishFlightLookRX: number;
+  bearFishFlightLookRY: number;
+  bearFishFlightLookRZ: number;
+  bearFishFireLookRX: number;
+  bearFishFireLookRY: number;
+  bearFishFireLookRZ: number;
+  /** Seconds (time constant) for their gaze to catch up with the flying fish. */
+  bearFishFlightTurnTime: number;
+  /** Seconds (time constant) for each later turn: to the fire, to each other,
+   *  back to you. */
+  bearFishFireTurnTime: number;
+  /** Furthest their heads will turn during the fish gag, degrees. */
+  bearFishMaxTurn: number;
+  bearFishIdleGazeYOffset: number;
+  bearFishIdleLookTime: number;
+  bearFishIdleInterval: number;
 
   objectOverrides: Record<string, ObjectOverride>;
   /**
@@ -1790,6 +1978,12 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskComputerLightX: 0,
   deskComputerLightY: 0.35,
   deskComputerLightZ: 0.2,
+  deskComputerLightOn: 1,
+  deskComputerAngle: 77,
+  deskComputerPenumbra: 0.7,
+  deskComputerAimY: 0,
+  deskComputerShadow: 0,
+  deskComputerGlassBrightness: 1,
   // Warm desk fill - hemisphere sky/ground tint, kept low so the lanterns and
   // computer still carry most of the light. Slightly amber sky, cool ground.
   deskCampGroundMaxY: 4.0,
@@ -2179,6 +2373,42 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   arcadeSetZ: 2.6,
   crtFocusBack: 1.35,
   crtFocusHeight: 0,
+  pcFocusBack: 1.43,
+  pcFocusHeight: 0,
+  pcSoundVolume: 0.8,
+  pcRevealBack: 8,
+  pcRevealHeight: 1.7,
+  pcRevealAimUp: 0.9,
+  oldBearGrey: 0.55,
+  oldBearBrightness: 0.85,
+  oldBearFaceLight: 0.35,
+  oldBearWarmth: 0.25,
+  oldBearGlassesShow: 1,
+  oldBearGlassesScale: 1,
+  oldBearGlassesUp: 0,
+  oldBearGlassesFwd: 0,
+  oldBearBrowShow: 1,
+  oldBearBrowScale: 1,
+  oldBearBeardShow: 1,
+  oldBearBeardScale: 1,
+  oldBearBeardLength: 1,
+  oldBearBeardWidth: 1,
+  oldBearCoatR: 0.711,
+  oldBearCoatG: 0.701,
+  oldBearCoatB: 0.689,
+  oldBearHairR: 0.906,
+  oldBearHairG: 0.901,
+  oldBearHairB: 0.886,
+  oldBearLensCloud: 0,
+  onlyBearsSpeed: 1,
+  onlyBearsPawScale: 1.6,
+  onlyBearsScale: 1,
+  onlyBearsX: 0,
+  onlyBearsY: 0,
+  onlyBearsZ: 0,
+  onlyBearsLean: 0,
+  onlyBearsLook: 0.85,
+  onlyBearsBreath: 0.3,
   arcadeCrtGlow: 1,
   arcadeCrtLightR: 0.475,
   arcadeCrtLightG: 0.776,
@@ -2487,6 +2717,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   mapleSpeechVolume: 1,
   fireCracklingVolume: 0.55,
   banjoVolume: 0.32,
+  banjoDistanceRolloff: 1,
+  banjoMaxBoost: 1.8,
   banjoPropX: 0,
   banjoPropY: 0,
   banjoPropZ: 0,
@@ -2494,6 +2726,11 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   banjoPropRotY: 0,
   banjoPropRotZ: 0,
   banjoPropScale: 1,
+  banjoPickingBpm: 96,
+  banjoPickingAmount: 0,
+  banjoPickingWristPitch: 0,
+  banjoPickingWristRoll: 0,
+  banjoFretFingerAmount: 0,
   banjoBearGlassesHeight: 0,
   banjoBearGlassesNoseRide: 0,
   banjoBearGlassesTilt: 0,
@@ -2503,6 +2740,56 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   swooshRate: 0.8,
   hoverVolume: 0.35,
   clickVolume: 0.6,
+
+  bearTalkJawMax: 0.9,
+  bearTalkJawGain: 1,
+  bearTalkWide: 1,
+  bearTalkRound: 1,
+  bearTalkJawCorrective: 0.2,
+  bearTalkShapeCorrective: 0.35,
+  bearTalkOpenSpeed: 32,
+  bearTalkCloseSpeed: 15,
+  bearTalkShapeSpeed: 12,
+  bearTalkNod: 1,
+  bearTalkBeat: 1,
+  bearTalkPitchHead: 1,
+  bearTalkSway: 1,
+  bearTalkEars: 1,
+  bearTalkListener: 1,
+  bearBlinkRate: 1,
+  bearTalkLips: 1,
+  bearMouthRestSeal: 1,
+  bearMouthSealStart: 0.04,
+  bearMouthSealEnd: 0.48,
+  bearLookAmount: 0.85,
+  bearLookTurnTime: 0.65,
+  bearLookUserYOffset: -0.2,
+  bearLookPartnerDelay: 0.08,
+  bearFishLookTurnTime: 0.65,
+  bearFishHeadTurnTime: 0.8,
+  bearFishImpactDelay: 0.3,
+  bearFishFireLookTime: 0.65,
+  bearFishMouthHoldTime: 2,
+  bearFishReturnTime: 0.7,
+  bearFishJawAmount: 1,
+  bearFishFlightLookX: 0,
+  bearFishFlightLookY: 0,
+  bearFishFlightLookZ: 0,
+  bearFishFireLookX: 0,
+  bearFishFireLookY: -0.2,
+  bearFishFireLookZ: 0,
+  bearFishFlightLookRX: 0,
+  bearFishFlightLookRY: 0,
+  bearFishFlightLookRZ: 0,
+  bearFishFireLookRX: 0,
+  bearFishFireLookRY: -0.2,
+  bearFishFireLookRZ: 0,
+  bearFishFlightTurnTime: 0.12,
+  bearFishFireTurnTime: 0.3,
+  bearFishMaxTurn: 80,
+  bearFishIdleGazeYOffset: -1.2,
+  bearFishIdleLookTime: 2,
+  bearFishIdleInterval: 6,
 
   objectOverrides: {},
   objectDuplicates: {},

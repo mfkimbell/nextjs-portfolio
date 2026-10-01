@@ -31,9 +31,9 @@ export async function POST(request: Request) {
     const agentBaseUrl = required("PROD_AGENT_BASE_URL").replace(/\/$/, "");
     if (!agentBaseUrl.startsWith("https://")) throw new Error("PROD_AGENT_BASE_URL must use HTTPS");
     const smokeyLanguage = process.env.SMOKEY_TTS_LANGUAGE || "en-US";
-    const smokeyVoice = process.env.SMOKEY_ELEVENLABS_VOICE_ID || "DQuoFsZ3oda1diTerwpq";
     const mapleLanguage = process.env.MAPLE_TTS_LANGUAGE || "en-GB";
-    const mapleVoice = process.env.MAPLE_ELEVENLABS_VOICE_ID || "oubi7HGxNVjXMnWLgwBT";
+    const smokeyVoice = process.env.SMOKEY_ELEVENLABS_VOICE_ID || "oubi7HGxNVjXMnWLgwBT";
+    const mapleVoice = process.env.MAPLE_ELEVENLABS_VOICE_ID || "u0REnIJvUgcGQYW2Ux8K";
 
     const response = new twilio.twiml.VoiceResponse();
     const connect = response.connect();
@@ -62,7 +62,6 @@ export async function POST(request: Request) {
       agentHost: new URL(agentBaseUrl).host,
       smokeyLanguage,
       smokeyVoice: `${smokeyVoice.slice(0, 4)}...${smokeyVoice.slice(-4)}`,
-      mapleLanguage,
       mapleVoice: `${mapleVoice.slice(0, 4)}...${mapleVoice.slice(-4)}`,
     });
 

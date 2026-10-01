@@ -15,16 +15,29 @@
 // and duplicated below for the preview; if those ever change there, update
 // CHAIR_BASE_POS/BEAR_BASE_POS here to match.
 
-import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
+import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { OrbitControls, useGLTF, useAnimations } from "@react-three/drei";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 
 import Matte from "@/components/Matte";
+import {
+  hexToRgb, OLD_BEAR_COLORS, OLD_BEAR_LOOK_DEFAULTS, OLD_BEAR_SLIDERS, oldBearConfigKey, oldBearLookFromConfig,
+  rgbToHex, useOldBearLook, type OldBearLook,
+} from "@/components/scene-lab/oldBear";
+import {
+  applyRockingPosture, makePostureState, readRockingPosture,
+  ROCKING_POSTURE_DEFAULT, type RockingPosture,
+} from "@/components/scene-lab/rockingPosture";
+import {
+  applyChairRock, applyLegLock, makeLegLock, readRockMotion, rockPosture, rockState,
+  ROCK_MOTION_DEFAULT, type LegLock, type RockEnd, type RockHold, type RockMotion,
+} from "@/components/scene-lab/rockingChair";
 
 const ROCKING_CHAIR_URL = "/rocking-chair.glb";
-const BEAR_URL = "/wildpoly/bear_sit_fixed.glb";
+// the old grey bear - same model the site's rocking-chair bear uses
+const BEAR_URL = "/wildpoly/bear_old_grey.glb";
 const BEAR_CLIP = "sit_log";
 const CONFIG_URL = "/api/dev/scene-config";
 const POSE_API_URL = "/api/dev/rocking-chair-bear-pose";
@@ -77,12 +90,16 @@ const IDENTITY_POSE: BonePose = { rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1 };
 type PoseState = {
   enabled: boolean;
   parts: Record<BoneName, BonePose>;
+  /** How he sits - recline / hunch / head, in degrees (rockingPosture.ts). */
+  posture: RockingPosture;
+  /** How the chair rocks and how his body goes with it (rockingChair.ts). */
+  rock: RockMotion;
 };
 
 function defaultPose(): PoseState {
   const parts = {} as Record<BoneName, BonePose>;
   for (const b of BONE_NAMES) parts[b] = { ...IDENTITY_POSE };
-  return { enabled: true, parts };
+  return { enabled: true, parts, posture: { ...ROCKING_POSTURE_DEFAULT }, rock: { ...ROCK_MOTION_DEFAULT } };
 }
 
 const CHAIR_NAME = "cabin_rocking_chair";
@@ -107,9 +124,18 @@ const DEFAULT_OVERRIDE: Override = { dx: 0, dy: 0, dz: 0, rotX: 0, rotY: 0, rotZ
 
 type LabConfig = {
   objectOverrides: Record<string, Override>;
+  /** The old bear's look - coat, beard colour, glasses - saved as the same
+   *  oldBear* keys in campfireScene.json the site and the main lab use. */
+  look: OldBearLook;
 };
 
-const DEFAULT_CONFIG: LabConfig = { objectOverrides: {} };
+const DEFAULT_CONFIG: LabConfig = { objectOverrides: {}, look: { ...OLD_BEAR_LOOK_DEFAULTS } };
+
+function lookToConfig(look: OldBearLook): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const k of Object.keys(look) as (keyof OldBearLook)[]) out[oldBearConfigKey(k)] = look[k];
+  return out;
+}
 
 // -- Live models --------------------------------------------------------
 
@@ -119,14 +145,25 @@ function ChairGLB() {
   return <primitive object={model} />;
 }
 
-function BearGLB({ pose }: { pose: PoseState }) {
+function BearGLB({ pose, hold, look }: { pose: PoseState; hold: RockHold; look: OldBearLook }) {
   const gltf = useGLTF(BEAR_URL) as unknown as { scene: THREE.Object3D; animations: THREE.AnimationClip[] };
   const model = useMemo(() => skeletonClone(gltf.scene) as THREE.Object3D, [gltf.scene]);
+  // coat, beard colour, glasses - the saved look, live from this page's sliders
+  useOldBearLook(model, look);
   const { actions } = useAnimations(gltf.animations, model);
   const boneRef = useRef<Partial<Record<BoneName, THREE.Bone>>>({});
   const restSRef = useRef<Partial<Record<BoneName, THREE.Vector3>>>({});
   const poseRef = useRef(pose);
   poseRef.current = pose;
+  const holdRef = useRef(hold);
+  holdRef.current = hold;
+  const postureRef = useRef(makePostureState());
+  const livePosture = useRef<RockingPosture>({ ...ROCKING_POSTURE_DEFAULT });
+  // legs held at one frame of sit_log - no log-bear kick in the rocking chair
+  const legLock = useMemo<LegLock>(
+    () => makeLegLock(model, gltf.animations.find((c) => c.name === BEAR_CLIP)),
+    [model, gltf.animations],
+  );
 
   useEffect(() => {
     const action = actions[BEAR_CLIP];
@@ -152,8 +189,16 @@ function BearGLB({ pose }: { pose: PoseState }) {
   // and CampfireScene.tsx's Animal rely on. RELATIVE layer (quaternion
   // .multiply, scale set against this bone's own rest scale) so rx=ry=rz=0,
   // sx=sy=sz=1 is a true no-op and leaves sit_log's own motion untouched.
-  useFrame(() => {
-    if (!poseRef.current.enabled) return;
+  useFrame(({ clock }) => {
+    applyLegLock(legLock);
+    // posture (swaying with the rock) runs whether or not the per-bone deltas are on
+    const { rock } = poseRef.current;
+    const body = rockState(clock.elapsedTime, rock, holdRef.current).body;
+    const live = rockPosture(poseRef.current.posture, body, rock, livePosture.current);
+    if (!poseRef.current.enabled) {
+      applyRockingPosture(model, live, postureRef.current);
+      return;
+    }
     const eu = new THREE.Euler();
     const dq = new THREE.Quaternion();
     for (const name of BONE_NAMES) {
@@ -166,15 +211,31 @@ function BearGLB({ pose }: { pose: PoseState }) {
       b.quaternion.multiply(dq);
       b.scale.set(restS.x * r.sx, restS.y * r.sy, restS.z * r.sz);
     }
+    applyRockingPosture(model, live, postureRef.current);
   });
 
   return <primitive object={model} />;
+}
+
+/** Rolls the chair (and the bear in it) on its runners - same as the site's
+ *  RockingChairRig in CampfireScene.tsx, same clock, same numbers. */
+function RockRig({ rock, hold, children }: { rock: RockMotion; hold: RockHold; children: React.ReactNode }) {
+  const ref = useRef<THREE.Group>(null);
+  const rockRef = useRef({ rock, hold });
+  rockRef.current = { rock, hold };
+  useFrame(({ clock }) => {
+    const r = rockRef.current;
+    if (ref.current) applyChairRock(ref.current, rockState(clock.elapsedTime, r.rock, r.hold).theta);
+  });
+  return <group ref={ref}>{children}</group>;
 }
 
 function RockingChairAssembly({
   chairOverride,
   bearOverride,
   pose,
+  hold,
+  look,
   onSelectChair,
   onSelectBear,
   selected,
@@ -182,6 +243,8 @@ function RockingChairAssembly({
   chairOverride: Override;
   bearOverride: Override;
   pose: PoseState;
+  hold: RockHold;
+  look: OldBearLook;
   onSelectChair: () => void;
   onSelectBear: () => void;
   selected: "chair" | "bear" | null;
@@ -198,6 +261,7 @@ function RockingChairAssembly({
       scale={chairOverride.scale}
       onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); onSelectChair(); }}
     >
+      <RockRig rock={pose.rock} hold={hold}>
       {chairOverride.hide < 0.5 && (
         <group>
           <ChairGLB />
@@ -217,11 +281,12 @@ function RockingChairAssembly({
       >
         {bearOverride.hide < 0.5 && (
           <group>
-            <BearGLB pose={pose} />
+            <BearGLB pose={pose} hold={hold} look={look} />
             {selected === "bear" && <SelectionRing radius={1.4} />}
           </group>
         )}
       </group>
+      </RockRig>
     </group>
   );
 }
@@ -235,6 +300,31 @@ function SelectionRing({ radius }: { radius: number }) {
   );
 }
 
+/**
+ * Points the camera at wherever the chair actually is (base + its saved
+ * offset - on the site it has been dragged well away from its base spot, so
+ * a camera aimed at the base missed it), from its side (to watch the rock)
+ * or its front. Re-runs whenever `view.n` ticks.
+ */
+function FrameChair({ chairOverride, view }: { chairOverride: Override; view: { n: number; side: boolean } }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as unknown as { target: THREE.Vector3; update: () => void } | null;
+  const o = chairOverride;
+  useEffect(() => {
+    const c = new THREE.Vector3(CHAIR_BASE_POS[0] + o.dx, CHAIR_BASE_POS[1] + o.dy + 0.4 * o.scale, CHAIR_BASE_POS[2] + o.dz);
+    const yaw = CHAIR_BASE_ROT_Y + o.rotY;
+    // chair's own +X (its right, the rocking axis) and -Z (the way it faces)
+    const dir = view.side
+      ? new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw))
+      : new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    camera.position.copy(c).addScaledVector(dir, 3.2 * o.scale).add(new THREE.Vector3(0, 0.5 * o.scale, 0));
+    if (controls) { controls.target.copy(c); controls.update(); } else camera.lookAt(c);
+    // only on a view request, or the first time real offsets arrive
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.n, controls]);
+  return null;
+}
+
 function LabScene({
   chairOverride,
   bearOverride,
@@ -242,13 +332,19 @@ function LabScene({
   onSelectChair,
   onSelectBear,
   selected,
+  view,
+  hold,
+  look,
 }: {
   chairOverride: Override;
   bearOverride: Override;
   pose: PoseState;
+  hold: RockHold;
+  look: OldBearLook;
   onSelectChair: () => void;
   onSelectBear: () => void;
   selected: "chair" | "bear" | null;
+  view: { n: number; side: boolean };
 }) {
   return (
     <>
@@ -264,11 +360,14 @@ function LabScene({
         chairOverride={chairOverride}
         bearOverride={bearOverride}
         pose={pose}
+        hold={hold}
+        look={look}
         onSelectChair={onSelectChair}
         onSelectBear={onSelectBear}
         selected={selected}
       />
       <OrbitControls makeDefault target={[CHAIR_BASE_POS[0], CHAIR_BASE_POS[1] + 0.6, CHAIR_BASE_POS[2]]} />
+      <FrameChair chairOverride={chairOverride} view={view} />
     </>
   );
 }
@@ -338,6 +437,9 @@ export default function RockingChairBearLab() {
   const [cfg, setCfg] = useState<LabConfig>(DEFAULT_CONFIG);
   const [pose, setPose] = useState<PoseState>(defaultPose());
   const [selected, setSelected] = useState<"chair" | "bear" | null>("chair");
+  const [view, setView] = useState({ n: 0, side: true });
+  // preview only, never saved: hold the chair at one end to pose him there
+  const [hold, setHold] = useState<RockHold>("rock");
   const [status, setStatus] = useState("Loading config...");
   const [poseStatus, setPoseStatus] = useState("Loading pose...");
   const poseDirty = useRef(false);
@@ -347,9 +449,14 @@ export default function RockingChairBearLab() {
   useEffect(() => {
     fetch(CONFIG_URL)
       .then((r) => r.json())
-      .then((d: Partial<LabConfig>) => {
-        setCfg((prev) => ({ ...prev, objectOverrides: { ...prev.objectOverrides, ...(d.objectOverrides ?? {}) } }));
+      .then((d: Partial<LabConfig> & Record<string, unknown>) => {
+        setCfg((prev) => ({
+          ...prev,
+          objectOverrides: { ...prev.objectOverrides, ...(d.objectOverrides ?? {}) },
+          look: oldBearLookFromConfig(d),
+        }));
         hydrated.current = true;
+        setView((v) => ({ ...v, n: v.n + 1 }));
         setStatus("Config loaded.");
       })
       .catch(() => { setStatus("Config load failed."); hydrated.current = true; });
@@ -371,7 +478,12 @@ export default function RockingChairBearLab() {
               }
             }
           }
-          return { enabled: typeof d.enabled === "boolean" ? d.enabled : prev.enabled, parts };
+          return {
+            enabled: typeof d.enabled === "boolean" ? d.enabled : prev.enabled,
+            parts,
+            posture: d.posture ? readRockingPosture(d.posture) : prev.posture,
+            rock: readRockMotion((d as { rock?: unknown }).rock),
+          };
         });
         setPoseStatus("Pose loaded.");
       })
@@ -386,6 +498,7 @@ export default function RockingChairBearLab() {
       const existing = await fetch(CONFIG_URL).then((r) => r.json()).catch(() => ({}));
       const merged = {
         ...existing,
+        ...lookToConfig(next.look),
         objectOverrides: { ...(existing.objectOverrides ?? {}), ...next.objectOverrides },
       };
       const res = await fetch(CONFIG_URL, {
@@ -409,6 +522,14 @@ export default function RockingChairBearLab() {
     setCfg((prev) => {
       const existing = prev.objectOverrides[name] ?? DEFAULT_OVERRIDE;
       const next = { ...prev, objectOverrides: { ...prev.objectOverrides, [name]: { ...existing, ...o } } };
+      scheduleSave(next);
+      return next;
+    });
+  }, [scheduleSave]);
+
+  const patchLook = useCallback((patch: Partial<OldBearLook>) => {
+    setCfg((prev) => {
+      const next = { ...prev, look: { ...prev.look, ...patch } };
       scheduleSave(next);
       return next;
     });
@@ -463,8 +584,23 @@ export default function RockingChairBearLab() {
     setPose((prev) => {
       const parts = { ...prev.parts };
       for (const b of BONE_NAMES) parts[b] = { ...IDENTITY_POSE };
-      return { ...prev, parts };
+      return { ...prev, parts, posture: { ...ROCKING_POSTURE_DEFAULT }, rock: { ...ROCK_MOTION_DEFAULT } };
     });
+  }, []);
+
+  const patchPosture = useCallback((field: keyof RockingPosture, v: number) => {
+    poseDirty.current = true;
+    setPose((prev) => ({ ...prev, posture: { ...prev.posture, [field]: v } }));
+  }, []);
+
+  const patchRock = useCallback((patch: Partial<RockMotion>) => {
+    poseDirty.current = true;
+    setPose((prev) => ({ ...prev, rock: { ...prev.rock, ...patch } }));
+  }, []);
+
+  const patchRockEnd = useCallback((end: "front" | "back", field: keyof RockEnd, v: number) => {
+    poseDirty.current = true;
+    setPose((prev) => ({ ...prev, rock: { ...prev.rock, [end]: { ...prev.rock[end], [field]: v } } }));
   }, []);
 
   const setPoseEnabled = useCallback((enabled: boolean) => {
@@ -487,6 +623,9 @@ export default function RockingChairBearLab() {
             onSelectChair={() => setSelected("chair")}
             onSelectBear={() => setSelected("bear")}
             selected={selected}
+            view={view}
+            hold={hold}
+            look={cfg.look}
           />
         </Canvas>
         <div style={{ position: "absolute", top: 10, left: 10, right: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
@@ -497,6 +636,12 @@ export default function RockingChairBearLab() {
           </button>
           <button onClick={() => setSelected("bear")} style={{ fontSize: 10, background: selected === "bear" ? "#333" : "#1a1a1a", color: "#eee", border: "1px solid #444", padding: "3px 8px", cursor: "pointer" }}>
             bear
+          </button>
+          <button onClick={() => setView((v) => ({ n: v.n + 1, side: true }))} style={{ fontSize: 10, background: "#1a1a1a", color: "#eee", border: "1px solid #444", padding: "3px 8px", cursor: "pointer" }}>
+            side view
+          </button>
+          <button onClick={() => setView((v) => ({ n: v.n + 1, side: false }))} style={{ fontSize: 10, background: "#1a1a1a", color: "#eee", border: "1px solid #444", padding: "3px 8px", cursor: "pointer" }}>
+            front view
           </button>
           <button onClick={saveNow} style={{ fontSize: 10, background: "#2a5a2a", color: "#eee", border: "1px solid #4a8a4a", padding: "3px 8px", cursor: "pointer" }}>
             Save position now
@@ -519,6 +664,44 @@ export default function RockingChairBearLab() {
           <OverridePanel label="Bear" override={bearOverride} onPatch={(o) => patchOverride(BEAR_NAME, o)} onReset={() => resetOverride(BEAR_NAME)} />
         </Section>
 
+        <Section title="Bear look (coat, beard, glasses)">
+          <div style={{ fontSize: 10, opacity: 0.55, marginBottom: 6, lineHeight: 1.4 }}>
+            Shared with the OnlyBears bear and the main Scene Lab&apos;s &quot;Old
+            bear&quot; group - same saved settings. Saves automatically (~0.4s
+            after you stop dragging). &quot;Recolour&quot; blends from his original
+            brown to the coat colour.
+          </div>
+          {OLD_BEAR_COLORS.map(({ label, keys }) => {
+            const hex = rgbToHex(cfg.look[keys[0]], cfg.look[keys[1]], cfg.look[keys[2]]);
+            return (
+              <label key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6, fontSize: 10 }}>
+                <span>{label}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ opacity: 0.7, fontFamily: "monospace" }}>{hex}</span>
+                  <input
+                    type="color"
+                    value={hex}
+                    onChange={(e) => {
+                      const [r, g, b] = hexToRgb(e.target.value);
+                      patchLook({ [keys[0]]: r, [keys[1]]: g, [keys[2]]: b });
+                    }}
+                    style={{ width: 40, height: 22, border: "1px solid #444", background: "transparent", cursor: "pointer" }}
+                  />
+                </span>
+              </label>
+            );
+          })}
+          {OLD_BEAR_SLIDERS.map(({ key, label, min, max, step }) => (
+            <Slider key={key} label={label} min={min} max={max} step={step} value={cfg.look[key]} onChange={(v) => patchLook({ [key]: v })} />
+          ))}
+          <button
+            onClick={() => patchLook({ ...OLD_BEAR_LOOK_DEFAULTS })}
+            style={{ marginTop: 6, background: "#2a2a2a", color: "#eee", border: "1px solid #444", padding: "4px 8px", cursor: "pointer" }}
+          >
+            Reset look
+          </button>
+        </Section>
+
         <Section title="Bear pose (arms + legs)">
           <div style={{ fontSize: 10, opacity: 0.55, marginBottom: 6, lineHeight: 1.4 }}>
             A first attempt at getting his arms onto the armrests and his legs
@@ -532,6 +715,59 @@ export default function RockingChairBearLab() {
             <input type="checkbox" checked={pose.enabled} onChange={(e) => setPoseEnabled(e.target.checked)} />
             <span>enabled (off = plain sit_log, no custom pose)</span>
           </label>
+          <details open style={{ marginBottom: 8, borderTop: "1px solid #2a2a2a", paddingTop: 4 }}>
+            <summary style={{ cursor: "pointer", fontSize: 10.5, fontWeight: 600, padding: "3px 0" }}>Posture (how he sits)</summary>
+            <div style={{ fontSize: 10, opacity: 0.55, margin: "4px 0 6px", lineHeight: 1.4 }}>
+              Degrees. Lean tips the whole upper body back into the chair (legs
+              stay put); hunch curls his back forward like an old man; the head
+              sliders turn his head from its own joint. Applied after the
+              per-bone deltas below. Save pose to disk to put it on the site.
+            </div>
+            <Slider label="lean back (+) / forward (-)" min={-40} max={40} step={0.5} value={pose.posture.recline} onChange={(v) => patchPosture("recline", v)} />
+            <Slider label="hunch over" min={-30} max={45} step={0.5} value={pose.posture.hunch} onChange={(v) => patchPosture("hunch", v)} />
+            <Slider label="head nod down (+) / up (-)" min={-45} max={45} step={0.5} value={pose.posture.headPitch} onChange={(v) => patchPosture("headPitch", v)} />
+            <Slider label="head turn" min={-60} max={60} step={0.5} value={pose.posture.headYaw} onChange={(v) => patchPosture("headYaw", v)} />
+            <Slider label="head tilt" min={-35} max={35} step={0.5} value={pose.posture.headRoll} onChange={(v) => patchPosture("headRoll", v)} />
+          </details>
+          <details open style={{ marginBottom: 8, borderTop: "1px solid #2a2a2a", paddingTop: 4 }}>
+            <summary style={{ cursor: "pointer", fontSize: 10.5, fontWeight: 600, padding: "3px 0" }}>Rocking (chair + body)</summary>
+            <div style={{ fontSize: 10, opacity: 0.55, margin: "4px 0 6px", lineHeight: 1.4 }}>
+              The chair rolls forward and back on its runners with him in it; his
+              legs stay planted. The posture above is how he sits in the MIDDLE
+              of the swing. Below, set how his body changes at each END - hold
+              the chair there with the buttons to see exactly what you are
+              posing. Save pose to disk to put it on the site.
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
+              <input type="checkbox" checked={pose.rock.enabled} onChange={(e) => patchRock({ enabled: e.target.checked })} />
+              <span>rocking</span>
+            </label>
+            <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+              {(["rock", "front", "middle", "back"] as RockHold[]).map((h) => (
+                <button
+                  key={h}
+                  onClick={() => setHold(h)}
+                  style={{ flex: 1, fontSize: 10, background: hold === h ? "#5a3a1a" : "#1a1a1a", color: "#eee", border: `1px solid ${hold === h ? "#c07a30" : "#444"}`, padding: "3px 4px", cursor: "pointer" }}
+                >
+                  {h === "rock" ? "rocking" : `hold ${h}`}
+                </button>
+              ))}
+            </div>
+            <Slider label="chair tip each way (deg)" min={0} max={20} step={0.5} value={pose.rock.amount} onChange={(v) => patchRock({ amount: v })} />
+            <Slider label="seconds per rock" min={1} max={6} step={0.05} value={pose.rock.period} onChange={(v) => patchRock({ period: v })} />
+            <Slider label="body leads chair by (deg of phase)" min={-90} max={90} step={1} value={pose.rock.lead} onChange={(v) => patchRock({ lead: v })} />
+            {(["front", "back"] as const).map((end) => (
+              <div key={end} style={{ marginTop: 8, paddingLeft: 4, borderLeft: `2px solid ${hold === end ? "#c07a30" : "#2a2a2a"}` }}>
+                <div style={{ fontSize: 10, fontWeight: 600, opacity: 0.85, marginBottom: 3 }}>
+                  {end === "front" ? "Chair tipped FORWARD" : "Chair tipped BACK"}
+                  <span style={{ fontWeight: 400, opacity: 0.6 }}> (added to the posture)</span>
+                </div>
+                <Slider label="lean back (+) / forward (-)" min={-30} max={30} step={0.5} value={pose.rock[end].lean} onChange={(v) => patchRockEnd(end, "lean", v)} />
+                <Slider label="hunch more (+) / sit up (-)" min={-30} max={30} step={0.5} value={pose.rock[end].hunch} onChange={(v) => patchRockEnd(end, "hunch", v)} />
+                <Slider label="head nod down (+) / up (-)" min={-30} max={30} step={0.5} value={pose.rock[end].head} onChange={(v) => patchRockEnd(end, "head", v)} />
+              </div>
+            ))}
+          </details>
           {BONE_GROUPS.map((group) => (
             <details key={group.title} style={{ marginBottom: 8, borderTop: "1px solid #2a2a2a", paddingTop: 4 }}>
               <summary style={{ cursor: "pointer", fontSize: 10.5, fontWeight: 600, padding: "3px 0" }}>{group.title}</summary>

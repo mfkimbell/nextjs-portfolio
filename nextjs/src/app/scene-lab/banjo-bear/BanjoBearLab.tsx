@@ -5,6 +5,7 @@ import { OrbitControls, useGLTF, useAnimations } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { getBanjoFingerPhase } from "@/lib/banjo-performance";
 
 import Matte from "@/components/Matte";
 const BEAR_URL = "/wildpoly/bear_sit_fixed.glb";
@@ -38,6 +39,8 @@ type State = {
   paused: boolean;
   frame: number;
   speed: number;
+  pickingAmount: number;
+  fretAmount: number;
 };
 
 const zeroArms: Record<ArmBoneName, ArmRot> = ARM_BONES.reduce((acc, n) => {
@@ -53,6 +56,8 @@ const DEFAULT_STATE: State = {
   paused: false,
   frame: 30,
   speed: 1.0,
+  pickingAmount: 0,
+  fretAmount: 0,
 };
 
 function BanjoBear({
@@ -73,6 +78,10 @@ function BanjoBear({
   const armBonesRef = useRef<Partial<Record<ArmBoneName, THREE.Bone>>>({});
   /** Rest local quaternion per arm bone, captured at mount. */
   const restQuatRef = useRef<Partial<Record<ArmBoneName, THREE.Quaternion>>>({});
+  const fingersRRef = useRef<THREE.Bone | null>(null);
+  const fingersLRef = useRef<THREE.Bone | null>(null);
+  const fingersRRestRef = useRef<THREE.Quaternion | null>(null);
+  const fingersLRestRef = useRef<THREE.Quaternion | null>(null);
 
   const { actions, mixer } = useAnimations(bearGltf.animations, bearScene);
 
@@ -82,6 +91,8 @@ function BanjoBear({
       if (o.name === "Food" || o.name === "food") foodRef.current = o;
       const b = o as THREE.Bone;
       if (!b.isBone) return;
+      if (o.name === "fingers_R") { fingersRRef.current = b; fingersRRestRef.current = b.quaternion.clone(); }
+      if (o.name === "fingers_L") { fingersLRef.current = b; fingersLRestRef.current = b.quaternion.clone(); }
       if ((ARM_BONES as readonly string[]).includes(o.name)) {
         const name = o.name as ArmBoneName;
         armBonesRef.current[name] = b;
@@ -148,6 +159,25 @@ function BanjoBear({
       scratchEul.set(r.x, r.y, r.z, "XYZ");
       scratch.setFromEuler(scratchEul);
       b.quaternion.copy(rest).multiply(scratch);
+    }
+    const phase = getBanjoFingerPhase(clip?.time ?? state.frame / 24, 96);
+    const handR = armBonesRef.current.hand_R;
+    if (handR && state.pickingAmount > 0) {
+      scratchEul.set(
+        -phase.pickCurl * 0.055 * state.pickingAmount,
+        Math.sin((clip?.time ?? state.frame / 24) * 96 / 60 * Math.PI * 2) * 0.025 * state.pickingAmount,
+        Math.sin((clip?.time ?? state.frame / 24) * 96 / 60 * Math.PI * 2) * 0.045 * state.pickingAmount,
+        "XYZ",
+      );
+      handR.quaternion.multiply(scratch.setFromEuler(scratchEul));
+    }
+    if (fingersRRef.current && fingersRRestRef.current) {
+      scratchEul.set(-phase.pickCurl * 0.34 * state.pickingAmount, 0, phase.pickCurl * 0.12 * state.pickingAmount, "XYZ");
+      fingersRRef.current.quaternion.copy(fingersRRestRef.current).multiply(scratch.setFromEuler(scratchEul));
+    }
+    if (fingersLRef.current && fingersLRestRef.current) {
+      scratchEul.set(-phase.fretPressure * 0.035 * state.fretAmount, 0, 0, "XYZ");
+      fingersLRef.current.quaternion.copy(fingersLRestRef.current).multiply(scratch.setFromEuler(scratchEul));
     }
   });
 
@@ -383,6 +413,8 @@ ${lines}
           </div>
           <Slider label="frame (when paused)" min={0} max={totalFrames} step={1} value={s.frame} setValue={setScalar("frame")} fmt={(v) => `${Math.round(v)}`} />
           <Slider label="speed" min={0.1} max={2.0} step={0.05} value={s.speed} setValue={setScalar("speed")} fmt={(v) => `${v.toFixed(2)}×`} />
+          <Slider label="picking amount" min={0} max={1} step={0.01} value={s.pickingAmount} setValue={setScalar("pickingAmount")} />
+          <Slider label="fret pressure" min={0} max={1} step={0.01} value={s.fretAmount} setValue={setScalar("fretAmount")} />
         </details>
 
         <details open style={{ marginTop: 10 }}>

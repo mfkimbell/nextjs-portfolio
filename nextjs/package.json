@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "twilio:setup": "node scripts/setup-twilio.mjs",
+    "validate:bear-assets": "python3 scripts/validate_bear_assets.py",
     "postinstall": "prisma generate"
   },
   "dependencies": {

@@ -21,6 +21,10 @@ import {
   type OceanFloorSceneConfig,
 } from "@/components/scene-lab/sceneConfig";
 import { worldToLocationView } from "@/components/scene-lab/CampfireScene";
+import { useBearTalkTest } from "@/hooks/useBearTalkTest";
+import {
+  hexToRgb, OLD_BEAR_COLORS, OLD_BEAR_SLIDERS, oldBearConfigKey, rgbToHex,
+} from "@/components/scene-lab/oldBear";
 
 type SceneKey = "campfire" | "ocean";
 type DragPlaneMode = "xz" | "xy";
@@ -244,6 +248,36 @@ function SliderRow({
   );
 }
 
+/** A colour swatch driving three 0..1 config numbers (sRGB). */
+function ColorRow({
+  label,
+  rgb,
+  onChange,
+}: {
+  label: string;
+  rgb: [number, number, number];
+  onChange: (rgb: [number, number, number]) => void;
+}) {
+  const query = useContext(SearchContext);
+  const groupTitle = useContext(GroupTitleContext);
+  if (!matchesSearch(label, query, groupTitle)) return null;
+  const hex = rgbToHex(rgb[0], rgb[1], rgb[2]);
+  return (
+    <label className="flex items-center justify-between gap-3 text-[0.68rem] uppercase tracking-[0.16em] text-white/55">
+      <span>{label}</span>
+      <span className="flex items-center gap-2">
+        <span className="font-mono text-white/80 normal-case">{hex}</span>
+        <input
+          type="color"
+          value={hex}
+          onChange={(event) => onChange(hexToRgb(event.target.value))}
+          className="h-6 w-10 cursor-pointer rounded border border-white/20 bg-transparent"
+        />
+      </span>
+    </label>
+  );
+}
+
 const GroupTitleContext = createContext<string>("");
 
 /** Turn a section title into a stable DOM id so the jump-bar can scroll to it. */
@@ -291,31 +325,25 @@ function ControlGroup({ title, jumpKey, scope = "shared", children }: { title: s
   const filter = useContext(LocationScopeContext);
   const id = sectionIdFromTitle(jumpKey ?? title);
 
-  // Open state is a fully React-controlled boolean, seeded synchronously from
-  // localStorage on first render. The old approach let <details> use its own
-  // uncontrolled DOM state, which snapped shut on every Fast Refresh reload
-  // (which fires ~800ms after each slider drag, because autosave rewrites
-  // campfireScene.json). Controlling the value here keeps whatever panel the
-  // user is editing pinned open through those reloads.
-  const [open, setOpen] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      const raw = window.localStorage.getItem(CONTROL_GROUP_OPEN_KEY);
-      if (!raw) return false;
-      const map = JSON.parse(raw) as Record<string, boolean>;
-      return !!map[id];
-    } catch {
-      return false;
-    }
-  });
+  // Start closed on both server and client, then restore persisted state after
+  // hydration so <details>' controlled `open` attribute cannot mismatch.
+  const [open, setOpen] = useState(false);
+  const [restored, setRestored] = useState(false);
+
+  useEffect(() => {
+    const map = readOpenMap();
+    setOpen(!!map[id]);
+    setRestored(true);
+  }, [id]);
 
   // Persist to localStorage whenever it flips, so the next hot-reload seeds
   // from the freshly-updated map.
   useEffect(() => {
+    if (!restored) return;
     const map = readOpenMap();
     map[id] = open;
     writeOpenMap(map);
-  }, [id, open]);
+  }, [id, open, restored]);
 
   // SectionJumpBar imperatively sets `.open = true` on the DOM element - keep
   // React state in sync when that happens (or when the user clicks the
@@ -399,7 +427,7 @@ const LIGHT_SECTIONS: Record<string, readonly string[]> = {
   campfire_laptop_kenney: ["1 · Campfire — laptop screen"],
 
   desk_campfire: ["2 · Arcade — campfire"],
-  old_bear_computer: ["Prop lights · lanterns + computer (3 · Cabin), ambient + caravan (2 · Arcade)"],
+  old_bear_computer: ["3 · Cabin — computer screen light"],
   old_bear_camping: [
     "2 · Arcade — camp lamps",
     "2 · Arcade — string-light bar",
@@ -530,6 +558,9 @@ export default function SceneLabClient() {
   const [lightsOpen, setLightsOpen] = useState(true);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [campfireConfig, setCampfireConfig] = useState<CampfireSceneConfig>(DEFAULT_CAMPFIRE_CONFIG);
+  // Mic / audio-file stand-in for the live bear call, so the "Bear talking"
+  // knobs can be tuned in the lab.
+  const talkTest = useBearTalkTest();
   const [oceanConfig, setOceanConfig] = useState<OceanFloorSceneConfig>(DEFAULT_OCEAN_CONFIG);
   const [selectedObject, setSelectedObject] = useState<string | null>(null);
   const [dragPlaneMode, setDragPlaneMode] = useState<DragPlaneMode>("xz");
@@ -565,6 +596,8 @@ export default function SceneLabClient() {
   >(null);
   /** Ticks up whenever "Reset camera" is pressed so CampfireScene snaps back. */
   const [cameraSnapSignal, setCameraSnapSignal] = useState(0);
+  /** Ticks to play (or send away) the OnlyBears bear from the lab. */
+  const [onlyBearsPlaySignal, setOnlyBearsPlaySignal] = useState(0);
   /** true while the live pose differs from the saved pose - shows "unsaved" tag. */
   const [cameraDirty, setCameraDirty] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1089,7 +1122,9 @@ export default function SceneLabClient() {
         <CampfireScene
           key={`campfire-scene-${sceneKey}`}
           config={campfireConfig}
+          bearVoiceRef={talkTest.voiceRef}
           cameraSnapSignal={cameraSnapSignal}
+          onlyBearsPlaySignal={onlyBearsPlaySignal}
           cameraLivePoseRef={cameraLivePoseRef}
           onCameraChange={(pos, tgt) => {
             // NOTE: we deliberately do NOT commit to config here. Orbiting
@@ -1843,6 +1878,11 @@ export default function SceneLabClient() {
                     <SliderRow label="Set Z (toward/away)" value={campfireConfig.arcadeSetZ} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("arcadeSetZ", value)} />
                     <SliderRow label="Zoom standoff (screens)" value={campfireConfig.crtFocusBack} min={0.6} max={6} step={0.01} onChange={(value) => updateCampfire("crtFocusBack", value)} />
                     <SliderRow label="Zoom height (screens)" value={campfireConfig.crtFocusHeight} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("crtFocusHeight", value)} />
+                    <SliderRow label="Cabin PC zoom standoff (screens)" value={campfireConfig.pcFocusBack} min={0.6} max={6} step={0.01} onChange={(value) => updateCampfire("pcFocusBack", value)} />
+                    <SliderRow label="Cabin PC zoom height (screens)" value={campfireConfig.pcFocusHeight} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("pcFocusHeight", value)} />
+                    <SliderRow label="OnlyBears reveal distance (screens)" value={campfireConfig.pcRevealBack} min={2} max={20} step={0.1} onChange={(value) => updateCampfire("pcRevealBack", value)} />
+                    <SliderRow label="OnlyBears reveal height (screens)" value={campfireConfig.pcRevealHeight} min={-2} max={6} step={0.05} onChange={(value) => updateCampfire("pcRevealHeight", value)} />
+                    <SliderRow label="OnlyBears reveal aim up (screens)" value={campfireConfig.pcRevealAimUp} min={-2} max={6} step={0.05} onChange={(value) => updateCampfire("pcRevealAimUp", value)} />
                     <SliderRow label="CRT glow (all 4)" value={campfireConfig.arcadeCrtGlow} min={0} max={5} step={0.02} onChange={(value) => updateCampfire("arcadeCrtGlow", value)} />
                     <SliderRow label="Light R" value={campfireConfig.arcadeCrtLightR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightR", value)} />
                     <SliderRow label="Light G" value={campfireConfig.arcadeCrtLightG} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("arcadeCrtLightG", value)} />
@@ -1869,6 +1909,37 @@ export default function SceneLabClient() {
                     <SliderRow label="Set X (left/right)" value={campfireConfig.cabinSetX} min={-16} max={16} step={0.01} onChange={(value) => updateCampfire("cabinSetX", value)} />
                     <SliderRow label="Set Y (up/down)" value={campfireConfig.cabinSetY} min={-3} max={5} step={0.01} onChange={(value) => updateCampfire("cabinSetY", value)} />
                     <SliderRow label="Set Z (toward/away)" value={campfireConfig.cabinSetZ} min={-20} max={20} step={0.01} onChange={(value) => updateCampfire("cabinSetZ", value)} />
+                  </ControlGroup>
+
+                  <ControlGroup title="3 · Cabin — computer screen light" scope="3">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      The cabin computer: how bright the desktop on the glass is, and the
+                      bluish light it throws onto the bear, the desk and the room. The
+                      light moves with the computer.
+                    </p>
+                    <div className="text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Light on the room</div>
+                    <SliderRow label="Light on (0/1)" value={campfireConfig.deskComputerLightOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskComputerLightOn", value)} />
+                    <SliderRow label="Intensity" value={campfireConfig.deskComputerIntensity} min={0} max={20} step={0.05} onChange={(value) => updateCampfire("deskComputerIntensity", value)} />
+                    <SliderRow label="Reach (distance)" value={campfireConfig.deskComputerDistance} min={0} max={30} step={0.05} onChange={(value) => updateCampfire("deskComputerDistance", value)} />
+                    <SliderRow label="Cone width (deg)" value={campfireConfig.deskComputerAngle} min={5} max={89} step={1} onChange={(value) => updateCampfire("deskComputerAngle", value)} />
+                    <SliderRow label="Edge softness" value={campfireConfig.deskComputerPenumbra} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerPenumbra", value)} />
+                    <SliderRow label="Light R" value={campfireConfig.deskComputerColorR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerColorR", value)} />
+                    <SliderRow label="Light G" value={campfireConfig.deskComputerColorG} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerColorG", value)} />
+                    <SliderRow label="Light B" value={campfireConfig.deskComputerColorB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerColorB", value)} />
+                    <SliderRow label="Casts shadows (0/1)" value={campfireConfig.deskComputerShadow} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskComputerShadow", value)} />
+                    <div className="mt-1 text-[0.6rem] text-white/40">Place it on the monitor face and aim it:</div>
+                    <SliderRow label="Light X" value={campfireConfig.deskComputerLightX} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerLightX", value)} />
+                    <SliderRow label="Light Y" value={campfireConfig.deskComputerLightY} min={-1} max={2} step={0.01} onChange={(value) => updateCampfire("deskComputerLightY", value)} />
+                    <SliderRow label="Light Z" value={campfireConfig.deskComputerLightZ} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerLightZ", value)} />
+                    <SliderRow label="Aim up / down" value={campfireConfig.deskComputerAimY} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("deskComputerAimY", value)} />
+                    <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">The screen itself</div>
+                    <SliderRow label="Desktop brightness" value={campfireConfig.deskComputerGlassBrightness} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("deskComputerGlassBrightness", value)} />
+                    <div className="mt-1 text-[0.6rem] text-white/40">The monitor model&apos;s own screen panel (behind the desktop picture):</div>
+                    <SliderRow label="Panel glow on (0/1)" value={campfireConfig.deskComputerScreenOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskComputerScreenOn", value)} />
+                    <SliderRow label="Panel glow brightness" value={campfireConfig.deskComputerScreenBrightness} min={0} max={6} step={0.05} onChange={(value) => updateCampfire("deskComputerScreenBrightness", value)} />
+                    <SliderRow label="Panel glow R" value={campfireConfig.deskComputerScreenR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerScreenR", value)} />
+                    <SliderRow label="Panel glow G" value={campfireConfig.deskComputerScreenG} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerScreenG", value)} />
+                    <SliderRow label="Panel glow B" value={campfireConfig.deskComputerScreenB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerScreenB", value)} />
                   </ControlGroup>
 
                   <ControlGroup title="3 · Cabin — cabin lamp" scope="3">
@@ -2243,32 +2314,15 @@ export default function SceneLabClient() {
                     <SliderRow label="Move Z" value={campfireConfig.deskLampHoodOffZ} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskLampHoodOffZ", value)} />
                   </ControlGroup>
 
-                  <ControlGroup jumpKey="Prop lights" title="Prop lights · lanterns + computer (3 · Cabin), ambient + caravan (2 · Arcade)" scope="shared">
+                  <ControlGroup jumpKey="Prop lights" title="Prop lights · lanterns (3 · Cabin), ambient + caravan (2 · Arcade)" scope="shared">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
-                      Prop-mounted lights. The lanterns and the computer are
-                      in scene 3 (Cabin); the ambient fill and the caravan
+                      Prop-mounted lights. The lanterns are in scene 3 (Cabin;
+                      the computer has its own group there); the ambient fill and the caravan
                       windows light scene 2 (Arcade). Each moves with its prop,
                       so this group is shown under both scenes.
                     </p>
                     <div className="text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Lanterns</div>
                     <div className="mt-1 text-[0.6rem] text-white/40">Line the point-light up with the candle wick:</div>
-                    <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Computer screen</div>
-                    <div className="mt-1 text-[0.6rem] text-white/40">The screen itself — the panel, not the light it throws.</div>
-                    <SliderRow label="Screen on (0/1)" value={campfireConfig.deskComputerScreenOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskComputerScreenOn", value)} />
-                    <SliderRow label="Screen brightness" value={campfireConfig.deskComputerScreenBrightness} min={0} max={6} step={0.05} onChange={(value) => updateCampfire("deskComputerScreenBrightness", value)} />
-                    <SliderRow label="Screen R" value={campfireConfig.deskComputerScreenR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerScreenR", value)} />
-                    <SliderRow label="Screen G" value={campfireConfig.deskComputerScreenG} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerScreenG", value)} />
-                    <SliderRow label="Screen B" value={campfireConfig.deskComputerScreenB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerScreenB", value)} />
-                    <div className="mt-1 text-[0.6rem] text-white/40">The spill onto the room.</div>
-                    <SliderRow label="Computer intensity" value={campfireConfig.deskComputerIntensity} min={0} max={20} step={0.05} onChange={(value) => updateCampfire("deskComputerIntensity", value)} />
-                    <SliderRow label="Computer distance" value={campfireConfig.deskComputerDistance} min={0} max={30} step={0.05} onChange={(value) => updateCampfire("deskComputerDistance", value)} />
-                    <SliderRow label="Computer R" value={campfireConfig.deskComputerColorR} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerColorR", value)} />
-                    <SliderRow label="Computer G" value={campfireConfig.deskComputerColorG} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerColorG", value)} />
-                    <SliderRow label="Computer B" value={campfireConfig.deskComputerColorB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerColorB", value)} />
-                    <div className="mt-1 text-[0.6rem] text-white/40">Nudge onto the actual monitor face:</div>
-                    <SliderRow label="Screen light X" value={campfireConfig.deskComputerLightX} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerLightX", value)} />
-                    <SliderRow label="Screen light Y" value={campfireConfig.deskComputerLightY} min={-1} max={2} step={0.01} onChange={(value) => updateCampfire("deskComputerLightY", value)} />
-                    <SliderRow label="Screen light Z" value={campfireConfig.deskComputerLightZ} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerLightZ", value)} />
                     <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Warm ambient fill</div>
                     <p className="mb-1 text-[0.6rem] leading-relaxed text-white/40">
                       HemisphereLight scoped to scene 2 (Arcade) - sky color is
@@ -3298,6 +3352,11 @@ export default function SceneLabClient() {
                     <SliderRow label="Banjo rot Y" value={campfireConfig.banjoPropRotY} min={-3.14} max={3.14} step={0.01} onChange={(value) => updateCampfire("banjoPropRotY", value)} />
                     <SliderRow label="Banjo rot Z" value={campfireConfig.banjoPropRotZ} min={-3.14} max={3.14} step={0.01} onChange={(value) => updateCampfire("banjoPropRotZ", value)} />
                     <SliderRow label="Banjo scale" value={campfireConfig.banjoPropScale} min={0.1} max={4} step={0.01} onChange={(value) => updateCampfire("banjoPropScale", value)} />
+                    <SliderRow label="Picking BPM" value={campfireConfig.banjoPickingBpm} min={40} max={180} step={1} onChange={(value) => updateCampfire("banjoPickingBpm", value)} />
+                    <SliderRow label="Picking amount" value={campfireConfig.banjoPickingAmount} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("banjoPickingAmount", value)} />
+                    <SliderRow label="Picking wrist pitch" value={campfireConfig.banjoPickingWristPitch} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("banjoPickingWristPitch", value)} />
+                    <SliderRow label="Picking wrist roll" value={campfireConfig.banjoPickingWristRoll} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("banjoPickingWristRoll", value)} />
+                    <SliderRow label="Fret finger pressure" value={campfireConfig.banjoFretFingerAmount} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("banjoFretFingerAmount", value)} />
                     <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Banjo bear glasses</div>
                     <p className="mb-1 text-[0.6rem] leading-relaxed text-white/40">
                       Offsets stack on top of the shared glasses fit (Animals
@@ -3320,11 +3379,179 @@ export default function SceneLabClient() {
                     <SliderRow label="Maple speech" value={campfireConfig.mapleSpeechVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("mapleSpeechVolume", value)} />
                     <SliderRow label="Fire crackling" value={campfireConfig.fireCracklingVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("fireCracklingVolume", value)} />
                     <SliderRow label="Banjo" value={campfireConfig.banjoVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("banjoVolume", value)} />
+                    <SliderRow label="Banjo: fade with distance (1 = real)" value={campfireConfig.banjoDistanceRolloff} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("banjoDistanceRolloff", value)} />
+                    <SliderRow label="Banjo: max boost up close" value={campfireConfig.banjoMaxBoost} min={1} max={4} step={0.05} onChange={(value) => updateCampfire("banjoMaxBoost", value)} />
                     <SliderRow label="Swoosh (panel switch)" value={campfireConfig.swooshVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("swooshVolume", value)} />
                     <SliderRow label="Swoosh delay (ms)" value={campfireConfig.swooshDelayMs} min={0} max={1000} step={10} onChange={(value) => updateCampfire("swooshDelayMs", value)} />
                     <SliderRow label="Swoosh speed" value={campfireConfig.swooshRate} min={0.3} max={2} step={0.01} onChange={(value) => updateCampfire("swooshRate", value)} />
                     <SliderRow label="Hover" value={campfireConfig.hoverVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("hoverVolume", value)} />
                     <SliderRow label="Click" value={campfireConfig.clickVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("clickVolume", value)} />
+                    <SliderRow label="Cabin computer sounds" value={campfireConfig.pcSoundVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("pcSoundVolume", value)} />
+                  </ControlGroup>
+
+                  <ControlGroup title="Old bear (rocking chair + OnlyBears)">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      One model, both bears. Coat colour, beard colour, glasses,
+                      eyebrows and beard update live on the rocking-chair bear and
+                      the OnlyBears bear. &quot;Recolour&quot; blends from his original brown
+                      to the coat colour.
+                    </p>
+                    {OLD_BEAR_COLORS.map(({ label, keys }) => {
+                      const ck = keys.map((k) => oldBearConfigKey(k) as keyof CampfireSceneConfig);
+                      return (
+                        <ColorRow
+                          key={label}
+                          label={label}
+                          rgb={[campfireConfig[ck[0]] as number, campfireConfig[ck[1]] as number, campfireConfig[ck[2]] as number]}
+                          onChange={(rgb) => ck.forEach((k, i) => updateCampfire(k, rgb[i]))}
+                        />
+                      );
+                    })}
+                    {OLD_BEAR_SLIDERS.map(({ key, label, min, max, step }) => {
+                      const ck = oldBearConfigKey(key) as keyof CampfireSceneConfig;
+                      return (
+                        <SliderRow key={key} label={label} value={campfireConfig[ck] as number} min={min} max={max} step={step} onChange={(value) => updateCampfire(ck, value)} />
+                      );
+                    })}
+                  </ControlGroup>
+
+                  <ControlGroup title="OnlyBears gag">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      Frame the cabin (scene 3), press Play to run the paw-over-the-screen
+                      routine in place, then tune. Press again to send him away.
+                    </p>
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setOnlyBearsPlaySignal((n) => n + 1)}
+                        className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[0.65rem] font-semibold text-white/80 hover:bg-white/15"
+                      >
+                        Play / send away OnlyBears
+                      </button>
+                    </div>
+                    <SliderRow label="Speed" value={campfireConfig.onlyBearsSpeed} min={0.2} max={2.5} step={0.01} onChange={(value) => updateCampfire("onlyBearsSpeed", value)} />
+                    <SliderRow label="Paw size" value={campfireConfig.onlyBearsPawScale} min={1} max={3} step={0.01} onChange={(value) => updateCampfire("onlyBearsPawScale", value)} />
+                    <SliderRow label="Bear size" value={campfireConfig.onlyBearsScale} min={0.6} max={1.6} step={0.01} onChange={(value) => updateCampfire("onlyBearsScale", value)} />
+                    <SliderRow label="Position x" value={campfireConfig.onlyBearsX} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("onlyBearsX", value)} />
+                    <SliderRow label="Position y" value={campfireConfig.onlyBearsY} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("onlyBearsY", value)} />
+                    <SliderRow label="Position z" value={campfireConfig.onlyBearsZ} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("onlyBearsZ", value)} />
+                    <SliderRow label="Extra lean (deg)" value={campfireConfig.onlyBearsLean} min={-25} max={25} step={0.5} onChange={(value) => updateCampfire("onlyBearsLean", value)} />
+                    <SliderRow label="Looks at you" value={campfireConfig.onlyBearsLook} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("onlyBearsLook", value)} />
+                    <SliderRow label="Breathing" value={campfireConfig.onlyBearsBreath} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("onlyBearsBreath", value)} />
+                  </ControlGroup>
+
+                  <ControlGroup title="Bear talking">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      Lip-sync and body language for the two voice bears. Test
+                      without a call: talk into your mic or play an audio file,
+                      pick who is &quot;speaking&quot;, then tune. Frame the
+                      campfire bears first. Amount sliders: 1 = default, 0 = off.
+                    </p>
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => (talkTest.source === "mic" ? talkTest.stop() : void talkTest.startMic())}
+                        className={`rounded-full border px-2.5 py-1 text-[0.65rem] font-semibold ${talkTest.source === "mic" ? "border-emerald-300/60 bg-emerald-400/20 text-emerald-100" : "border-white/15 bg-white/10 text-white/80 hover:bg-white/15"}`}
+                      >
+                        {talkTest.source === "mic" ? "Stop mic" : "Test with mic"}
+                      </button>
+                      <label className={`cursor-pointer rounded-full border px-2.5 py-1 text-[0.65rem] font-semibold ${talkTest.source === "file" ? "border-emerald-300/60 bg-emerald-400/20 text-emerald-100" : "border-white/15 bg-white/10 text-white/80 hover:bg-white/15"}`}>
+                        {talkTest.source === "file" ? "Playing file..." : "Test with audio file"}
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void talkTest.startFile(f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                      {talkTest.source !== "off" && (
+                        <button type="button" onClick={talkTest.stop} className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[0.65rem] font-semibold text-white/80 hover:bg-white/15">
+                          Stop
+                        </button>
+                      )}
+                    </div>
+                    <div className="mb-2 flex items-center gap-1.5 text-[0.65rem] text-white/60">
+                      Speaker:
+                      {([["back_left_log", "Smokey (banjo)"], ["back_right_log", "Maple (fish)"]] as const).map(([id, label]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => talkTest.setSpeaker(id)}
+                          className={`rounded-full border px-2 py-0.5 ${talkTest.speaker === id ? "border-white/60 bg-white/20 text-white" : "border-white/15 bg-white/5 text-white/60 hover:bg-white/10"}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    {talkTest.error && <p className="mb-1 text-[0.62rem] text-red-300">{talkTest.error}</p>}
+                    <div className="mt-1 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Mouth</div>
+                    <SliderRow label="Max mouth open" value={campfireConfig.bearTalkJawMax} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("bearTalkJawMax", value)} />
+                    <SliderRow label="Mouth sensitivity" value={campfireConfig.bearTalkJawGain} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearTalkJawGain", value)} />
+                    <SliderRow label="Wide (ee / s)" value={campfireConfig.bearTalkWide} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("bearTalkWide", value)} />
+                    <SliderRow label="Round (oo / w)" value={campfireConfig.bearTalkRound} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("bearTalkRound", value)} />
+                    <SliderRow label="Jaw corrective" value={campfireConfig.bearTalkJawCorrective} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("bearTalkJawCorrective", value)} />
+                    <SliderRow label="Shape corrective" value={campfireConfig.bearTalkShapeCorrective} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("bearTalkShapeCorrective", value)} />
+                    <SliderRow label="Open speed" value={campfireConfig.bearTalkOpenSpeed} min={2} max={80} step={1} onChange={(value) => updateCampfire("bearTalkOpenSpeed", value)} />
+                    <SliderRow label="Close speed" value={campfireConfig.bearTalkCloseSpeed} min={2} max={80} step={1} onChange={(value) => updateCampfire("bearTalkCloseSpeed", value)} />
+                    <SliderRow label="Lip shape speed" value={campfireConfig.bearTalkShapeSpeed} min={2} max={40} step={1} onChange={(value) => updateCampfire("bearTalkShapeSpeed", value)} />
+                    <SliderRow label="Lip movement" value={campfireConfig.bearTalkLips} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("bearTalkLips", value)} />
+                    <SliderRow label="Closed-mouth seal" value={campfireConfig.bearMouthRestSeal} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("bearMouthRestSeal", value)} />
+                    <SliderRow label="Seal start" value={campfireConfig.bearMouthSealStart} min={0} max={0.4} step={0.01} onChange={(value) => updateCampfire("bearMouthSealStart", value)} />
+                    <SliderRow label="Seal end" value={campfireConfig.bearMouthSealEnd} min={0.1} max={0.8} step={0.01} onChange={(value) => updateCampfire("bearMouthSealEnd", value)} />
+                    <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Head &amp; body</div>
+                    <SliderRow label="Accent nods" value={campfireConfig.bearTalkNod} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearTalkNod", value)} />
+                    <SliderRow label="Syllable beat" value={campfireConfig.bearTalkBeat} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearTalkBeat", value)} />
+                    <SliderRow label="Head follows pitch" value={campfireConfig.bearTalkPitchHead} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearTalkPitchHead", value)} />
+                    <SliderRow label="Head drift" value={campfireConfig.bearTalkSway} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearTalkSway", value)} />
+                    <SliderRow label="Ear flicks" value={campfireConfig.bearTalkEars} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearTalkEars", value)} />
+                    <SliderRow label="Listener nods" value={campfireConfig.bearTalkListener} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearTalkListener", value)} />
+                    <SliderRow label="Blink rate" value={campfireConfig.bearBlinkRate} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearBlinkRate", value)} />
+                    <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Gaze</div>
+                    <p className="mb-1 text-[0.6rem] leading-relaxed text-white/40">
+                      Smokey faces you and looks at Maple while Maple talks.
+                      Maple looks at Smokey while Smokey talks and while replying,
+                      otherwise faces you.
+                    </p>
+                    <SliderRow label="Look amount" value={campfireConfig.bearLookAmount} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("bearLookAmount", value)} />
+                    <SliderRow label="Head turn time (s)" value={campfireConfig.bearLookTurnTime} min={0.05} max={1.5} step={0.01} onChange={(value) => updateCampfire("bearLookTurnTime", value)} />
+                    <SliderRow label="User gaze height" value={campfireConfig.bearLookUserYOffset} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearLookUserYOffset", value)} />
+                    <SliderRow label="Partner reaction delay (s)" value={campfireConfig.bearLookPartnerDelay} min={0} max={0.8} step={0.01} onChange={(value) => updateCampfire("bearLookPartnerDelay", value)} />
+                    <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Fish reaction</div>
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      Changing any of these throws the fish again. Order: eyes follow the
+                      fish, snap to where it hits the fire, jaws drop, they look at each
+                      other, then back at you.
+                    </p>
+                    <SliderRow label="Follow the fish: turn time (s)" value={campfireConfig.bearFishFlightTurnTime} min={0.03} max={1} step={0.01} onChange={(value) => updateCampfire("bearFishFlightTurnTime", value)} />
+                    <SliderRow label="Later turns: turn time (s)" value={campfireConfig.bearFishFireTurnTime} min={0.03} max={1.5} step={0.01} onChange={(value) => updateCampfire("bearFishFireTurnTime", value)} />
+                    <SliderRow label="Max head turn (deg)" value={campfireConfig.bearFishMaxTurn} min={30} max={120} step={1} onChange={(value) => updateCampfire("bearFishMaxTurn", value)} />
+                    <SliderRow label="Impact surprise delay (s)" value={campfireConfig.bearFishImpactDelay} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("bearFishImpactDelay", value)} />
+                    <SliderRow label="Stare at fire before looking at each other (s)" value={campfireConfig.bearFishFireLookTime} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFireLookTime", value)} />
+                    <SliderRow label="Jaw-drop hold (s)" value={campfireConfig.bearFishMouthHoldTime} min={0.1} max={5} step={0.01} onChange={(value) => updateCampfire("bearFishMouthHoldTime", value)} />
+                    <SliderRow label="Return before line (s)" value={campfireConfig.bearFishReturnTime} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishReturnTime", value)} />
+                    <SliderRow label="Fish shock jaw amount" value={campfireConfig.bearFishJawAmount} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("bearFishJawAmount", value)} />
+                    <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Aim nudges (0 = right at it)</div>
+                    <div className="mt-1 text-[0.6rem] uppercase tracking-[0.16em] text-white/35">Left bear (Smokey)</div>
+                    <SliderRow label="Left bear: Fish in the air aim X" value={campfireConfig.bearFishFlightLookX} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFlightLookX", value)} />
+                    <SliderRow label="Left bear: Fish in the air aim Y" value={campfireConfig.bearFishFlightLookY} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFlightLookY", value)} />
+                    <SliderRow label="Left bear: Fish in the air aim Z" value={campfireConfig.bearFishFlightLookZ} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFlightLookZ", value)} />
+                    <SliderRow label="Left bear: Fire aim X" value={campfireConfig.bearFishFireLookX} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFireLookX", value)} />
+                    <SliderRow label="Left bear: Fire aim Y" value={campfireConfig.bearFishFireLookY} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFireLookY", value)} />
+                    <SliderRow label="Left bear: Fire aim Z" value={campfireConfig.bearFishFireLookZ} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFireLookZ", value)} />
+                    <div className="mt-1 text-[0.6rem] uppercase tracking-[0.16em] text-white/35">Right bear (Maple)</div>
+                    <SliderRow label="Right bear: Fish in the air aim X" value={campfireConfig.bearFishFlightLookRX} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFlightLookRX", value)} />
+                    <SliderRow label="Right bear: Fish in the air aim Y" value={campfireConfig.bearFishFlightLookRY} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFlightLookRY", value)} />
+                    <SliderRow label="Right bear: Fish in the air aim Z" value={campfireConfig.bearFishFlightLookRZ} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFlightLookRZ", value)} />
+                    <SliderRow label="Right bear: Fire aim X" value={campfireConfig.bearFishFireLookRX} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFireLookRX", value)} />
+                    <SliderRow label="Right bear: Fire aim Y" value={campfireConfig.bearFishFireLookRY} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFireLookRY", value)} />
+                    <SliderRow label="Right bear: Fire aim Z" value={campfireConfig.bearFishFireLookRZ} min={-3} max={3} step={0.01} onChange={(value) => updateCampfire("bearFishFireLookRZ", value)} />
+                    <SliderRow label="Idle fish gaze height" value={campfireConfig.bearFishIdleGazeYOffset} min={-3} max={1} step={0.01} onChange={(value) => updateCampfire("bearFishIdleGazeYOffset", value)} />
+                    <SliderRow label="Idle fish look hold (s)" value={campfireConfig.bearFishIdleLookTime} min={0.2} max={8} step={0.05} onChange={(value) => updateCampfire("bearFishIdleLookTime", value)} />
+                    <SliderRow label="Idle fish look interval (s)" value={campfireConfig.bearFishIdleInterval} min={1} max={30} step={0.1} onChange={(value) => updateCampfire("bearFishIdleInterval", value)} />
                   </ControlGroup>
 
                   <button

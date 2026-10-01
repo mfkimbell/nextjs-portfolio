@@ -445,7 +445,16 @@ export type CrtMenuItem = {
   lines: string[];
   /** Melee-variant only: the yellow tagline that fills the bottom bar. */
   subtitle?: string;
+  /** Melee-variant only: the emblem the right-hand pane shows while this
+   *  item is lit. Unset picks one from the label, falling back to a star. */
+  icon?: CrtMenuIcon;
+  /** Melee-variant only: one short line under the emblem ("5 Roles"). */
+  caption?: string;
 };
+
+/** The pictograms the menu's emblem pane can draw. Vector, drawn straight
+ *  into the tube, so they stay crisp at any supersample. */
+export type CrtMenuIcon = "briefcase" | "code" | "gear" | "back" | "star";
 
 /** One line of a section screen: a bold heading and an optional detail under
  *  it. Rows without a detail pack tighter, so a flat list fits more of them. */
@@ -455,6 +464,8 @@ export type CrtPageRow = {
    *  anything longer than a word or two just truncates into noise. */
   tag?: string;
   sub?: string;
+  /** A second, quieter line under `sub` in the band - dates, for a role. */
+  meta?: string;
   /** The full write-up, one string per paragraph. Wrapped into the band. */
   body?: string[];
   /** /public path to a square-ish icon. Only used by a grid page. */
@@ -483,10 +494,13 @@ export type CrtPage = {
    *  big enough to read an animated logo in. `showCaption: false` drops the
    *  name plate, which is the right call when the band below already names
    *  whatever is lit. */
-  tile?: { wellH?: number; capH?: number; showCaption?: boolean };
+  tile?: { wellH?: number; capH?: number; showCaption?: boolean; artScale?: number };
   /** Share of the page's body given to the bottom band, 0..1. The grid gets
    *  the rest. 0.6 makes the diagram the subject and the tiles the index. */
   bandFrac?: number;
+  /** Every tile's art keeps playing, not just the lit one's. Right for a
+   *  handful of small looping logos; wrong for a 21-tile board. */
+  animateAll?: boolean;
 };
 
 export type CrtMenu = {
@@ -571,50 +585,82 @@ function easeOutCubic(x: number) {
  * Module scope rather than local to the draw, because clicking the tube has to
  * work out which plate is under the pointer and the two must not drift apart.
  * All in 256x192 canvas pixels. */
-const MELEE_PLATE_W = 110;
-const MELEE_PLATE_H = 18;
-const MELEE_PLATE_GAP = 3;
-const MELEE_PLATE_TOP = 26;
+const MELEE_PLATE_W = 116;
+const MELEE_PLATE_H = 20;
+const MELEE_PLATE_GAP = 6;
+const MELEE_PLATE_TOP = 33;
 const MELEE_PLATE_BASE_X = 20;
 /** Handplaced per-row x offsets that recreate the staircase-y wobble of the
  *  reference - not a formula, just eyeballed to feel like the original. */
-const MELEE_STAGGER = [10, -4, 2, -8, -2];
+const MELEE_STAGGER = [8, -2, 3, -5, 0];
 /** How far the lit plate slides out to the right. In the reference the
  *  current pick sits proud of the stack; it is the main thing that tells you
  *  which row you are on at a glance. Hit-testing applies it too. */
 const MELEE_SELECT_JUT = 7;
 /*
- * The menu's type, in the order the real thing uses it.
- *
- *   1. A-OTF Folk Pro Bold      Fontworks - the plate labels and headings
- *   2. ITC Galliard Std Ultra   the italic serif in the sub-list and titling
- *   3. Impact                   the small sub-logo / label overlays
- *   4. DF Gothic / Contemporary secondary system pop-ups
- *
- * All four are named here in that order, with the spellings each one ships
- * under on different platforms, because canvas resolves a family list exactly
- * the way CSS does: first one INSTALLED wins. None of them is bundled with
- * this site - there is no @font-face for them - so they only appear for a
- * viewer who owns them. In practice Impact is the one that lands, since it
- * ships with both macOS and Windows; everything before it is a commercial
- * licence. The tail is a generic that at least keeps the weight and width in
- * the right region.
+ * The menu's type: Super Smash 4.1, the fan-made recreation of the Smash
+ * series' own UI face, bundled in /public/fonts and registered at runtime by
+ * ensureSmashFont() below. Canvas resolves a family list the way CSS does, so
+ * until the file has arrived the text falls through to a heavy system sans of
+ * about the same width rather than to a serif.
  */
-const MELEE_FAMILIES = [
-  '"A-OTF Folk Pro"', '"A-OTF FolkPro"', '"FolkPro-Bold"', '"Folk Pro"', '"FOT-Folk Pro"',
-  '"ITC Galliard Std"', '"ITC Galliard"', '"Galliard Std"', '"Galliard"',
-  '"Impact"',
-  '"DF Gothic"', '"DFGothic-EB"', '"DF Contemporary"', '"DFPGothic-EB"',
-].join(", ");
+const SMASH_FONT_FAMILY = "Super Smash 4.1";
+const SMASH_FONT_URL = "/fonts/super-smash-4-1.ttf";
+const MELEE_UI_FONT = `"${SMASH_FONT_FAMILY}", "Arial Narrow", "Helvetica Neue", Arial, sans-serif`;
+/*
+ * Running text - the bullets under a role - is NOT set in it.
+ *
+ * Super Smash 4.1 is a titling face: capitals only, a high-contrast serif
+ * cut for 40px logos. Flowed as three lines of 7px body copy it turns into a
+ * wall of shouting capitals, which is exactly the "made in a hurry" look this
+ * screen is trying to lose. Headings, plates, captions and the strip wear the
+ * Smash face; sentences get a plain sans, the way the games do it.
+ */
+const MELEE_BODY_FONT = '"Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif';
 
-/** Upright UI text: plate labels, the caption, the bottom strip. In the
- *  reference these are Folk Pro Bold - a bold, slightly condensed gothic -
- *  NOT an italic serif, which is what they used to be drawn in here. */
-const MELEE_UI_FONT = `${MELEE_FAMILIES}, "Arial Black", "Helvetica Neue", Arial, sans-serif`;
-/** The italic serif: the sub-list, which is Galliard in the original. Led by
- *  Galliard so it wins here even though Folk Pro sits ahead of it overall. */
-const MELEE_SERIF_FONT = '"ITC Galliard Std", "ITC Galliard", "Galliard Std", "Galliard", '
-  + `${MELEE_FAMILIES}, Georgia, "Times New Roman", serif`;
+/**
+ * Text for the Smash face.
+ *
+ * The face maps UPPERCASE "O" to the Smash-ball emblem, and its lowercase
+ * letters are drawn as capitals anyway. So everything handed to it has its
+ * capital O dropped to lowercase - "TWILIO" set straight would print the
+ * emblem where the last letter should be.
+ */
+function smash(s: string) {
+  return s.replace(/O/g, "o");
+}
+
+/**
+ * Set the Smash face at the largest size, from `max` down to `min`, at which
+ * `s` fits `maxW`. Returns the size used. Labels scale down to their box
+ * rather than running into whatever sits next to them.
+ */
+function fitSmash(
+  ctx: CanvasRenderingContext2D,
+  s: string,
+  maxW: number,
+  max: number,
+  min: number,
+  style = "",
+) {
+  let px = max;
+  for (; px > min; px -= 0.25) {
+    ctx.font = `${style}${px}px ${MELEE_UI_FONT}`;
+    if (ctx.measureText(s).width <= maxW) return px;
+  }
+  ctx.font = `${style}${min}px ${MELEE_UI_FONT}`;
+  return min;
+}
+
+let smashFontRequested = false;
+/** Registers the Smash face with document.fonts once per page. Safe to call
+ *  every render - only the first call does anything. */
+export function ensureSmashFont() {
+  if (smashFontRequested || typeof document === "undefined" || typeof FontFace === "undefined") return;
+  smashFontRequested = true;
+  const face = new FontFace(SMASH_FONT_FAMILY, `url(${SMASH_FONT_URL})`);
+  face.load().then((f) => { document.fonts.add(f); }).catch(() => { smashFontRequested = false; });
+}
 
 /* Section-screen layout. The body runs from under the rail down to the Back
    plate; the strip keeps its place at the bottom. */
@@ -738,6 +784,164 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): st
   return out;
 }
 
+/**
+ * fillText, but HEAVIER when the Smash face is set.
+ *
+ * The face ships in one weight, and a canvas asked for "bold" of a face with
+ * no bold either fakes it inconsistently or not at all, depending on the
+ * browser. So the weight is added by hand: the same glyphs stroked in their
+ * own fill first, a line about 7% of the type size, which thickens every stem
+ * evenly without closing up the counters. Other faces pass straight through.
+ */
+function smashText(c: CanvasRenderingContext2D, s: string, x: number, y: number) {
+  if (c.font.includes(SMASH_FONT_FAMILY)) {
+    const px = parseFloat(/(\d+(?:\.\d+)?)px/.exec(c.font)?.[1] ?? "10");
+    const lw = c.lineWidth;
+    const lj = c.lineJoin;
+    const ss = c.strokeStyle;
+    c.lineWidth = Math.max(0.3, px * 0.07);
+    c.lineJoin = "round";
+    c.strokeStyle = c.fillStyle;
+    c.strokeText(s, x, y);
+    c.lineWidth = lw;
+    c.lineJoin = lj;
+    c.strokeStyle = ss;
+  }
+  c.fillText(s, x, y);
+}
+
+/** The emblem an item shows: its own, else guessed from the label. */
+function iconFor(item: CrtMenuItem): CrtMenuIcon {
+  if (item.icon) return item.icon;
+  const l = item.label.toLowerCase();
+  if (l.includes("experience") || l.includes("work")) return "briefcase";
+  if (l.includes("project")) return "code";
+  if (l.includes("skill")) return "gear";
+  if (l.includes("back") || l.includes("exit")) return "back";
+  return "star";
+}
+
+/**
+ * The pane's pictogram: a thin white line icon, centred on (cx, cy), about
+ * `r` logical px from middle to edge.
+ *
+ * Deliberately plain - white strokes and a faint glow, no disc, no gold, no
+ * fill - so it reads as UI rather than clip art. Every one of them moves, a
+ * little and slowly, so the pane is never a dead still:
+ *   briefcase  bobs, and its clasp blinks
+ *   code       the brackets breathe apart and back
+ *   gear       turns
+ *   back       the arrowhead nudges down, the way it points
+ *   star       twinkles
+ * All of it is a pure function of `t`, like the rest of the menu.
+ */
+function drawMeleeEmblem(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  icon: CrtMenuIcon,
+  t: number,
+) {
+  ctx.save();
+  const k = (r * 2) / 32;               // icons are authored in a 32-unit box
+  ctx.translate(cx, cy);
+  ctx.scale(k, k);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#ffffff";
+  ctx.fillStyle = "#ffffff";
+  ctx.lineWidth = 1.7 / k;              // ~1.7 logical px, whatever the size
+  ctx.shadowColor = `rgba(170,215,255,${(0.55 + 0.25 * Math.sin(t * 2.2)).toFixed(3)})`;
+  ctx.shadowBlur = 6;
+
+  if (icon === "briefcase") {
+    ctx.translate(0, Math.sin(t * 2) * 1.1);
+    roundRect(ctx, -12, -6, 24, 17, 2.5);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-4.5, -6);
+    ctx.lineTo(-4.5, -9.5);
+    ctx.lineTo(4.5, -9.5);
+    ctx.lineTo(4.5, -6);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-12, 1.5);
+    ctx.lineTo(-3, 1.5);
+    ctx.moveTo(3, 1.5);
+    ctx.lineTo(12, 1.5);
+    ctx.stroke();
+    ctx.globalAlpha = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 3.2));
+    ctx.strokeRect(-2.5, -0.5, 5, 4);
+  } else if (icon === "code") {
+    const d = 1.3 * Math.sin(t * 2.6);  // brackets breathe out and in
+    ctx.beginPath();
+    ctx.moveTo(-6 - d, -8);
+    ctx.lineTo(-13 - d, 0);
+    ctx.lineTo(-6 - d, 8);
+    ctx.moveTo(6 + d, -8);
+    ctx.lineTo(13 + d, 0);
+    ctx.lineTo(6 + d, 8);
+    ctx.stroke();
+    ctx.globalAlpha = 0.7 + 0.3 * Math.sin(t * 2.6 + Math.PI);
+    ctx.beginPath();
+    ctx.moveTo(3, -10);
+    ctx.lineTo(-3, 10);
+    ctx.stroke();
+  } else if (icon === "gear") {
+    ctx.rotate(t * 0.6);
+    ctx.beginPath();
+    const teeth = 8;
+    const step = (Math.PI * 2) / teeth;
+    for (let i = 0; i < teeth; i += 1) {
+      const a0 = i * step;
+      const pts: Array<[number, number]> = [
+        [a0 - step * 0.32, 9.2],
+        [a0 - step * 0.17, 12.6],
+        [a0 + step * 0.17, 12.6],
+        [a0 + step * 0.32, 9.2],
+      ];
+      for (let j = 0; j < pts.length; j += 1) {
+        const x = Math.cos(pts[j][0]) * pts[j][1];
+        const y = Math.sin(pts[j][0]) * pts[j][1];
+        if (i === 0 && j === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (icon === "back") {
+    const nudge = 1.6 * Math.abs(Math.sin(t * 2.4));
+    ctx.beginPath();
+    ctx.moveTo(10, 10);
+    ctx.lineTo(10, 0);
+    ctx.arc(2, 0, 8, 0, Math.PI, true);
+    ctx.lineTo(-6, 6 + nudge);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-11, 1.5 + nudge);
+    ctx.lineTo(-6, 6.5 + nudge);
+    ctx.lineTo(-1, 1.5 + nudge);
+    ctx.stroke();
+  } else {
+    ctx.scale(1 + 0.08 * Math.sin(t * 3), 1 + 0.08 * Math.sin(t * 3));
+    ctx.rotate(t * 0.25);
+    ctx.beginPath();
+    for (let i = 0; i < 10; i += 1) {
+      const a = -Math.PI / 2 + (i / 10) * Math.PI * 2;
+      const rr = i % 2 === 0 ? 12 : 5;
+      if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawMeleeMenu(
   ctx: CanvasRenderingContext2D,
   W: number,
@@ -757,7 +961,17 @@ function drawMeleeMenu(
     ? Math.max(0, Math.min(n - 1, Math.round(menu.activeIndex as number)))
     : Math.floor(t / dwell) % n;
 
-  const INK = "#eaf6ff";
+  /*
+   * Unhinted glyph placement. The whole HUD is drawn under a 3x transform,
+   * and without this Chrome lays text out with advances rounded at the
+   * NOMINAL size and then scales them - at 7px that rounding shows up as
+   * gaps inside words ("DEVELOP ING"). Browsers without the property just
+   * skip it.
+   */
+  if ("textRendering" in ctx) {
+    (ctx as CanvasRenderingContext2D & { textRendering: string }).textRendering = "geometricPrecision";
+  }
+
   const BG_TOP = "#0b1a3a";
   const BG_MID = "#050e24";
   const BG_DEEP = "#020616";
@@ -813,9 +1027,9 @@ function drawMeleeMenu(
    * The kink is placed off the MEASURED width of the title, so the diagonal
    * always lands just past the slashes however long the title is.
    */
-  ctx.font = `italic 900 15px ${MELEE_UI_FONT}`;
   ctx.textBaseline = "middle";
-  const capText = menu.page ? menu.page.title : menu.title;
+  const capText = smash(menu.page ? menu.page.title : menu.title);
+  fitSmash(ctx, capText, 140, 15, 10, "italic ");
   const capX = 20;
   const capY = 11;
   const capW = ctx.measureText(capText).width;
@@ -880,14 +1094,14 @@ function drawMeleeMenu(
   // --- "Main Menu" caption, riding ABOVE the low rail ----------------------
   // Drop shadow, offset down-right one pixel, dark blue-black.
   ctx.fillStyle = "rgba(4,10,22,0.9)";
-  ctx.fillText(capText, capX + 1, capY + 1);
+  smashText(ctx, capText, capX + 1, capY + 1);
 
   // Silver face with a faint vertical gradient so it doesn't read flat.
   const silver = ctx.createLinearGradient(0, capY - 8, 0, capY + 8);
   silver.addColorStop(0, "#f2f5fa");
   silver.addColorStop(1, "#b6c1cf");
   ctx.fillStyle = silver;
-  ctx.fillText(capText, capX, capY);
+  smashText(ctx, capText, capX, capY);
 
   // The slashes bridge the caption to the step, leaning at the same angle as
   // the diagonal so they read as part of the same rail.
@@ -903,99 +1117,129 @@ function drawMeleeMenu(
   }
   ctx.lineCap = "butt";
 
-  /* The plate silhouette, shared by the menu's rows and the section
-     screen's Back plate so the two are the same object. */
-  const NOSE_R = 8; // right-side chevron depth
-  const NOSE_L = 6; // left-side chevron depth
-  const EDGE_DIP = 1; // how much the top/bottom edges bow inward from the tips
+  /*
+   * The plate: a clean parallelogram, both ends leaning the same way.
+   *
+   * It used to be a six-point chevron with a gold rim, a ">" at the tail of
+   * every row and a glowing pip on the lit one - four ornaments on a 20px
+   * button, which is where the "cheap" read came from. Now it is one shape
+   * and one idea per state: navy glass with a gold edge stripe when idle,
+   * solid gold with a travelling sheen when lit. Shared by the menu's rows
+   * and the section screen's Back plate, so the two are the same object.
+   */
+  const SLANT = 6;
 
   function platePath(x: number, y: number, w: number, h: number) {
-    // Six points: left tip, top-left corner, top-right corner, right tip,
-    // bottom-right corner, bottom-left corner. The corners sit `EDGE_DIP`
-    // pixels inward from the tips vertically so the top and bottom edges
-    // angle rather than running flat.
     ctx.beginPath();
-    ctx.moveTo(x, y + h / 2);
-    ctx.lineTo(x + NOSE_L, y + EDGE_DIP);
-    ctx.lineTo(x + w - NOSE_R, y + EDGE_DIP);
-    ctx.lineTo(x + w, y + h / 2);
-    ctx.lineTo(x + w - NOSE_R, y + h - EDGE_DIP);
-    ctx.lineTo(x + NOSE_L, y + h - EDGE_DIP);
+    ctx.moveTo(x + SLANT, y);
+    ctx.lineTo(x + w, y);
+    ctx.lineTo(x + w - SLANT, y + h);
+    ctx.lineTo(x, y + h);
     ctx.closePath();
   }
 
-  /* The Back plate, shared by both page layouts - same silhouette, bevel
-     and ">" tail as a menu plate, so it is plainly the same object. */
+  /** Paint one plate's body (no label). */
+  function drawPlate(x: number, y: number, w: number, h: number, lit: boolean) {
+    // Drop shadow: the plates are lit objects sitting over the backdrop.
+    ctx.save();
+    ctx.shadowColor = lit ? "rgba(255,200,60,0.55)" : "rgba(0,0,0,0.6)";
+    ctx.shadowBlur = lit ? 9 : 3;
+    ctx.shadowOffsetX = lit ? 0 : 2;
+    ctx.shadowOffsetY = lit ? 0 : 2;
+    ctx.fillStyle = "#000";
+    platePath(x, y, w, h);
+    ctx.fill();
+    ctx.restore();
+
+    platePath(x, y, w, h);
+    const body = ctx.createLinearGradient(0, y, 0, y + h);
+    if (lit) {
+      body.addColorStop(0, "#fff3a6");
+      body.addColorStop(0.45, "#f9cf2e");
+      body.addColorStop(1, "#dc9d00");
+    } else {
+      body.addColorStop(0, "rgba(30,52,94,0.96)");
+      body.addColorStop(0.5, "rgba(12,24,52,0.96)");
+      body.addColorStop(1, "rgba(5,11,28,0.96)");
+    }
+    ctx.fillStyle = body;
+    ctx.fill();
+
+    ctx.save();
+    platePath(x, y, w, h);
+    ctx.clip();
+    // top-edge highlight, so the face reads as a bevel rather than flat paint
+    ctx.fillStyle = lit ? "rgba(255,255,240,0.6)" : "rgba(190,220,255,0.18)";
+    ctx.fillRect(x, y, w, 1.5);
+    if (lit) {
+      // a sheen that sweeps across the lit plate every couple of seconds
+      const cyc = (t % 2.6) / 2.6;
+      const sx = x - 20 + cyc * (w + 60);
+      const g = ctx.createLinearGradient(sx - 10, 0, sx + 10, 0);
+      g.addColorStop(0, "rgba(255,255,255,0)");
+      g.addColorStop(0.5, "rgba(255,255,255,0.55)");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(sx - 6, y);
+      ctx.lineTo(sx + 8, y);
+      ctx.lineTo(sx - 2, y + h);
+      ctx.lineTo(sx - 16, y + h);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // gold edge stripe along the leading slant
+      ctx.fillStyle = "#e9b823";
+      ctx.beginPath();
+      ctx.moveTo(x + SLANT, y);
+      ctx.lineTo(x + SLANT + 3, y);
+      ctx.lineTo(x + 3, y + h);
+      ctx.lineTo(x, y + h);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+
+    platePath(x, y, w, h);
+    ctx.lineWidth = 1;
+    ctx.lineJoin = "miter";
+    ctx.strokeStyle = lit ? "#fff8d2" : "rgba(160,205,255,0.55)";
+    ctx.stroke();
+  }
+
+  /** A small ">" inside the lit plate's tail, bobbing toward the edge. */
+  function drawPlateChevron(x: number, y: number, w: number, h: number, color: string) {
+    const ax = x + w - SLANT - 9 + Math.max(0, Math.sin(t * 5)) * 1.5;
+    const ay = y + h / 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(ax - 1.5, ay - 4);
+    ctx.lineTo(ax + 2.5, ay);
+    ctx.lineTo(ax - 1.5, ay + 4);
+    ctx.stroke();
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+  }
+
+  /* The section screens' Back plate - the same plate as the menu's rows. */
   function drawPageBack(c: CanvasRenderingContext2D) {
-  const lit = !!menu.pageBackHover;
-  // The Back plate - same silhouette and bevel as a menu plate, so it is
-  // obviously the same kind of object and obviously clickable.
-  c.save();
-  c.shadowColor = "rgba(0,0,0,0.6)";
-  c.shadowBlur = 2;
-  c.shadowOffsetX = 2;
-  c.shadowOffsetY = 2;
-  c.fillStyle = "#000";
-  platePath(MELEE_BACK_X, MELEE_BACK_Y, MELEE_BACK_W, MELEE_BACK_H);
-  c.fill();
-  c.restore();
-  platePath(MELEE_BACK_X, MELEE_BACK_Y, MELEE_BACK_W, MELEE_BACK_H);
-  if (lit) {
-    const lf = c.createLinearGradient(0, MELEE_BACK_Y, 0, MELEE_BACK_Y + MELEE_BACK_H);
-    lf.addColorStop(0, "#fff29a");
-    lf.addColorStop(0.45, "#f7cf28");
-    lf.addColorStop(1, "#dca400");
-    c.fillStyle = lf;
-  } else {
-    c.fillStyle = "#050505";
-  }
-  c.fill();
-  c.lineJoin = "miter";
-  c.strokeStyle = "#5e400b";
-  c.lineWidth = 3.4;
-  c.stroke();
-  const backRim = c.createLinearGradient(0, MELEE_BACK_Y, 0, MELEE_BACK_Y + MELEE_BACK_H);
-  backRim.addColorStop(0, "#ffd964");
-  backRim.addColorStop(0.5, "#d9a417");
-  backRim.addColorStop(1, "#8a6410");
-  c.strokeStyle = backRim;
-  c.lineWidth = 1.6;
-  c.stroke();
-
-  c.font = `900 13px ${MELEE_UI_FONT}`;
-  const bkX = MELEE_BACK_X + NOSE_L + 6;
-  const bkY = MELEE_BACK_Y + MELEE_BACK_H / 2 + 1;
-  c.fillStyle = lit ? "#120d00" : "rgba(0,0,0,0.95)";
-  c.fillText("Back", lit ? bkX : bkX + 1, lit ? bkY : bkY + 1);
-  const bkG = c.createLinearGradient(0, MELEE_BACK_Y + 3, 0, MELEE_BACK_Y + MELEE_BACK_H - 3);
-  bkG.addColorStop(0, "#ffe27a");
-  bkG.addColorStop(1, "#d9a11a");
-  if (!lit) {
-    c.fillStyle = bkG;
-    c.fillText("Back", bkX, bkY);
-  }
-
-  // and its ">" tail, matching the menu plates
-  const bax = MELEE_BACK_X + MELEE_BACK_W - NOSE_R - 7;
-  const bay = MELEE_BACK_Y + MELEE_BACK_H / 2;
-  c.lineCap = "round";
-  c.lineJoin = "round";
-  const backArrow = () => {
-    c.beginPath();
-    c.moveTo(bax, bay - 4.5);
-    c.lineTo(bax + 4.5, bay);
-    c.lineTo(bax, bay + 4.5);
-  };
-  backArrow();
-  c.strokeStyle = "rgba(0,0,0,0.95)";
-  c.lineWidth = 3.2;
-  c.stroke();
-  backArrow();
-  c.strokeStyle = bkG;
-  c.lineWidth = 1.6;
-  c.stroke();
-  c.lineCap = "butt";
-  c.lineJoin = "miter";
+    const lit = !!menu.pageBackHover;
+    drawPlate(MELEE_BACK_X, MELEE_BACK_Y, MELEE_BACK_W, MELEE_BACK_H, lit);
+    const bkX = MELEE_BACK_X + SLANT + 6;
+    const bkY = MELEE_BACK_Y + MELEE_BACK_H / 2 + 0.5;
+    const bkLabel = smash("Back");
+    fitSmash(c, bkLabel, MELEE_BACK_W - SLANT * 2 - 6 - 12, 10, 7);
+    if (!lit) {
+      c.fillStyle = "rgba(0,0,0,0.9)";
+      smashText(c, bkLabel, bkX + 0.75, bkY + 0.75);
+    }
+    c.fillStyle = lit ? "#1a1200" : "#f1f6fc";
+    smashText(c, bkLabel, bkX, bkY);
+    drawPlateChevron(MELEE_BACK_X, MELEE_BACK_Y, MELEE_BACK_W, MELEE_BACK_H,
+      lit ? "#3b2a00" : "rgba(233,184,35,0.95)");
   }
 
   // --- section screen ------------------------------------------------------
@@ -1028,6 +1272,14 @@ function drawMeleeMenu(
     const active = menu.page.activeRow ?? -1;
 
     ctx.textAlign = "center";
+    // One caption size for the whole row of name plates, so a long tag
+    // ("Dark Tower") does not come out visibly smaller than its neighbours.
+    let tagPx = Math.min(7, capH - 3);
+    if (L.showCaption) {
+      for (const r of shown) {
+        tagPx = Math.min(tagPx, fitSmash(ctx, smash(r.tag ?? r.label), tileW - 5, Math.min(7, capH - 3), 4.5));
+      }
+    }
     for (let i = 0; i < shown.length; i += 1) {
       const cx = gridX + (i % cols) * cellW + 1;
       const cy = L.gridTop + Math.floor(i / cols) * cellH;
@@ -1051,7 +1303,9 @@ function drawMeleeMenu(
       if (art) {
         const aw = (art as HTMLImageElement).naturalWidth || tileW;
         const ah = (art as HTMLImageElement).naturalHeight || wellH;
-        const k = Math.min((tileW - 4) / aw, (wellH - 4) / ah);   // contain
+        // contain, then the page's own trim - Skills pulls its marks in a
+        // touch so they do not sit hard against the tile's rim
+        const k = Math.min((tileW - 2) / aw, (wellH - 2) / ah) * (menu.page.tile?.artScale ?? 1);
         const dw = aw * k;
         const dh = ah * k;
         ctx.imageSmoothingEnabled = true;
@@ -1060,7 +1314,7 @@ function drawMeleeMenu(
         // replaces the translucent grey puck that used to be drawn over the
         // current tile - a cursor that covered up the very thing it was
         // pointing at, on a tile that is only 17px tall to begin with.
-        ctx.globalAlpha = on ? 1 : 0.68;
+        ctx.globalAlpha = on ? 1 : 0.72;
         ctx.drawImage(art, cx + (tileW - dw) / 2, cy + (wellH - dh) / 2, dw, dh);
         ctx.globalAlpha = 1;
       }
@@ -1089,29 +1343,12 @@ function drawMeleeMenu(
         ctx.fillStyle = "rgba(6,12,24,0.92)";
       }
       ctx.fillRect(cx, capY, tileW, capH);
-      ctx.font = `bold 5px ${MELEE_UI_FONT}`;
-      const words = (shown[i].tag ?? shown[i].label).toUpperCase().split(/\s+/);
-      const lines: string[] = [];
-      let line = "";
-      for (const w of words) {
-        const next = line ? `${line} ${w}` : w;
-        if (ctx.measureText(next).width > tileW - 3 && line) {
-          lines.push(line);
-          line = w;
-          if (lines.length === 2) break;
-        } else {
-          line = next;
-        }
-      }
-      if (lines.length < 2 && line) lines.push(line);
-      const midX = cx + tileW / 2;
-      ctx.fillStyle = on ? "#1c1303" : "#c9d9ea";
-      if (lines.length > 1) {
-        ctx.fillText(fitText(ctx, lines[0], tileW - 3), midX, capY + 4);
-        ctx.fillText(fitText(ctx, lines[1], tileW - 3), midX, capY + 9);
-      } else {
-        ctx.fillText(fitText(ctx, lines[0] ?? "", tileW - 3), midX, capY + 7);
-      }
+      // One line, in the Smash face, sized to the plate. The tags are
+      // written short (COMPANY_TAGS) so this almost never has to shrink.
+      const tag = smash(shown[i].tag ?? shown[i].label);
+      ctx.font = `${tagPx}px ${MELEE_UI_FONT}`;
+      ctx.fillStyle = on ? "#1c1303" : "#d4e2f0";
+      smashText(ctx, fitText(ctx, tag, tileW - 4), cx + tileW / 2, capY + capH / 2 + 0.5);
     }
     ctx.textAlign = "left";
 
@@ -1176,55 +1413,72 @@ function drawMeleeMenu(
        * and dates, then the bullets, each one flowed to the panel's width and
        * cut off only when the panel genuinely runs out of height.
        */
+      /*
+       * The tile above already names the company, so the panel does not
+       * say it again: it leads with the ROLE, then the dates, then the
+       * bullets. Heading and dates are the Smash face; the bullets are
+       * sentences and get the body face (see MELEE_BODY_FONT).
+       */
       const tx = dX + 8;
       const tw = dW - 16;
-      let ty = dY + 14;
+      let ty = dY + 10;
 
-      ctx.font = `900 13px ${MELEE_UI_FONT}`;
-      const lg = ctx.createLinearGradient(0, ty - 9, 0, ty + 3);
-      lg.addColorStop(0, "#ffe27a");
-      lg.addColorStop(1, "#d9a11a");
-      ctx.fillStyle = "rgba(0,0,0,0.9)";
-      ctx.fillText(fitText(ctx, pick.label, tw), tx + 1, ty + 1);
-      ctx.fillStyle = lg;
-      ctx.fillText(fitText(ctx, pick.label, tw), tx, ty);
-      ty += 12;
-
-      if (pick.sub) {
-        ctx.font = `italic 9px ${MELEE_SERIF_FONT}`;
-        ctx.fillStyle = "#a8c4de";
-        for (const ln of wrapText(ctx, pick.sub, tw).slice(0, 2)) {
-          ctx.fillText(ln, tx, ty);
-          ty += 10;
-        }
+      const heading = smash(pick.sub ?? pick.label);
+      const one = fitSmash(ctx, heading, tw, 10, 7.5);
+      const headLines = one > 7.5 || ctx.measureText(heading).width <= tw
+        ? [heading]
+        : (fitSmash(ctx, heading, tw * 2, 8.5, 7), wrapText(ctx, heading, tw).slice(0, 2));
+      for (const ln of headLines) {
+        const hg = ctx.createLinearGradient(0, ty - 5, 0, ty + 5);
+        hg.addColorStop(0, "#ffe98f");
+        hg.addColorStop(1, "#e0a91c");
+        ctx.fillStyle = "rgba(0,0,0,0.85)";
+        smashText(ctx, fitText(ctx, ln, tw), tx + 0.75, ty + 0.75);
+        ctx.fillStyle = hg;
+        smashText(ctx, fitText(ctx, ln, tw), tx, ty);
+        ty += 10;
       }
 
-      ty += 3;
-      ctx.font = `8px ${MELEE_UI_FONT}`;
-      // Only the FIRST line of a paragraph wears a bullet. The old loop said
-      // so in a comment and then drew one on every wrapped line, so a bullet
-      // arrived with each spilled word - "conferences" and "solutions" each
-      // came out looking like a point of their own.
+      // Dates in the body face: the Smash face's figures are old-style,
+      // and "2025" set in it sits half a line lower than the words around it.
+      if (pick.meta) {
+        ctx.font = `bold 6px ${MELEE_BODY_FONT}`;
+        ctx.fillStyle = "#9fc6e6";
+        smashText(ctx, fitText(ctx, pick.meta.toUpperCase(), tw), tx, ty - 1.5);
+        ty += 6;
+      }
+
+      // hairline between the heading block and the bullets
+      ctx.fillStyle = "rgba(150,225,255,0.35)";
+      ctx.fillRect(tx, ty - 1, tw, 0.5);
+      ty += 7;
+
+      ctx.font = `7px ${MELEE_BODY_FONT}`;
+      const lineH = 8.5;
+      // Only the FIRST line of a paragraph wears a bullet; the rest of it
+      // hangs under the text, not under the bullet.
       for (const para of pick.body ?? []) {
-        const lines = wrapText(ctx, para, tw - 6);
-        let spilled = false;
+        const lines = wrapText(ctx, para.trim(), tw - 7);
+        if (ty > dY + dH - 4) break;
         for (let li = 0; li < lines.length; li += 1) {
-          if (ty > dY + dH - 5) { spilled = true; break; }
+          if (ty > dY + dH - 4) break;
           if (li === 0) {
-            ctx.fillStyle = "#7fb4d8";
-            ctx.fillText("\u2022", tx, ty);
+            ctx.fillStyle = "#f2c230";
+            ctx.beginPath();
+            ctx.arc(tx + 1.5, ty, 1.1, 0, Math.PI * 2);
+            ctx.fill();
           }
-          ctx.fillStyle = "#dce8f4";
-          ctx.fillText(lines[li], tx + 6, ty);
-          ty += 9;
+          ctx.fillStyle = "#dfe9f3";
+          smashText(ctx, lines[li], tx + 6, ty);
+          ty += lineH;
         }
-        if (spilled || ty > dY + dH - 5) break;
+        ty += 1.5;
       }
     } else {
       ctx.textAlign = "center";
-      ctx.font = `italic 9px ${MELEE_SERIF_FONT}`;
+      ctx.font = `8px ${MELEE_UI_FONT}`;
       ctx.fillStyle = "rgba(150,180,215,0.7)";
-      ctx.fillText("Point at one", dX + dW / 2, dY + dH / 2);
+      smashText(ctx, smash("Point at one"), dX + dW / 2, dY + dH / 2);
       ctx.textAlign = "left";
     }
 
@@ -1248,189 +1502,87 @@ function drawMeleeMenu(
       ctx.fillStyle = "#d9a417";
       ctx.fillRect(listX - 8, ry - 3, 3, hasSub ? 12 : 7);
 
-      ctx.font = `900 12px ${MELEE_UI_FONT}`;
+      ctx.font = `11px ${MELEE_UI_FONT}`;
+      const rowLabel = fitText(ctx, smash(shown[i].label), listW);
       ctx.fillStyle = "rgba(0,0,0,0.9)";
-      ctx.fillText(fitText(ctx, shown[i].label, listW), listX + 1, ry + 4);
+      smashText(ctx, rowLabel, listX + 1, ry + 4);
       const lg = ctx.createLinearGradient(0, ry - 5, 0, ry + 7);
       lg.addColorStop(0, "#ffe27a");
       lg.addColorStop(1, "#d9a11a");
       ctx.fillStyle = lg;
-      ctx.fillText(fitText(ctx, shown[i].label, listW), listX, ry + 3);
+      smashText(ctx, rowLabel, listX, ry + 3);
 
       if (shown[i].sub) {
-        ctx.font = `italic 9px ${MELEE_SERIF_FONT}`;
+        ctx.font = `8px ${MELEE_BODY_FONT}`;
         ctx.fillStyle = "rgba(0,0,0,0.85)";
-        ctx.fillText(fitText(ctx, shown[i].sub as string, listW), listX + 1, ry + 14);
+        smashText(ctx, fitText(ctx, shown[i].sub as string, listW), listX + 1, ry + 14);
         ctx.fillStyle = "#cfe3f2";
-        ctx.fillText(fitText(ctx, shown[i].sub as string, listW), listX, ry + 13);
+        smashText(ctx, fitText(ctx, shown[i].sub as string, listW), listX, ry + 13);
       }
     }
 
     // "+N more" when the list runs past what the tube can hold.
     if (shown.length < rows.length) {
-      ctx.font = `italic 9px ${MELEE_SERIF_FONT}`;
+      ctx.font = `8px ${MELEE_BODY_FONT}`;
       ctx.fillStyle = "rgba(180,205,230,0.85)";
-      ctx.fillText(`+${rows.length - shown.length} more`, listX, MELEE_BACK_Y - 8);
+      smashText(ctx, `+${rows.length - shown.length} more`, listX, MELEE_BACK_Y - 8);
     }
 
     drawPageBack(ctx);
   } else {
-    // --- five chevron plates down the left column ----------------------------
-    // The plate silhouette from the reference: pointed on BOTH ends, but the
-    // top and bottom edges are slightly angled inward from the tips instead of
-    // running perfectly flat — so it reads as a stretched flag/parallelogram
-    // with sharp points, not a hexagon with a flat centre. Each row is nudged
-    // sideways by a small handplaced offset so the column doesn't stack into a
-    // straight-edged block; the original menu breathes because the plates
-    // stagger. Every plate carries a soft yellow bloom behind it too.
+    // --- the plate column -------------------------------------------------
+    /*
+     * ONE label size for the whole column, the largest at which the longest
+     * label still fits; sizing each plate on its own made "Skills" visibly
+     * bigger than "Experience".
+     */
+    const labelRoom = MELEE_PLATE_W - SLANT * 2 - 8 - 20;   // clear of the lit plate's ">"
+    let labelPx = 12;
+    for (const it of items) labelPx = Math.min(labelPx, fitSmash(ctx, smash(it.label), labelRoom, 12, 8));
+    const labelFont = `${labelPx}px ${MELEE_UI_FONT}`;
 
     for (let i = 0; i < n; i += 1) {
       const y = MELEE_PLATE_TOP + i * (MELEE_PLATE_H + MELEE_PLATE_GAP);
       const on = i === idx;
-      const px = MELEE_PLATE_BASE_X + (MELEE_STAGGER[i] ?? 0) + (on ? MELEE_SELECT_JUT : 0);
+      // The lit plate slides out, with a little overshoot-free settle so it
+      // never sits perfectly frozen: a 1px drift on a slow sine.
+      const px = MELEE_PLATE_BASE_X + (MELEE_STAGGER[i] ?? 0)
+        + (on ? MELEE_SELECT_JUT + Math.sin(t * 2.4) * 0.6 : 0);
 
-      /*
-       * A DARK drop shadow, not a glow.
-       *
-       * The plates in the reference are lit objects sitting above the
-       * background, and what sells that is a hard black shadow thrown down and
-       * right - the same offset on every row, lit or not. A yellow bloom behind
-       * each plate (what this used to do) made the whole column look like it
-       * was smouldering and washed the gold rim out into the background.
-       */
-      ctx.save();
-      ctx.shadowColor = "rgba(0,0,0,0.6)";
-      ctx.shadowBlur = 2;
-      ctx.shadowOffsetX = 2;
-      ctx.shadowOffsetY = 2;
-      ctx.fillStyle = "#000";
-      platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
-      ctx.fill();
-      ctx.restore();
+      drawPlate(px, y, MELEE_PLATE_W, MELEE_PLATE_H, on);
 
+      ctx.font = labelFont;
+      const tx = px + SLANT + 8;
+      const ty = y + MELEE_PLATE_H / 2 + 0.5;
+      const plateLabel = smash(items[i].label);
       if (on) {
-        // Lit: solid yellow face, black label. No rim - the fill IS the shape.
-        platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
-        const face = ctx.createLinearGradient(0, y, 0, y + MELEE_PLATE_H);
-        face.addColorStop(0, "#fff29a");
-        face.addColorStop(0.45, "#f7cf28");
-        face.addColorStop(1, "#dca400");
-        ctx.fillStyle = face;
-        ctx.fill();
-        ctx.save();
-        platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
-        ctx.clip();
-        ctx.fillStyle = "rgba(255,255,235,0.45)";
-        ctx.fillRect(px, y, MELEE_PLATE_W, 2);
-        ctx.restore();
+        ctx.fillStyle = "#1a1200";
+        smashText(ctx, plateLabel, tx, ty);
+        drawPlateChevron(px, y, MELEE_PLATE_W, MELEE_PLATE_H, "#3b2a00");
       } else {
-        // Unlit: near-black core inside a BEVELLED gold rim. Two strokes, the
-        // outer dark and the inner a top-lit gradient, so at 256x192 the rim
-        // reads as a raised metal edge instead of a flat yellow outline.
-        platePath(px, y, MELEE_PLATE_W, MELEE_PLATE_H);
-        ctx.fillStyle = "#050505";
-        ctx.fill();
-        ctx.lineJoin = "miter";
-        ctx.strokeStyle = "#5e400b";
-        ctx.lineWidth = 3.4;
-        ctx.stroke();
-        const rim = ctx.createLinearGradient(0, y, 0, y + MELEE_PLATE_H);
-        rim.addColorStop(0, "#ffd964");
-        rim.addColorStop(0.5, "#d9a417");
-        rim.addColorStop(1, "#8a6410");
-        ctx.strokeStyle = rim;
-        ctx.lineWidth = 1.6;
-        ctx.stroke();
-      }
-
-      // Label: heavy italic serif, black on lit / gold on dark.
-      // Upright, not italic: the plates in the reference are set in Folk Pro
-      // Bold standing straight up. The italic serif they used to carry is the
-      // sub-list's face, not theirs.
-      ctx.font = `900 13px ${MELEE_UI_FONT}`;
-      const tx = px + NOSE_L + 6;
-      const ty = y + MELEE_PLATE_H / 2 + 1;
-      if (on) {
-        ctx.fillStyle = "#120d00";
-        ctx.fillText(items[i].label, tx, ty);
-      } else {
-        ctx.fillStyle = "rgba(0,0,0,0.95)";
-        ctx.fillText(items[i].label, tx + 1, ty + 1);
-        const lg = ctx.createLinearGradient(0, y + 3, 0, y + MELEE_PLATE_H - 3);
-        lg.addColorStop(0, "#ffe27a");
-        lg.addColorStop(1, "#d9a11a");
-        ctx.fillStyle = lg;
-        ctx.fillText(items[i].label, tx, ty);
-      }
-
-      /*
-       * The ">" at the tail of the plate.
-       *
-       * This was a little hexagonal bead floating past the plate's tip, which
-       * is not what the reference has: each unlit row carries a chevron ARROW
-       * tucked just inside its right end, pointing onward. Same bevel as the
-       * rim - dark stroke under, gold over - so it reads as part of the same
-       * pressed-metal plate rather than a separate ornament.
-       */
-      const ax = px + MELEE_PLATE_W - NOSE_R - 7;
-      const ay = y + MELEE_PLATE_H / 2;
-      const aw = 4.5;
-      const ah = 4.5;
-      const arrow = () => {
-        ctx.beginPath();
-        ctx.moveTo(ax, ay - ah);
-        ctx.lineTo(ax + aw, ay);
-        ctx.lineTo(ax, ay + ah);
-      };
-      if (!on) {
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        arrow();
-        ctx.strokeStyle = "rgba(0,0,0,0.95)";
-        ctx.lineWidth = 3.2;
-        ctx.stroke();
-        arrow();
-        const ag = ctx.createLinearGradient(0, ay - ah, 0, ay + ah);
-        ag.addColorStop(0, "#ffe27a");
-        ag.addColorStop(1, "#d9a11a");
-        ctx.strokeStyle = ag;
-        ctx.lineWidth = 1.6;
-        ctx.stroke();
-        ctx.lineCap = "butt";
-        ctx.lineJoin = "miter";
-      } else {
-        // The lit row swaps the arrow for the glowing target from the
-        // reference - you are already here, so there is nothing to point on to.
-        const rx = ax + 1;
-        const pulse = 0.85 + 0.15 * Math.sin(t * 5);
-        ctx.save();
-        ctx.shadowColor = "rgba(255,225,110,0.95)";
-        ctx.shadowBlur = 8 * pulse;
-        ctx.fillStyle = "rgba(255,240,170,0.95)";
-        ctx.beginPath();
-        ctx.arc(rx, ay, 5.2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-        ctx.strokeStyle = "#fff6c4";
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.arc(rx, ay, 3.4, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.fillStyle = "#f7cf28";
-        ctx.beginPath();
-        ctx.arc(rx, ay, 1.8, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.fillStyle = "rgba(0,0,0,0.9)";
+        smashText(ctx, plateLabel, tx + 0.75, ty + 0.75);
+        ctx.fillStyle = "#eef4fb";
+        smashText(ctx, plateLabel, tx, ty);
       }
     }
 
-    // --- right-side sub-list panel -------------------------------------------
-    const panelX = 160;
-    const panelY = 34;
-    const panelW = 90;
-    const panelH = 88;
-    /* A translucent SLANTED pane, not an opaque rounded box. In the reference
-       you can see the background moving through it, and its left edge leans -
-       it reads as a sheet of glass held at an angle rather than a dialog. */
+    // --- right-side emblem pane --------------------------------------------
+    /*
+     * One picture for the lit item, not a list about it.
+     *
+     * This pane used to carry a vertical "NEXT SCREEN" gutter and four lines
+     * of teaser text in a serif, truncated with ellipses - small, cramped and
+     * repeating what the section itself says a click later. The games put a
+     * single illustration here, so that is what it is now: a medallion with
+     * a pictogram of the section and one short caption under it.
+     */
+    // Spans the plate column top to bottom, so the two halves of the screen
+    // share a top and a bottom edge instead of floating at different heights.
+    const panelX = 156;
+    const panelY = MELEE_PLATE_TOP - 1;
+    const panelW = 88;
+    const panelH = n * (MELEE_PLATE_H + MELEE_PLATE_GAP) - MELEE_PLATE_GAP + 2;
     const LEAN = 5;
     const pane = () => {
       ctx.beginPath();
@@ -1442,41 +1594,30 @@ function drawMeleeMenu(
     };
     pane();
     const glass = ctx.createLinearGradient(panelX, panelY, panelX + panelW, panelY + panelH);
-    glass.addColorStop(0, "rgba(22,74,96,0.55)");
-    glass.addColorStop(1, "rgba(12,40,66,0.45)");
+    glass.addColorStop(0, "rgba(22,74,96,0.50)");
+    glass.addColorStop(1, "rgba(8,30,56,0.55)");
     ctx.fillStyle = glass;
     ctx.fill();
     ctx.strokeStyle = "rgba(150,225,255,0.8)";
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // Vertical caption down the left edge of the panel. Small silver caps,
-    // one letter per line, matching the "NEXT SCREEN" gutter in the reference.
-    const gutter = "NEXT SCREEN";
-    ctx.font = `bold 8px ${MELEE_UI_FONT}`;
-    ctx.textBaseline = "middle";
-    const gutterTop = panelY + 8;
-    const gutterStep = (panelH - 20) / (gutter.length - 1);
-    for (let i = 0; i < gutter.length; i += 1) {
-      // Skip drawing the space, but keep its slot so letters stay evenly spaced.
-      if (gutter[i] === " ") continue;
-      // ride the pane's lean so the gutter stays parallel to its edge
-      const gx = panelX - 8 + LEAN * (1 - i / (gutter.length - 1));
-      ctx.fillStyle = "rgba(6,10,22,0.85)";
-      ctx.fillText(gutter[i], gx + 1, gutterTop + i * gutterStep + 1);
-      ctx.fillStyle = "#cfe3f2";
-      ctx.fillText(gutter[i], gx, gutterTop + i * gutterStep);
-    }
+    const item = items[idx];
+    const caption = item.caption;
+    const ecx = panelX + panelW / 2;
+    const ecy = panelY + (caption ? panelH * 0.44 : panelH / 2);
+    drawMeleeEmblem(ctx, ecx, ecy, Math.min(22, panelH * 0.26), iconFor(item), t);
 
-    // Sub-lines for the current selection, drawn in italic serif to match.
-    const sublines = items[idx].lines.slice(0, 4);
-    ctx.font = `italic 10px ${MELEE_SERIF_FONT}`;
-    ctx.fillStyle = INK;
-    const listX = panelX + 10;
-    for (let i = 0; i < sublines.length; i += 1) {
-      ctx.fillText(fitText(ctx, sublines[i], panelW - 22), listX, panelY + 14 + i * 15);
+    if (caption) {
+      ctx.textAlign = "center";
+      const cap = smash(caption);
+      fitSmash(ctx, cap, panelW - 18, 8.5, 5.5);
+      ctx.fillStyle = "rgba(0,0,0,0.85)";
+      smashText(ctx, cap, ecx + 0.75, panelY + panelH - 12 + 0.75);
+      ctx.fillStyle = "#ffffff";
+      smashText(ctx, cap, ecx, panelY + panelH - 12);
+      ctx.textAlign = "left";
     }
-
   }
 
   // A section screen has no strip: the body needs that band, and the Back
@@ -1517,13 +1658,13 @@ function drawMeleeMenu(
   roundRect(ctx, bX, bY, bW2, bH, br);
   ctx.stroke();
 
-  const tagline = menu.tagline ?? items[idx].subtitle ?? items[idx].label;
-  ctx.font = `bold 12px ${MELEE_UI_FONT}`;
+  const tagline = smash(menu.tagline ?? items[idx].subtitle ?? items[idx].label);
+  fitSmash(ctx, tagline, bW2 - 14, 10, 7);
   ctx.textAlign = "center";
   ctx.fillStyle = "rgba(0,0,0,0.85)";
-  ctx.fillText(fitText(ctx, tagline, bW2 - 14), W / 2 + 1, bY + bH / 2 + 1);
+  smashText(ctx, fitText(ctx, tagline, bW2 - 14), W / 2 + 1, bY + bH / 2 + 1.5);
   ctx.fillStyle = "#eef6ff";
-  ctx.fillText(fitText(ctx, tagline, bW2 - 14), W / 2, bY + bH / 2);
+  smashText(ctx, fitText(ctx, tagline, bW2 - 14), W / 2, bY + bH / 2 + 0.5);
   ctx.textAlign = "left";
 
   // --- tube character: roll bar + vignette so it reads as a CRT -----------
@@ -1910,9 +2051,19 @@ function useScreenTexture(
    * showing its first frame.
    */
   const liveImage = menu?.liveImage;
+  /*
+   * A page can ask for EVERY tile to run (CrtPage.animateAll) - Experience
+   * does, five small looping logos that look dead sitting on frame one. Kept
+   * as a joined string so the effect below re-runs on a change of page, not
+   * on every new menu object.
+   */
+  const allLive = menu?.page?.animateAll
+    ? menu.page.rows.map((r) => r.icon).filter((u): u is string => !!u).join("|")
+    : "";
   useEffect(() => {
+    const alsoLive = new Set(allLive ? allLive.split("|") : []);
     for (const [key, el] of mediaRef.current.entries()) {
-      const live = key === liveImage;
+      const live = key === liveImage || alsoLive.has(key);
 
       if (el instanceof HTMLVideoElement) {
         /*
@@ -1954,7 +2105,13 @@ function useScreenTexture(
       el.style.top = live ? "0px" : "-9999px";
       el.style.opacity = live ? "0.01" : "0";
     }
-  }, [liveImage, sources, menu?.backgroundVideo]);
+  }, [liveImage, allLive, sources, menu?.backgroundVideo]);
+
+  // The menu's typeface is fetched the first time a melee screen mounts.
+  const wantsSmashFont = menu?.variant === "melee";
+  useEffect(() => {
+    if (wantsSmashFont) ensureSmashFont();
+  }, [wantsSmashFont]);
 
   // Tear everything down when the screen itself goes away.
   useEffect(() => {

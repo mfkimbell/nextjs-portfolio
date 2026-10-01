@@ -171,7 +171,14 @@ export default function CampsiteHome() {
     <ViewportDebug />
     <ForceLandscape>
     <main className="relative h-full w-full overflow-hidden bg-[#03040a]">
-        <CampfireScene config={config} panel={panel} intro titleHeld={titleHeld} bearVoiceRef={bearVoiceAgent.voiceRef} />
+        <CampfireScene
+          config={config}
+          panel={panel}
+          intro
+          titleHeld={titleHeld}
+          bearVoiceRef={bearVoiceAgent.voiceRef}
+          onFishImpact={bearVoiceAgent.reactToFishFire}
+        />
 
         {!showTitle && panel === 0 ? <BearVoiceControls agent={bearVoiceAgent} /> : null}
 

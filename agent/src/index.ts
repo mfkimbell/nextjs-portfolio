@@ -2,11 +2,20 @@ import { config as loadEnv } from "dotenv";
 import express, { type Request, type Response } from "express";
 import expressWs from "express-ws";
 import OpenAI from "openai";
-import { dirname, resolve } from "node:path";
-import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import twilio from "twilio";
+import {
+  activeSpeechSnapshotEvent,
+  cleanSpokenLine,
+  contextAwareResume,
+  hasPlayedSpeech,
+  playbackTimeoutMs,
+  shouldPublishSpeechStarted,
+  validInterruptTarget,
+} from "./interruption-plan/index.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(sourceDirectory, "../../nextjs/.env") });
@@ -15,7 +24,18 @@ const portfolioContext = readFileSync(
   "utf8",
 );
 
-type BearLine = { bear: "bear1" | "bear2"; text: string };
+type BearLine = { bear: "bear1" | "bear2"; text: string; speechId?: string };
+type BearSpeechEvent =
+  | "bear.speech.queued"
+  | "bear.speech.started"
+  | "bear.speech.ended"
+  | "bear.speech.interrupted";
+type BearReplyPlan = {
+  maple: BearLine;
+  smokey: BearLine;
+  smokeyResume?: BearLine;
+  interruptAfter?: string;
+};
 type RelaySocket = {
   readonly OPEN: number;
   readyState: number;
@@ -37,27 +57,14 @@ type Session = {
   mapleHistory: OpenAI.Chat.Completions.ChatCompletionMessageParam[];
   eventSubscribers: Set<Response>;
   activeSpeech?: BearLine;
+  activeSpeechStarted: boolean;
+  relaySocket?: RelaySocket;
   playedText: string;
   playbackWaiters: Set<() => void>;
   generation: number;
   lastSeen: number;
   expiresAt: number;
 };
-
-function createSession(id: string): Session {
-  const now = Date.now();
-  return {
-    id,
-    generation: 0,
-    lastSeen: now,
-    expiresAt: now + sessionTtlMs,
-    smokeyHistory: [],
-    mapleHistory: [],
-    eventSubscribers: new Set(),
-    playedText: "",
-    playbackWaiters: new Set(),
-  };
-}
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -90,13 +97,30 @@ const sessionTtlMs = Number(process.env.SESSION_IDLE_TTL_MS ?? 900_000);
 if (!Number.isFinite(sessionTtlMs) || sessionTtlMs < 1_000) {
   throw new Error("SESSION_IDLE_TTL_MS must be at least 1000 milliseconds");
 }
+
+const smokeyVoiceId = process.env.SMOKEY_ELEVENLABS_VOICE_ID?.trim() || "oubi7HGxNVjXMnWLgwBT";
+const smokeyLanguage = process.env.SMOKEY_TTS_LANGUAGE?.trim() || "en-US";
+const mapleVoiceId = process.env.MAPLE_ELEVENLABS_VOICE_ID?.trim() || "u0REnIJvUgcGQYW2Ux8K";
+const mapleLanguage = process.env.MAPLE_TTS_LANGUAGE?.trim() || "en-GB";
+const dialogueProtocol = "speech-id-v3";
 const sessions = new Map<string, Session>();
 const { app } = expressWs(express());
 
-const bear1VoiceId = process.env.SMOKEY_ELEVENLABS_VOICE_ID?.trim() || "DQuoFsZ3oda1diTerwpq";
-const bear1Language = process.env.SMOKEY_TTS_LANGUAGE?.trim() || "en-US";
-const bear2VoiceId = process.env.MAPLE_ELEVENLABS_VOICE_ID?.trim() || "oubi7HGxNVjXMnWLgwBT";
-const bear2Language = process.env.MAPLE_TTS_LANGUAGE?.trim() || "en-GB";
+function createSession(id: string): Session {
+  const now = Date.now();
+  return {
+    id,
+    generation: 0,
+    lastSeen: now,
+    expiresAt: now + sessionTtlMs,
+    smokeyHistory: [],
+    mapleHistory: [],
+    eventSubscribers: new Set(),
+    activeSpeechStarted: false,
+    playedText: "",
+    playbackWaiters: new Set(),
+  };
+}
 
 function redactId(value: string): string {
   return value.length > 8 ? `${value.slice(0, 4)}...${value.slice(-4)}` : "[configured]";
@@ -125,16 +149,22 @@ function bearSpeaker(bear: BearLine["bear"]): "back_left_log" | "back_right_log"
   return bear === "bear1" ? "back_left_log" : "back_right_log";
 }
 
-function publishSpeechEvent(session: Session, event: "bear.speech.started" | "bear.speech.ended" | "bear.speech.interrupted", line: BearLine): void {
+function publishSpeechEvent(
+  session: Session,
+  event: BearSpeechEvent,
+  line: BearLine,
+  subscribers: Iterable<Response> = session.eventSubscribers,
+): void {
   if (!session.callSid) return;
   const payload = JSON.stringify({
     callSid: session.callSid,
     bear: line.bear,
     bearId: bearSpeaker(line.bear),
     speaker: bearSpeaker(line.bear),
+    speechId: line.speechId,
     text: line.text,
   });
-  for (const response of session.eventSubscribers) {
+  for (const response of subscribers) {
     response.write(`event: ${event}\ndata: ${payload}\n\n`);
   }
 }
@@ -172,60 +202,115 @@ function sendTalkCycle(
   canSend: () => boolean = () => true,
 ): void {
   if (!canSend() || ws.readyState !== ws.OPEN) return;
-  session.activeSpeech = line;
+  const activeLine = { ...line, speechId: randomUUID() };
+  session.activeSpeech = activeLine;
+  session.activeSpeechStarted = false;
   session.playedText = "";
-  const language = line.bear === "bear1" ? bear1Language : bear2Language;
-  const voice = line.bear === "bear1" ? bear1VoiceId : bear2VoiceId;
-  console.log("Sending native ElevenLabs bear text", {
-    bear: line.bear,
+  console.log("Bear speech queued", {
     callSid: session.callSid,
-    language,
+    bear: activeLine.bear,
+    characters: line.text.length,
     preemptible,
-    textLength: line.text.length,
-    voice: redactId(voice),
   });
-  publishSpeechEvent(session, "bear.speech.started", line);
+  publishSpeechEvent(session, "bear.speech.queued", activeLine);
   send(ws, {
     type: "text",
     token: line.text,
-    lang: language,
+    lang: line.bear === "bear1" ? smokeyLanguage : mapleLanguage,
     last: true,
     interruptible: true,
     preemptible,
   });
 }
 
-function normalizedSpeech(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
 function waitForPlayedText(session: Session, target: string, timeoutMs: number): Promise<boolean> {
-  const normalizedTarget = normalizedSpeech(target);
-  if (normalizedSpeech(session.playedText).includes(normalizedTarget)) return Promise.resolve(true);
+  if (hasPlayedSpeech(session.playedText, target)) return Promise.resolve(true);
 
-  return new Promise((resolve) => {
+  return new Promise((resolvePromise) => {
     const waiter = () => {
-      if (!normalizedSpeech(session.playedText).includes(normalizedTarget)) return;
+      if (!hasPlayedSpeech(session.playedText, target)) return;
       clearTimeout(timeout);
       session.playbackWaiters.delete(waiter);
-      resolve(true);
+      resolvePromise(true);
     };
     const timeout = setTimeout(() => {
       session.playbackWaiters.delete(waiter);
-      resolve(false);
+      resolvePromise(false);
     }, timeoutMs);
     session.playbackWaiters.add(waiter);
   });
 }
 
-function sendTwoBearReply(
+async function sendBearReply(
   ws: RelaySocket,
-  lines: BearLine[],
+  plan: BearReplyPlan,
   generation: number,
   session: Session,
-  preemptible = false,
-): void {
-  for (const line of lines) sendTalkCycle(ws, session, line, preemptible, () => session.generation === generation);
+): Promise<void> {
+  const canSend = () => session.generation === generation;
+  const interruptAfter = validInterruptTarget(plan.smokey.text, plan.interruptAfter);
+  sendTalkCycle(ws, session, plan.smokey, Boolean(interruptAfter), canSend);
+
+  const target = interruptAfter || plan.smokey.text;
+  const played = await waitForPlayedText(session, target, playbackTimeoutMs(target));
+  if (!canSend()) return;
+  if (!played) {
+    console.warn("Bear playback target timed out", {
+      callSid: session.callSid,
+      interrupting: Boolean(interruptAfter),
+      target,
+    });
+    return;
+  }
+  if (interruptAfter && session.activeSpeech?.bear === "bear1") {
+    console.log("Bear speech handoff", {
+      callSid: session.callSid,
+      from: session.activeSpeech.bear,
+      to: plan.maple.bear,
+      mode: "interrupt",
+    });
+    publishSpeechEvent(session, "bear.speech.interrupted", session.activeSpeech);
+  } else if (session.activeSpeech?.bear === "bear1") {
+    console.log("Bear speech handoff", {
+      callSid: session.callSid,
+      from: session.activeSpeech.bear,
+      to: plan.maple.bear,
+      mode: "follow",
+    });
+    publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
+  }
+  sendTalkCycle(ws, session, plan.maple, false, canSend);
+  const maplePlayed = await waitForPlayedText(session, plan.maple.text, playbackTimeoutMs(plan.maple.text));
+  if (!canSend()) return;
+  if (!maplePlayed) {
+    console.warn("Maple playback timed out", { callSid: session.callSid });
+    return;
+  }
+  if (session.activeSpeech?.bear === "bear2") {
+    console.log("Bear speech ended", { callSid: session.callSid, bear: session.activeSpeech.bear });
+    publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
+    session.activeSpeech = undefined;
+    session.activeSpeechStarted = false;
+  }
+  if (!plan.smokeyResume) return;
+
+  sendTalkCycle(ws, session, plan.smokeyResume, false, canSend);
+  const resumePlayed = await waitForPlayedText(
+    session,
+    plan.smokeyResume.text,
+    playbackTimeoutMs(plan.smokeyResume.text),
+  );
+  if (!canSend()) return;
+  if (!resumePlayed) {
+    console.warn("Smokey correction acknowledgement playback timed out", { callSid: session.callSid });
+    return;
+  }
+  if (session.activeSpeech?.bear === "bear1") {
+    console.log("Bear speech ended", { callSid: session.callSid, bear: session.activeSpeech.bear });
+    publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
+    session.activeSpeech = undefined;
+    session.activeSpeechStarted = false;
+  }
 }
 
 function sendGreeting(ws: RelaySocket, session: Session): void {
@@ -236,25 +321,43 @@ function sendGreeting(ws: RelaySocket, session: Session): void {
   };
   void (async () => {
     sendTalkCycle(ws, session, smokey, true, () => session.generation === generation);
-    // ConversationRelay reports audible text through info/tokensPlayed. The
-    // timeout is only a recovery path if Twilio fails to send that event.
-    const heardTarget = await waitForPlayedText(session, "Earlier he", 9_000);
+    const heardTarget = await waitForPlayedText(session, "Mitchell Kimbell", playbackTimeoutMs("Mitchell Kimbell"));
     if (session.generation !== generation) return;
     if (!heardTarget) {
       console.warn("Greeting playback prefix timed out; interrupting conservatively", {
         callSid: session.callSid,
-        target: "Earlier he",
+        target: "Mitchell Kimbell",
       });
+      return;
     }
-    const maple = { bear: "bear2" as const, text: "Actually, Smokey, Mitch is a staff engineer." };
+    if (session.activeSpeech?.bear === "bear1") {
+      publishSpeechEvent(session, "bear.speech.interrupted", session.activeSpeech);
+    }
+    const maple = { bear: "bear2" as const, text: "Actually, Smokey, Mitchell is a staff engineer." };
     sendTalkCycle(ws, session, maple, false, () => session.generation === generation);
-    await waitForPlayedText(session, maple.text, 6_000);
+    const maplePlayed = await waitForPlayedText(session, maple.text, playbackTimeoutMs(maple.text));
     if (session.generation !== generation) return;
-    const apology = { bear: "bear1" as const, text: "My apologies. We were just talking about our favorite staff engineer..." };
+    if (!maplePlayed) {
+      console.warn("Greeting Maple playback timed out", { callSid: session.callSid });
+      return;
+    }
+    if (session.activeSpeech?.bear === "bear2") publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
+    const apology = {
+      bear: "bear1" as const,
+      text: contextAwareResume(maple.text, "So what would you like to know about Mitchell?", "staff engineer"),
+    };
     sendTalkCycle(ws, session, apology, false, () => session.generation === generation);
-    await waitForPlayedText(session, apology.text, 6_000);
+    const apologyPlayed = await waitForPlayedText(session, apology.text, playbackTimeoutMs(apology.text));
     if (session.generation !== generation) return;
-    sendTalkCycle(ws, session, { bear: "bear1", text: "Mitch. So, what would you like to know?" }, false, () => session.generation === generation);
+    if (!apologyPlayed) {
+      console.warn("Greeting Smokey response playback timed out", { callSid: session.callSid });
+      return;
+    }
+    if (session.activeSpeech?.bear === "bear1") {
+      publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
+      session.activeSpeech = undefined;
+      session.activeSpeechStarted = false;
+    }
   })().catch((error: unknown) => {
     console.error("Greeting sequencing failed", error instanceof Error ? error.message : "unknown error");
   });
@@ -287,34 +390,100 @@ async function completePersona(
   return text;
 }
 
-async function generateReply(session: Session, prompt: string): Promise<BearLine[]> {
+async function generateReply(session: Session, prompt: string): Promise<BearReplyPlan> {
   if (!openai) {
-    return [
-      { bear: "bear1", text: "I can give our introduction, but my conversation service is not configured yet." },
-      { bear: "bear2", text: "Please set OPENAI_API_KEY to enable answers to your questions." },
-    ];
+    return {
+      smokey: { bear: "bear1", text: "I can give our introduction, but my conversation service is not configured yet." },
+      maple: { bear: "bear2", text: "Please set OPENAI_API_KEY to enable answers to your questions." },
+    };
   }
-  const smokey = await completePersona(
+  const smokey = cleanSpokenLine(await completePersona(
     session.smokeyHistory,
-    "You are Smokey, a friendly portfolio bear. Give a concise, helpful lead answer to the user's question. Speak naturally, safely, and without markdown.",
+    "You are Smokey, a friendly but slightly stubborn portfolio bear. Give one concise, helpful spoken answer to the user's question. Speak naturally, safely, and without markdown. You are mildly annoyed by Maple's pedantic corrections, so when he corrects you, acknowledge it with dry, lightly irritated phrasing rather than sounding submissive or apologetic. Never write your name, Maple's name, speaker labels, stage directions, or dialogue for another character.",
     prompt,
-  );
-  const maple = await completePersona(
-    session.mapleHistory,
-    "You are Maple, a friendly portfolio bear. Give a concise follow-up that adds useful detail or gently corrects Smokey when needed. Speak naturally, safely, and without markdown.",
-    `User prompt: ${prompt}\n\nSmokey's lead: ${smokey}`,
-  );
-  return [{ bear: "bear1", text: smokey }, { bear: "bear2", text: maple }];
+  ), "I can tell you about Mitchell's work.");
+  const mapleCompletion = await openai.chat.completions.create({
+    model: openaiModel,
+    temperature: 0.7,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "maple_reply_plan",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string" },
+            delivery: { type: "string", enum: ["follow", "interrupt"] },
+            interruptAfter: { anyOf: [{ type: "string" }, { type: "null" }] },
+            handoffContext: { anyOf: [{ type: "string" }, { type: "null" }] },
+          },
+          required: ["text", "delivery", "interruptAfter", "handoffContext"],
+        },
+      },
+    },
+    messages: [{
+      role: "system",
+      content: "You are Maple, a concise, dry portfolio bear. Return exactly one spoken line for Maple only. Never write Smokey's line, your name, his name, speaker labels, stage directions, or a multi-character script. Add useful detail or gently correct Smokey. Choose interrupt only when a factual correction or genuinely good joke is worth cutting him off; do not interrupt for minor wording. For interruptAfter, copy an exact phrase of at least four words from Smokey that ends before his response ends. For handoffContext, provide the short fact or idea Smokey must explicitly repeat to show he heard you, such as 'staff engineer'; use null for a non-interrupting follow-up. Start interruption text with a short direct reaction. Otherwise choose follow and null for both interruption fields.",
+    }, ...session.mapleHistory, {
+      role: "user",
+      content: `Visitor: ${prompt}\n\nSmokey: ${smokey}`,
+    }],
+  });
+  const rawPlan = mapleCompletion.choices[0]?.message.content;
+  let mapleText = "I agree with that.";
+  let interruptAfter: string | undefined;
+  let handoffContext: string | undefined;
+  if (rawPlan) {
+    try {
+      const parsed = JSON.parse(rawPlan) as {
+        text?: unknown;
+        delivery?: unknown;
+        interruptAfter?: unknown;
+        handoffContext?: unknown;
+      };
+      if (typeof parsed.text === "string") mapleText = cleanSpokenLine(parsed.text.slice(0, 600), mapleText);
+      if (parsed.delivery === "interrupt" && typeof parsed.interruptAfter === "string") {
+        interruptAfter = validInterruptTarget(smokey, parsed.interruptAfter);
+        if (typeof parsed.handoffContext === "string" && parsed.handoffContext.trim()) {
+          handoffContext = parsed.handoffContext.trim().slice(0, 160);
+        }
+      }
+    } catch {
+      console.warn("Maple reply plan was invalid JSON", { callSid: session.callSid });
+    }
+  }
+  session.mapleHistory.push({ role: "user", content: `Visitor: ${prompt}\n\nSmokey: ${smokey}` });
+  session.mapleHistory.push({ role: "assistant", content: mapleText });
+  keepBoundedHistory(session.mapleHistory);
+  const smokeyContinuation = interruptAfter
+    ? cleanSpokenLine(await completePersona(
+      session.smokeyHistory,
+      "You are Smokey, a friendly but slightly stubborn portfolio bear. Maple just interrupted you. Write only the short continuation after your acknowledgement; the application will prepend the exact context you must acknowledge. Continue your point or return to the visitor's question. Sound dry and mildly annoyed, never apologetic. Do not begin with right, yes, fine, or noted. Never write names, speaker labels, stage directions, markdown, or dialogue for another character.",
+      `Visitor: ${prompt}\n\nYour lead: ${smokey}\n\nMaple's correction: ${mapleText}`,
+    ), "What else would you like to know?")
+    : undefined;
+  const smokeyResume = smokeyContinuation
+    ? contextAwareResume(mapleText, smokeyContinuation, handoffContext)
+    : undefined;
+  if (smokeyResume) {
+    const lastHistoryMessage = session.smokeyHistory.at(-1);
+    if (lastHistoryMessage?.role === "assistant") lastHistoryMessage.content = smokeyResume;
+  }
+  return {
+    smokey: { bear: "bear1", text: smokey },
+    maple: { bear: "bear2", text: mapleText },
+    smokeyResume: smokeyResume ? { bear: "bear1", text: smokeyResume } : undefined,
+    interruptAfter,
+  };
 }
 
 function publicUrl(request: Request, protocol: "https" | "wss"): string {
-  // The configured external origin remains correct when a TLS-terminating proxy changes request headers.
   return `${agentBaseUrl.replace(/^https:/, `${protocol}:`)}${request.originalUrl}`;
 }
 
 function validTwilioRequest(request: Request, protocol: "https" | "wss"): boolean {
-  // The reserved DEV ngrok domain is only for local iteration. Production must
-  // always verify Twilio's signature with a current Auth Token.
   if (appEnv === "DEV" && process.env.TWILIO_VALIDATE_SIGNATURES !== "true") return true;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   if (!authToken) return false;
@@ -335,7 +504,11 @@ function validTwilioRequest(request: Request, protocol: "https" | "wss"): boolea
 
 app.disable("x-powered-by");
 app.use(express.urlencoded({ extended: false }));
-app.get("/health", (_request, response) => response.status(200).json({ ok: true, environment: appEnv }));
+app.get("/health", (_request, response) => response.status(200).json({
+  ok: true,
+  environment: appEnv,
+  dialogueProtocol,
+}));
 app.options("/events/:callSid", (request, response) => {
   if (!allowPortfolioOrigin(request, response)) return response.sendStatus(403);
   return response.sendStatus(204);
@@ -354,7 +527,31 @@ app.get("/events/:callSid", (request, response) => {
   response.flushHeaders();
   response.write(": connected\n\n");
   session.eventSubscribers.add(response);
+  if (session.activeSpeech) {
+    publishSpeechEvent(
+      session,
+      activeSpeechSnapshotEvent(session.activeSpeechStarted),
+      session.activeSpeech,
+      [response],
+    );
+  }
   request.on("close", () => session.eventSubscribers.delete(response));
+});
+app.post("/fish-reaction/:callSid", (request, response) => {
+  if (!allowPortfolioOrigin(request, response)) return response.sendStatus(403);
+  if (appEnv === "PROD" && request.query.token !== bearEventToken) return response.sendStatus(401);
+  const session = matchingSession(request.params.callSid);
+  if (!session?.relaySocket || session.activeSpeech) return response.sendStatus(409);
+  const generation = ++session.generation;
+  const line = { bear: "bear1" as const, text: "You owe us a fish, pal." };
+  sendTalkCycle(session.relaySocket, session, line, false, () => session.generation === generation);
+  void waitForPlayedText(session, line.text, playbackTimeoutMs(line.text)).then((played) => {
+    if (!played || session.generation !== generation || session.activeSpeech?.bear !== "bear1") return;
+    publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
+    session.activeSpeech = undefined;
+    session.activeSpeechStarted = false;
+  });
+  return response.sendStatus(202);
 });
 app.post("/call", (request, response) => {
   if (!validTwilioRequest(request, "https")) return response.sendStatus(403);
@@ -364,23 +561,21 @@ app.post("/call", (request, response) => {
   const connect = voiceResponse.connect();
   const relayOptions: Parameters<typeof connect.conversationRelay>[0] & { events: string } = {
     url: relayUrl,
-    ttsLanguage: bear1Language,
+    ttsLanguage: smokeyLanguage,
     ttsProvider: "ElevenLabs",
-    voice: bear1VoiceId,
+    voice: smokeyVoiceId,
     transcriptionLanguage: "en-US",
     interruptible: "speech",
-    // Twilio's current ConversationRelay API accepts "speech" here, while
-    // the installed SDK version still types this property as boolean.
     reportInputDuringAgentSpeech: "speech" as unknown as boolean,
     events: "speaker-events tokens-played",
   };
   const relay = connect.conversationRelay(relayOptions);
-  relay.language({ code: bear1Language, ttsProvider: "ElevenLabs", voice: bear1VoiceId });
-  relay.language({ code: bear2Language, ttsProvider: "ElevenLabs", voice: bear2VoiceId });
+  relay.language({ code: smokeyLanguage, ttsProvider: "ElevenLabs", voice: smokeyVoiceId });
+  relay.language({ code: mapleLanguage, ttsProvider: "ElevenLabs", voice: mapleVoiceId });
   relay.parameter({ name: "callReference", value: callReference });
-  console.log("Created native ElevenLabs ConversationRelay TwiML", {
-    smokey: { language: bear1Language, voice: redactId(bear1VoiceId) },
-    maple: { language: bear2Language, voice: redactId(bear2VoiceId) },
+  console.log("Created per-bear ConversationRelay TwiML", {
+    smokey: { language: smokeyLanguage, voice: redactId(smokeyVoiceId) },
+    maple: { language: mapleLanguage, voice: redactId(mapleVoiceId) },
   });
   sessions.set(callReference, createSession(callReference));
   response.type("text/xml").send(voiceResponse.toString());
@@ -402,8 +597,6 @@ app.ws("/conversation-relay", (ws, request) => {
     if (message.type === "setup") {
       const reference = message.customParameters?.callReference;
       session = reference ? sessions.get(reference) : undefined;
-      // In PROD, the Next.js /call webhook owns TwiML generation, so setup is
-      // the first message the agent sees. Use Twilio's session/call identity.
       if (!session) {
         const setupId = reference || message.sessionId || message.callSid;
         if (!setupId) return ws.close(1008, "Unknown session");
@@ -412,10 +605,7 @@ app.ws("/conversation-relay", (ws, request) => {
       }
       if (session.expiresAt < Date.now()) return ws.close(1008, "Unknown session");
       if (message.callSid) session.callSid = message.callSid;
-      console.log("ConversationRelay setup accepted", {
-        sessionId: message.sessionId,
-        callSid: message.callSid,
-      });
+      session.relaySocket = ws;
       session.lastSeen = Date.now();
       session.expiresAt = session.lastSeen + sessionTtlMs;
       sendGreeting(ws, session);
@@ -427,25 +617,29 @@ app.ws("/conversation-relay", (ws, request) => {
     if (message.type === "interrupt") {
       session.generation += 1;
       if (session.activeSpeech) {
-        console.log("ConversationRelay caller interruption", {
-          callSid: session.callSid,
-          activeBear: session.activeSpeech.bear,
-        });
-        publishSpeechEvent(session, "bear.speech.interrupted", session.activeSpeech);
+        if (session.activeSpeechStarted) {
+          publishSpeechEvent(session, "bear.speech.interrupted", session.activeSpeech);
+        }
         session.activeSpeech = undefined;
+        session.activeSpeechStarted = false;
       }
       return;
     }
     if (message.type === "info") {
       if (message.name === "tokensPlayed" && typeof message.value === "string") {
         session.playedText += message.value;
+        const activeSpeech = session.activeSpeech;
+        if (shouldPublishSpeechStarted(Boolean(activeSpeech), session.activeSpeechStarted, message.value) && activeSpeech) {
+          session.activeSpeechStarted = true;
+          console.log("Bear speech audible", {
+            callSid: session.callSid,
+            bear: activeSpeech.bear,
+            firstChunkCharacters: message.value.length,
+          });
+          publishSpeechEvent(session, "bear.speech.started", activeSpeech);
+        }
         for (const waiter of [...session.playbackWaiters]) waiter();
       }
-      console.log("ConversationRelay info event", {
-        callSid: session.callSid,
-        name: message.name,
-        valueLength: typeof message.value === "string" ? message.value.length : undefined,
-      });
       return;
     }
     if (message.type === "error") {
@@ -456,22 +650,18 @@ app.ws("/conversation-relay", (ws, request) => {
       return;
     }
     if (message.type !== "prompt" || !message.last || !message.voicePrompt.trim()) return;
-    console.log("ConversationRelay final prompt", {
-      callSid: session.callSid,
-      characters: message.voicePrompt.trim().length,
-    });
     const generation = ++session.generation;
     void generateReply(session, message.voicePrompt.trim())
-      .then((lines) => {
-        if (session?.generation === generation) sendTwoBearReply(ws, lines, generation, session);
+      .then((plan) => {
+        if (session?.generation === generation) void sendBearReply(ws, plan, generation, session);
       })
       .catch((error: unknown) => {
         console.error("OpenAI response failed", error instanceof Error ? error.message : "unknown error");
         if (session?.generation === generation) {
-          sendTwoBearReply(ws, [
-            { bear: "bear1", text: "I am sorry, I missed that." },
-            { bear: "bear2", text: "Please try asking us again in a moment." },
-          ], generation, session);
+          void sendBearReply(ws, {
+            smokey: { bear: "bear1", text: "I am sorry, I missed that." },
+            maple: { bear: "bear2", text: "Please try asking us again in a moment." },
+          }, generation, session);
         }
       });
   });
@@ -479,6 +669,7 @@ app.ws("/conversation-relay", (ws, request) => {
   ws.on("close", () => {
     if (session) {
       closeEventSubscribers(session);
+      session.relaySocket = undefined;
       sessions.delete(session.id);
     }
   });
@@ -495,8 +686,11 @@ setInterval(() => {
   }
 }, Math.min(sessionTtlMs, 60_000)).unref();
 
-app.listen(port, () => console.log(`Bear agent listening on port ${port} (${appEnv})`));
-console.log("Native ElevenLabs voice configuration", {
-  smokey: { language: bear1Language, voice: redactId(bear1VoiceId) },
-  maple: { language: bear2Language, voice: redactId(bear2VoiceId) },
+const server = app.listen(port, () => console.log(`Bear agent listening on port ${port} (${appEnv})`));
+const shutdown = () => server.close(() => process.exit(0));
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);
+console.log("Per-bear ConversationRelay voice configuration", {
+  smokey: { language: smokeyLanguage, voice: redactId(smokeyVoiceId) },
+  maple: { language: mapleLanguage, voice: redactId(mapleVoiceId) },
 });

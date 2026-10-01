@@ -84,6 +84,13 @@ function getAudioContext(): AudioContext | null {
   return sharedAudioContext;
 }
 
+/** The page's one shared AudioContext, for code that synthesizes its own
+ *  sounds (lib/retroPcSounds). Null on the server or without Web Audio. */
+export function getSharedAudioContext(): AudioContext | null {
+  installGestureUnlock();
+  return getAudioContext();
+}
+
 function onGesture(cb: () => void) {
   if (gestureUnlocked) { cb(); return () => {}; }
   gestureListeners.add(cb);
@@ -119,7 +126,7 @@ function clampVolume(v: number) {
  * goes above 1), not user-facing loudness preferences, and cubing them
  * alongside the slider value would distort those separately-tuned curves.
  */
-function perceptualGain(v: number) {
+export function perceptualGain(v: number) {
   const c = clampVolume(v);
   return c * c * c;
 }
@@ -143,6 +150,7 @@ export function useCampsiteAudioLoop(
     liveMultiplier,
     fadeMs = DEFAULT_LOOP_FADE_MS,
     panRef,
+    timeRef,
   }: {
     volume: number;
     enabled: boolean;
@@ -161,6 +169,8 @@ export function useCampsiteAudioLoop(
      *  Presence alone opts this loop into the Web Audio graph - see the
      *  header comment. */
     panRef?: MutableRefObject<number>;
+    /** Optional playback position, updated from the live media element clock. */
+    timeRef?: MutableRefObject<number>;
   }
 ) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -244,7 +254,11 @@ export function useCampsiteAudioLoop(
           playingRef.current = true;
           tryPlay();
         }
-        a.volume = perceptualGain(volume) * (liveMultiplier ? liveMultiplier.current : 1) * gainRef.current;
+        if (timeRef) timeRef.current = Number.isFinite(a.currentTime) ? a.currentTime : 0;
+        // clamped: a liveMultiplier may boost past 1 (the banjo up close),
+        // and an <audio> element throws on any volume outside 0..1
+        const live = liveMultiplier && Number.isFinite(liveMultiplier.current) ? liveMultiplier.current : 1;
+        a.volume = Math.max(0, Math.min(1, perceptualGain(volume) * live * gainRef.current));
         if (gainRef.current <= 0 && target === 0 && playingRef.current) {
           a.pause();
           playingRef.current = false;
@@ -261,7 +275,8 @@ export function useCampsiteAudioLoop(
       cancelAnimationFrame(raf);
       offGesture?.();
     };
-  }, [url, volume, enabled, liveMultiplier, fadeMs, panRef]);
+  }, [url, volume, enabled, liveMultiplier, fadeMs, panRef, timeRef]);
+
 }
 
 /**

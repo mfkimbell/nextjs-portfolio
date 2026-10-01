@@ -383,7 +383,7 @@ const LINE_TEMPLATES: LineSpec[] = [
   { text: "SOFT-BEAR ENGINEERS", size: 1.10, y:  2.4 },
 ];
 
-const HINT_LINE: LineSpec = { text: "(SOUND ON)", size: 0.32, y: 0.4 };
+const HINT_LINE: LineSpec = { text: "BY MITCHELL KIMBELL", size: 0.32, y: 0.4 };
 
 function FitToViewport({ children, worldWidth = 17 }: { children: React.ReactNode; worldWidth?: number }) {
   const { viewport } = useThree();

@@ -1,6 +1,6 @@
 # Bear ConversationRelay Agent
 
-Standalone TypeScript service for Twilio ConversationRelay. It loads its configuration from `../nextjs/.env`; it does not load an `agent/.env` file.
+Standalone TypeScript service for Twilio ConversationRelay. It loads configuration from `../nextjs/.env`; it does not load an `agent/.env` file.
 
 ## Requirements
 
@@ -17,9 +17,8 @@ APP_ENV=DEV
 DEV_AGENT_BASE_URL=https://your-dev-agent.example.com
 PROD_AGENT_BASE_URL=https://your-production-agent.example.com
 PORT=3001
-# Optional native ConversationRelay ElevenLabs voice; this is the default.
-SMOKEY_ELEVENLABS_VOICE_ID=DQuoFsZ3oda1diTerwpq
-# Documented for a future distinct-voice transport; see the limitation below.
+# Both bears intentionally share Maple's ConversationRelay voice.
+SMOKEY_ELEVENLABS_VOICE_ID=oubi7HGxNVjXMnWLgwBT
 MAPLE_ELEVENLABS_VOICE_ID=oubi7HGxNVjXMnWLgwBT
 # Optional. Without a key, fixed greetings work and final prompts receive a two-bear configuration message.
 OPENAI_API_KEY=sk-...
@@ -57,14 +56,14 @@ Endpoints:
 
 - `GET /health` returns service health.
 - `GET /events/:callSid` holds a server-sent events connection for an active relay call. It emits `bear.speech.started` just before each text message, with `{ callSid, bear, speaker, text }`; `speaker` is `back_left_log` for `bear1` (Smokey) and `back_right_log` for `bear2` (Maple). It emits `bear.speech.interrupted` when ConversationRelay sends an interrupt for the active line.
-- `POST /call` returns the ConversationRelay TwiML. Configure this endpoint as the TwiML App voice URL or return it from your calling flow. When `TWILIO_AUTH_TOKEN` is set, Twilio must sign this webhook request.
+- `POST /call` returns ConversationRelay TwiML. Configure this endpoint as the TwiML App voice URL or return it from your calling flow. When `TWILIO_AUTH_TOKEN` is set, Twilio must sign this webhook request.
 - `WSS /conversation-relay` is Twilio's ConversationRelay endpoint; do not expose it to browsers.
 
-`POST /call` configures ConversationRelay's native ElevenLabs provider with `ttsProvider="ElevenLabs"`, `ttsLanguage="en-US"`, Smokey's voice, and an `en-US` Language profile. Each bear line is sent as an interruptible ConversationRelay `text` message with `lang: "en-US"` and `last: true`; no audio assets, direct ElevenLabs fetches, or ElevenLabs API key are used. On setup, Smokey's preemptible introduction is followed after bounded 750 ms timers by Maple's correction and Smokey's recovery. Final caller prompts use sequential OpenAI completions: Smokey leads, then Maple receives the caller prompt and Smokey's lead for a concise follow-up or correction. Each bear keeps a separate bounded history. Without `OPENAI_API_KEY`, the service remains available and returns a clear two-bear configuration fallback.
+`POST /call` configures ConversationRelay's native ElevenLabs provider with `ttsProvider="ElevenLabs"`, `ttsLanguage="en-US"`, Smokey's voice, and an `en-US` Language profile. Each bear line is sent as an interruptible ConversationRelay `text` message with `lang: "en-US"` and `last: true`; no audio assets, direct ElevenLabs fetches, or ElevenLabs API key are used. At every confirmed handoff, `bear.speech.queued` assigns frontend animation ownership before the next Twilio text token is sent; the retrospective `tokensPlayed` event then confirms `bear.speech.started`. On setup, Smokey's preemptible introduction waits until `tokensPlayed` confirms `Mitchell Kimbell` before Maple corrects the title. Smokey's next complete utterance begins with the deterministic uptake `Right, staff engineer.` Final caller prompts use sequential OpenAI completions: Smokey leads, Maple receives the caller prompt and Smokey's lead, and every Maple interruption includes a compact handoff context that the application inserts into Smokey's acknowledgement before his generated continuation. Each bear keeps a separate bounded history. Without `OPENAI_API_KEY`, the service remains available and returns a clear two-bear configuration fallback.
 
-ConversationRelay's native provider selects the bear voice through the configured language profile: Smokey uses `en-US`, Maple uses `en-GB`. Test Maple's resulting pronunciation; if it is unacceptable, direct TTS/BYOTTS is the next transport option.
+Both bear personas use the same ElevenLabs voice and `en-US` language profile. Maple can either follow Smokey or preempt him at an exact phrase selected by the structured reply planner.
 
-`GET /events/:callSid` is unauthenticated in `DEV` and permits browser CORS only from `PORTFOLIO_ORIGIN`, which defaults to `http://localhost:3000`. In `PROD`, `BEAR_EVENT_TOKEN` is required and the browser must connect with `/events/:callSid?token=<BEAR_EVENT_TOKEN>`. This shared query secret is a temporary production control; replace it with a short-lived signed capability before exposing the endpoint broadly. ConversationRelay does not provide a playback-complete signal used by this service, so it does not fabricate `bear.speech.ended`; it publishes an interruption only when the relay explicitly reports one.
+`GET /events/:callSid` is unauthenticated in `DEV` and permits browser CORS only from `PORTFOLIO_ORIGIN`, which defaults to `http://localhost:3000`. In `PROD`, `BEAR_EVENT_TOKEN` is required and the browser must connect with `/events/:callSid?token=<BEAR_EVENT_TOKEN>`. This shared query secret is a temporary production control; replace it with a short-lived signed capability before exposing the endpoint broadly. The service uses ConversationRelay `tokensPlayed` events to publish playback-driven bear start, end, and preemption events.
 
 For Heroku, set these config vars: `APP_ENV`, `PROD_AGENT_BASE_URL`, `SMOKEY_ELEVENLABS_VOICE_ID`, `MAPLE_ELEVENLABS_VOICE_ID`, `TWILIO_AUTH_TOKEN`, `PORTFOLIO_ORIGIN`, and `BEAR_EVENT_TOKEN`. Heroku provides `PORT`; set `OPENAI_API_KEY` and `OPENAI_MODEL` when dynamic answers are required. Do not set `ELEVENLABS_API_KEY` for this native-provider flow.
 

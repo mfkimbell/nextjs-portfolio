@@ -1,11 +1,19 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import type { ComponentRef, ReactNode, RefObject } from "react";
+import type { ComponentRef, MutableRefObject, ReactNode, RefObject } from "react";
 import IntroFlight from "@/components/scene-lab/IntroFlight";
 import SafeAsset from "@/components/scene-lab/SafeAsset";
 import { CampCritters, TipOver, RACCOON2_URL, type ActName } from "@/components/scene-lab/CritterActs";
 import { TIP_TABLES } from "@/components/scene-lab/tipTables";
+import { useComputerPointer, useRetroDesktop, useRetroDesktopTexture, type PcSounds, type PcState } from "@/components/scene-lab/RetroDesktop";
+import { pcBeep, pcChirp, pcKey, pcMouseClick, pcPark, pcPawThud, pcSeek, pcWake } from "@/lib/retroPcSounds";
+import OnlyBearsBear, { makeOnlyBearsState, type OnlyBearsState, type OnlyBearsTune } from "@/components/scene-lab/OnlyBearsBear";
+import { oldBearLookFromConfig, useOldBearLook } from "@/components/scene-lab/oldBear";
+import { applyRockingPosture, makePostureState, readRockingPosture, type PostureState, type RockingPosture } from "@/components/scene-lab/rockingPosture";
+import {
+  applyChairRock, applyLegLock, makeLegLock, readRockMotion, rockAngle, rockPosture, rockState, type LegLock,
+} from "@/components/scene-lab/rockingChair";
 import { RetroCrtTv, Table, Chair, meleeMenuHit, meleePageBackHit, meleeGridHit, type CrtScreen, type CrtMenu, type CrtPage } from "@/components/scene-lab/CampProps";
 import { roles } from "@/lib/experience";
 import { projects } from "@/lib/projects";
@@ -13,8 +21,8 @@ import { SKILLS, skillIcon } from "@/lib/skills";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Clone, OrbitControls, Stars, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
-import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
 import type { CampfireSceneConfig, LocationView, ObjectOverride } from "@/components/scene-lab/sceneConfig";
 import { defaultLocationView, DEFAULT_CAMPFIRE_CONFIG, DUPLICATE_PREFIX, EMPTY_OVERRIDE, BUG_SWARM_TWEAK_DEFAULTS } from "@/components/scene-lab/sceneConfig";
 import type { BugSwarmScope, BugSwarmTweak } from "@/components/scene-lab/sceneConfig";
@@ -23,8 +31,11 @@ import rockingChairBearPoseRaw from "@/config/rockingChairBearPose.json";
 import bearPosesRaw from "@/config/bearPoses.json";
 import { useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
 import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
+import { clampSpring, stepSpring } from "@/lib/bear-animation";
+import { getBanjoFingerPhase } from "@/lib/banjo-performance";
 
 import Matte from "@/components/Matte";
+import { rebindMixerRoot } from "@/lib/rebindMixer";
 const FIRE_CRACKLING_URL = "/sound/fire_crackling.mp3";
 const BANJO_URL_SOUND = "/sound/banjo.mp3";
 const CLICK_URL = "/sound/click.wav";
@@ -36,6 +47,9 @@ const HOVER_SOUND_COOLDOWN_MS = 500;
 const BACK_URL = "/sound/back.wav";
 const SELECT_URL = "/sound/select.wav";
 const FISH_FLOP_URL = "/sound/fish_flop.wav";
+const LEFT_BAG_FALL_URL = "/sound/left-bag-fall.mp3";
+const RIGHT_BAG_FALL_URL = "/sound/right-bag-fall.mp3";
+const FISHING_ROD_FALL_URL = "/sound/fishing-rod-fall-sound.mp3";
 const FIRE_WHOOSH_URL = "/sound/fire whoosh.mp3";
 /** Minimum gap between fire-click reactions (ember burst + whoosh), so
  *  clicking the campfire repeatedly can't stack them. Doesn't apply to the
@@ -111,6 +125,10 @@ const ROCKING_CHAIR_BEAR_POSE = rockingChairBearPoseRaw as {
   enabled: boolean;
   parts: Record<RockingChairBoneName, BonePose>;
 };
+/** The saved posture (recline / hunch / head) for the rocking-chair bear. */
+const ROCKING_CHAIR_POSTURE = readRockingPosture((rockingChairBearPoseRaw as { posture?: unknown }).posture);
+/** How the chair rocks and how he moves with it (rockingChair.ts). */
+const ROCKING_CHAIR_ROCK = readRockMotion((rockingChairBearPoseRaw as { rock?: unknown }).rock);
 
 const ROCKING_CHAIR_BONE_NAMES: RockingChairBoneName[] = [
   "center", "spine", "chest", "pelvis", "head",
@@ -209,6 +227,16 @@ const TOUCAN_URL = "/models/toucan_wing_fly_land_v2.glb";
 const DEER_URL = "/models/deer.glb";
 const DOE_URL = "/models/doe.glb";
 const BEAR_URL = "/wildpoly/bear_sit_fixed.glb";
+/*
+ * The OLD grey bear: the rocking-chair bear and the OnlyBears bear are the
+ * same fellow and share this model. It is bear_sit_fixed.glb (same rig,
+ * mouth rig, morphs and sit_log) with a silver-grey coat and a greyed-out
+ * face, and big round tortoiseshell glasses + bushy white brows parented to
+ * the head joint - built by scripts/old-bear/make_old_grey_bear.py from
+ * geometry authored in Blender. Because the glasses are part of the model,
+ * he needs no "glasses" accessory.
+ */
+const BEAR_OLD_URL = "/wildpoly/bear_old_grey.glb";
 // Bear pose baked into GLBs by nextjs/scripts/bake_bear_pose.py (invoked from
 // /api/dev/bake-bear-pose whenever the pose lab saves). The site loads these
 // instead of BEAR_URL for the fish-holding bears, so the lab's edits are
@@ -665,7 +693,7 @@ const PORTFOLIO_MENU: CrtMenu = {
   title: "Main Menu",
   dwell: 3.6,
   variant: "melee",
-  tagline: "Solo Smash",
+  // No fixed tagline: the strip carries the lit item's own subtitle.
   backgroundVideo: CRT_ATTRACT_VIDEO,
   backgroundImage: CRT_MENU_BACKGROUND,
   // everything the tube can show, decoded before it is needed
@@ -674,11 +702,15 @@ const PORTFOLIO_MENU: CrtMenu = {
     {
       label: "Experience",
       subtitle: "Where I've Built",
+      icon: "briefcase",
+      caption: "Career",
       lines: roles.slice(0, 4).map((r) => r.company),
     },
     {
       label: "Projects",
       subtitle: "Things I've Shipped",
+      icon: "code",
+      caption: "Portfolio",
       lines: [...projects]
         .sort((a, b) => a.name.length - b.name.length)
         .slice(0, 4)
@@ -687,6 +719,8 @@ const PORTFOLIO_MENU: CrtMenu = {
     {
       label: "Skills",
       subtitle: "Tools of the Trade",
+      icon: "gear",
+      caption: "Toolkit",
       lines: ["React / Next / TS", "Python / C# / .NET", "AWS / GCP / K8s", "Bedrock / PyTorch"],
     },
   ],
@@ -722,14 +756,23 @@ const SECTION_PAGES: CrtPage[] = [
     cols: roles.length,
     // The panel carries the whole role - title, dates and every bullet - so
     // it needs the height, and the logo strip shrinks to pay for it.
-    bandFrac: 0.66,
-    tile: { wellH: 30, capH: 10 },
+    // Big logo tiles (38px wells, nearly square) over a band sized to hold
+    // the longest role's three bullets. The layout is 36 + 49 + 4 = 89 down
+    // to the band, which is what 0.62 of the 142px body leaves.
+    bandFrac: 0.62,
+    tile: { wellH: 38, capH: 10 },
+    // Five small looping logos: all of them run, not just the lit one.
+    animateAll: true,
     rows: roles.map((r) => ({
       label: r.company,
       // A clean short form for the plate. "Summit Technology Consulting"
       // truncated to fit was the thing that looked unprofessional.
       tag: COMPANY_TAGS[r.company] ?? r.company.split(/\s+/)[0],
-      sub: `${r.title} · ${r.dates}`,
+      // The tile names the company, so the band leads with the ROLE. The
+      // parenthetical ("(Go To Market Innovation)") is dropped there - it
+      // doubled the heading onto a second line.
+      sub: r.title.replace(/\s*\(.*?\)\s*/g, " ").trim(),
+      meta: r.dates,
       body: r.bullets,
       // .mp4, not the .gif the rest of the site uses: on a canvas the browser
       // will not reliably animate an off-screen <img>, and a <video> can be
@@ -782,7 +825,9 @@ const SECTION_PAGES: CrtPage[] = [
     grid: true,
     cols: 5,
     bandFrac: 0,
-    tile: { wellH: 32, showCaption: false },
+    // artScale pulls each mark ~7% in from the tile's rim, so the wider
+    // logos (aws, docker) are not drawn hard against its edges.
+    tile: { wellH: 32, showCaption: false, artScale: 0.93 },
     rows: SKILLS.map((s) => ({ label: s.label, icon: skillIcon(s) })),
   },
 ];
@@ -989,7 +1034,19 @@ function boneBasis(fwd: THREE.Vector3, up: THREE.Vector3) {
 /** how far a bear will crane its head off neutral before it stops trying, radians */
 const MAX_GLANCE = 1.0;
 
-type HeadRegistry = Map<string, { bearId?: AnimalPlacement["bearId"]; position: THREE.Vector3 }>;
+type HeadRegistry = Map<string, {
+  bearId?: AnimalPlacement["bearId"];
+  position: THREE.Vector3;
+  fishPosition?: THREE.Vector3;
+}>;
+type FishReaction = {
+  phase: "idle" | "flying" | "impact-delay" | "fire" | "partner" | "return";
+  /** WORLD position of what the back bears are reacting to: the fish itself
+   *  while it flies (updated every frame), then the spot where it hit the fire. */
+  target: THREE.Vector3;
+  phaseStartedAt: number;
+  flightProgress: number;
+};
 
 /**
  * Live world positions the wires need: where each controller's cord leaves its shell,
@@ -1129,6 +1186,9 @@ interface AnimalPlacement {
    *  /scene-lab/rocking-chair-bear (rockingChairBearPose.json), the same
    *  hard-override technique banjoPlayer uses for its arms. */
   rockingChairPose?: boolean;
+  /** Talking animation stays above the neck: no torso lean or chest breathing,
+   *  so the arms (and whatever prop they hold) never move while this bear talks. */
+  talkBodyStill?: boolean;
 }
 
 const ANIMALS: AnimalPlacement[] = [
@@ -1180,6 +1240,8 @@ const ANIMALS: AnimalPlacement[] = [
     url: BEAR_URL_BACK_RIGHT_LOG, position: [2.078, 0, -1.2], bench: 2, rotationY: -Math.PI / 3, scale: 0.5,
     label: "bear on back-right log", animation: "sit_log", sitOnBench: true,
     animationOffset: 4.3, animationSpeed: 1.07, bearId: "back_right_log",
+    // Maple: talking animates head/face only - arms and fish stick stay put.
+    talkBodyStill: true,
     prop: {
       url: FISH_STICK_URL,
       scale: 0.04,
@@ -1326,9 +1388,9 @@ const CONTACT_BEAR: AnimalPlacement = {
  * (name "cabin_rocking_chair") moves both together.
  */
 const ROCKING_CHAIR_BEAR: AnimalPlacement = {
-  url: BEAR_URL, position: [0, 0.4, 0], rotationY: 0, scale: 0.5,
+  url: BEAR_OLD_URL, position: [0, 0.4, 0], rotationY: 0, scale: 0.5,
   label: "bear in the rocking chair", animation: "sit_log", animationOffset: 5.6, animationSpeed: 1,
-  accessories: ["glasses"], bearId: "table", rockingChairPose: true,
+  bearId: "table", rockingChairPose: true,
 };
 
 const seededRandom = (seed: number) => {
@@ -1611,6 +1673,100 @@ function CrtFocusCamera({
     camera.position.set(p.px, p.py, p.pz);
     camera.lookAt(p.tx, p.ty, p.tz);
     if (Math.abs(p.px - s.px) + Math.abs(p.py - s.py) + Math.abs(p.pz - s.pz) < 1e-3) {
+      pose.current = null; seed.current = null;
+    }
+  });
+
+  return null;
+}
+
+/**
+ * Flies the camera onto the cabin computer's glass, and off it again.
+ *
+ * The same job CrtFocusCamera does for the arcade tube, but aimed off the
+ * picture plane's own WORLD matrix instead of a shot written in a location's
+ * frame: wherever the computer has been dragged, scaled or turned in the
+ * lab, and wherever the ring has put the cabin, "straight in front of the
+ * screen" is read off the mesh itself. Standoff and height are in screen
+ * heights (pcFocusBack / pcFocusHeight), so the framing survives rescaling.
+ */
+function PcFocusCamera({
+  active,
+  screenRef,
+  config,
+  handoff,
+  revealRef,
+}: {
+  active: boolean;
+  screenRef: React.MutableRefObject<THREE.Mesh | null>;
+  config: CampfireSceneConfig;
+  handoff: boolean;
+  /** OnlyBears: while `.reveal` is set the shot pulls back from the glass to
+   *  show the bear behind the monitor (pcReveal* knobs), slower than the zoom. */
+  revealRef?: React.MutableRefObject<OnlyBearsState>;
+}) {
+  const { camera } = useThree();
+  type Pose = { px: number; py: number; pz: number; tx: number; ty: number; tz: number };
+  const pose = useRef<Pose | null>(null);
+  const seed = useRef<Pose | null>(null);
+  const v = useMemo(() => ({
+    center: new THREE.Vector3(),
+    normal: new THREE.Vector3(),
+    up: new THREE.Vector3(),
+    scale: new THREE.Vector3(),
+    q: new THREE.Quaternion(),
+    fwd: new THREE.Vector3(),
+  }), []);
+
+  useFrame((_, delta) => {
+    const reveal = !!revealRef?.current.reveal;
+    // the pull-back is a slow, deliberate move - the reveal is the joke
+    const settle = Math.max(0.05, config.locationTurnSpeed) * (reveal ? 1.9 : 1);
+    const k = 1 - Math.pow(0.01, Math.min(delta, 1 / 20) / settle);
+    const mesh = screenRef.current;
+
+    if (active && mesh) {
+      if (!pose.current) {
+        camera.getWorldDirection(v.fwd);
+        const look = camera.position.clone().addScaledVector(v.fwd, 3);
+        pose.current = {
+          px: camera.position.x, py: camera.position.y, pz: camera.position.z,
+          tx: look.x, ty: look.y, tz: look.z,
+        };
+        seed.current = { ...pose.current };
+      }
+      mesh.updateWorldMatrix(true, false);
+      mesh.getWorldPosition(v.center);
+      mesh.getWorldQuaternion(v.q);
+      mesh.getWorldScale(v.scale);
+      v.normal.set(0, 0, 1).applyQuaternion(v.q);
+      v.up.set(0, 1, 0).applyQuaternion(v.q);
+      const h = PC_SCREEN_SIZE[1] * v.scale.y;
+      const back = reveal ? config.pcRevealBack : config.pcFocusBack;
+      const lift = reveal ? config.pcRevealHeight : config.pcFocusHeight;
+      const aimUp = reveal ? config.pcRevealAimUp : 0;
+      const gx = v.center.x + v.normal.x * back * h + v.up.x * lift * h;
+      const gy = v.center.y + v.normal.y * back * h + v.up.y * lift * h;
+      const gz = v.center.z + v.normal.z * back * h + v.up.z * lift * h;
+      const ax = v.center.x + v.up.x * aimUp * h;
+      const ay = v.center.y + v.up.y * aimUp * h;
+      const az = v.center.z + v.up.z * aimUp * h;
+      const p = pose.current;
+      p.px += (gx - p.px) * k; p.py += (gy - p.py) * k; p.pz += (gz - p.pz) * k;
+      p.tx += (ax - p.tx) * k; p.ty += (ay - p.ty) * k; p.tz += (az - p.tz) * k;
+      camera.position.set(p.px, p.py, p.pz);
+      camera.lookAt(p.tx, p.ty, p.tz);
+      return;
+    }
+
+    if (!pose.current || !seed.current) return;
+    if (handoff) { pose.current = null; seed.current = null; return; }
+    const p = pose.current, s0 = seed.current;
+    p.px += (s0.px - p.px) * k; p.py += (s0.py - p.py) * k; p.pz += (s0.pz - p.pz) * k;
+    p.tx += (s0.tx - p.tx) * k;  p.ty += (s0.ty - p.ty) * k;  p.tz += (s0.tz - p.tz) * k;
+    camera.position.set(p.px, p.py, p.pz);
+    camera.lookAt(p.tx, p.ty, p.tz);
+    if (Math.abs(p.px - s0.px) + Math.abs(p.py - s0.py) + Math.abs(p.pz - s0.pz) < 1e-3) {
       pose.current = null; seed.current = null;
     }
   });
@@ -3306,7 +3462,7 @@ function Camper({
   const gltf = useGLTF(CAMPER_URL) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
   const groupRef = useRef<THREE.Group>(null);
   const model = useMemo(() => skeletonClone(gltf.scene) as THREE.Group, [gltf.scene]);
-  const { actions, names: actionNames } = useAnimations(gltf.animations || [], groupRef);
+  const { actions, names: actionNames, mixer } = useAnimations(gltf.animations || [], groupRef);
 
   const cfgRef = useRef(config);
   cfgRef.current = config;
@@ -3315,10 +3471,12 @@ function Camper({
     // 16.7s of gentle sway on the string lights and plants - not a turntable.
     const key = actionNames[0];
     if (!key || !actions?.[key]) return;
+    // a re-cloned model after a dev hot reload: see rebindMixer.ts
+    if (groupRef.current) rebindMixerRoot(mixer, groupRef.current);
     const action = actions[key];
     action.reset().fadeIn(0.5).play();
     return () => { action.fadeOut(0.3); };
-  }, [actions, actionNames]);
+  }, [actions, actionNames, mixer, model]);
 
   useEffect(() => {
     model.traverse((obj) => {
@@ -3383,6 +3541,20 @@ function Camper({
  * the vehicles - they have no per-instance state so a Selectable wrapper
  * carries the transform and click handling.
  */
+/**
+ * Rolls the rocking chair - and the bear sitting in it - forward and back on
+ * its runners. Sits inside the chair's Selectable, so dragging/turning the
+ * chair from the lab still works; this only adds the rock on top, in the
+ * chair GLB's own space. See rockingChair.ts for the measured geometry.
+ */
+function RockingChairRig({ children }: { children: ReactNode }) {
+  const ref = useRef<THREE.Group>(null);
+  useFrame(({ clock }) => {
+    if (ref.current) applyChairRock(ref.current, rockAngle(clock.elapsedTime, ROCKING_CHAIR_ROCK));
+  });
+  return <group ref={ref}>{children}</group>;
+}
+
 function GLBModel({ url }: { url: string }) {
   const gltf = useGLTF(url) as unknown as { scene: THREE.Group };
   const model = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
@@ -5952,17 +6124,68 @@ function StringBulbBloom({
  */
 const COMPUTER_SCREEN_MESH = "Object_20";
 
-/**
- * The cabin computer, with a screen that is actually lit.
- *
- * It used to be a plain GLBModel with a spotlight in front of it, which left
- * the room lit BY a monitor whose own panel was a dark rectangle. The screen
- * face now carries its own emissive, on its own clone of the shared material -
- * cloning is not optional here, since every part of this model draws from one
- * material and tinting it in place would turn the keyboard and the tower blue
- * as well (and leak that into drei's cache for anything else using the file).
+/*
+ * Where that quad sits in the model's own frame, read out of the GLB: its
+ * node is translated to (-0.0993, 0.8842, -0.2574), scaled 1.0021, and the
+ * quad itself spans +-0.4958 x +-0.3916 facing +Z. (The file's two root
+ * nodes rotate X by -90 and +90 degrees, which cancel.) The desktop's
+ * picture plane goes 4mm proud of it, so it is always the nearer hit.
  */
-function LitComputer({ config }: { config: CampfireSceneConfig }) {
+const PC_SCREEN_CENTER: [number, number, number] = [-0.0993, 0.8842, -0.2574 + 0.004];
+const PC_SCREEN_SIZE: [number, number] = [0.4958 * 2 * 1.0021, 0.3916 * 2 * 1.0021];
+
+/** What the cabin sector needs to put the desktop on the monitor. */
+type PcGlassProps = {
+  stateRef: React.MutableRefObject<PcState>;
+  onClick: (uv: { x: number; y: number } | null) => void;
+  onHover: (uv: { x: number; y: number } | null) => void;
+  /** Idle hover anywhere on the machine (hand cursor). */
+  onOver: (over: boolean) => void;
+  /** Idle and clickable: the glass lifts under the pointer. */
+  hot: boolean;
+  /** Zoomed in: only the glass takes clicks then. */
+  focused: boolean;
+  /** Off in the lab's config mode, where the computer is just a prop. */
+  enabled: boolean;
+  /** The picture plane, for the close-up camera to aim at. */
+  screenRef: React.MutableRefObject<THREE.Mesh | null>;
+};
+
+/**
+ * The desktop on the monitor's glass - see RetroDesktop.tsx.
+ *
+ * Unlit, like the CRT's picture, so the cabin's lighting never dims it.
+ * It carries NO r3f pointer handlers: clicks and hovers come from
+ * useComputerPointer, which casts against the computer alone, because r3f
+ * hands a click to the nearest thing under the pointer and the cabin's
+ * walls and props were swallowing it before it reached the screen.
+ */
+function PcGlass({ pc, body, brightness = 1 }: { pc: PcGlassProps; body: THREE.Object3D; brightness?: number }) {
+  const [over, setOver] = useState(false);
+  const bodyRef = useRef<THREE.Object3D | null>(body);
+  bodyRef.current = body;
+  const onOver = pc.onOver;
+  useComputerPointer({
+    enabled: pc.enabled,
+    focused: pc.focused,
+    screenRef: pc.screenRef,
+    bodyRef,
+    onClick: pc.onClick,
+    onHover: pc.onHover,
+    onOver: useCallback((o: boolean) => { setOver(o); onOver(o); }, [onOver]),
+  });
+  const texture = useRetroDesktopTexture(pc.stateRef, pc.hot && over);
+  return (
+    <mesh ref={pc.screenRef} position={PC_SCREEN_CENTER}>
+      <planeGeometry args={PC_SCREEN_SIZE} />
+      {/* colour multiplies the picture: >1 brightens the glass (not tone
+          mapped, so it can go past white), <1 dims it */}
+      <meshBasicMaterial map={texture} toneMapped={false} color={new THREE.Color().setScalar(Math.max(0, brightness))} />
+    </mesh>
+  );
+}
+
+function LitComputer({ config, pc }: { config: CampfireSceneConfig; pc?: PcGlassProps }) {
   const gltf = useGLTF(OLD_BEAR_COMPUTER_URL) as unknown as { scene: THREE.Group };
   const { model, screens } = useMemo(() => {
     const cloned = gltf.scene.clone(true);
@@ -6009,7 +6232,12 @@ function LitComputer({ config }: { config: CampfireSceneConfig }) {
     config.deskComputerScreenB,
   ]);
 
-  return <primitive object={model} />;
+  return (
+    <>
+      <primitive object={model} />
+      {pc ? <PcGlass pc={pc} body={model} brightness={Number.isFinite(config.deskComputerGlassBrightness) ? config.deskComputerGlassBrightness : 1} /> : null}
+    </>
+  );
 }
 
 /** camping.glb loaded raw, but every emissive lamp mesh (materials named
@@ -6747,11 +6975,15 @@ function SocketProp({
   prop,
   ready,
   config,
+  heads,
+  name,
 }: {
   root: RefObject<THREE.Group | null>;
   prop: PropAttachment;
   ready: unknown;
   config: CampfireSceneConfig;
+  heads?: RefObject<HeadRegistry>;
+  name?: string;
 }) {
   const gltf = useGLTF(prop.url) as unknown as { scene: THREE.Group };
   // Live handle so useFrame can re-apply the config-driven transform without
@@ -6761,6 +6993,7 @@ function SocketProp({
   configRef.current = config;
 
   useEffect(() => {
+    const headsRegistry = heads?.current;
     if (!root.current) return;
     let socket: THREE.Object3D | null = null;
     root.current.traverse((o) => {
@@ -6815,19 +7048,31 @@ function SocketProp({
     return () => {
       attached.remove(obj);
       propRef.current = null;
+      if (headsRegistry && name) {
+        const entry = headsRegistry.get(name);
+        if (entry) entry.fishPosition = undefined;
+      }
       if (stick) {
         attached.remove(stick);
         stick.geometry.dispose();
         (stick.material as THREE.Material).dispose();
       }
     };
-  }, [gltf.scene, prop.url, prop.scale, prop.rotation, prop.position, prop.stickLength, prop.stickRadius, prop.stickPosition, prop.stickRotation, root, ready]);
+  }, [gltf.scene, prop.url, prop.scale, prop.rotation, prop.position, prop.stickLength, prop.stickRadius, prop.stickPosition, prop.stickRotation, root, ready, heads, name]);
 
   // Live config-driven overrides: re-apply each frame on top of the baseline
   // transform so sliders in the lab move the banjo without rebuilding it.
   useFrame(() => {
     const obj = propRef.current;
-    if (!obj || !prop.configKey) return;
+    if (!obj) return;
+    if (heads?.current && name && prop.url === FISH_STICK_URL) {
+      const entry = heads.current.get(name);
+      if (entry) {
+        entry.fishPosition ??= new THREE.Vector3();
+        obj.getWorldPosition(entry.fishPosition);
+      }
+    }
+    if (!prop.configKey) return;
     const c = configRef.current;
     if (prop.configKey === "banjoProp") {
       const [px, py, pz] = prop.position ?? [0, 0, 0];
@@ -7331,6 +7576,8 @@ function Animal({
   heads,
   cords,
   bearVoiceRef,
+  fishReactionRef,
+  banjoTimeRef,
   seed = 0,
 }: {
   placement: AnimalPlacement;
@@ -7342,6 +7589,8 @@ function Animal({
   /** shared cord-exit positions, so the wires can find the controllers */
   cords?: RefObject<CordRegistry>;
   bearVoiceRef?: BearVoiceStateRef;
+  fishReactionRef?: MutableRefObject<FishReaction>;
+  banjoTimeRef?: MutableRefObject<number>;
   seed?: number;
 }) {
   const gltf = useGLTF(placement.url) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
@@ -7354,6 +7603,12 @@ function Animal({
   // skeleton, so three bears sharing one GLB would share one set of bones and
   // their three mixers would fight over it.
   const model = useMemo(() => skeletonClone(gltf.scene) as THREE.Group, [gltf.scene]);
+  // The old grey bear (rocking chair): coat, glasses, brows and beard from
+  // the lab's "Old bear" knobs - see oldBear.ts.
+  useOldBearLook(
+    placement.url === BEAR_OLD_URL ? model : null,
+    oldBearLookFromConfig(config as unknown as Record<string, unknown>),
+  );
 
   // Cub idle: procedural head bob + ear twitch. The cub GLB has no clip,
   // so the site animates it at runtime. Rests are captured once so we
@@ -7373,6 +7628,15 @@ function Animal({
   // injected by scripts/add_bear_mouth_morphs.py): jawOpen / mouthWide /
   // mouthRound / eyeBlink. Null on a GLB that predates them - the jaw-bone
   // path below is the fallback.
+  // Mouth skeleton added by scripts/add_bear_mouth_rig.py (jaw -> lip_lower,
+  // lip_upper, lip_corner_L/R, all under head). These bones have no clip
+  // channels, so they're set ABSOLUTELY every frame from their cached rest
+  // transform - never accumulated - which is what keeps them from drifting.
+  const mouthRigRef = useRef<{
+    bones: Record<"jaw" | "lip_lower" | "lip_upper" | "lip_corner_L" | "lip_corner_R", THREE.Object3D>;
+    restPos: Record<string, THREE.Vector3>;
+    restQ: Record<string, THREE.Quaternion>;
+  } | null>(null);
   const faceMeshRef = useRef<{
     influences: number[];
     jaw: number; wide: number; round: number; blink: number;
@@ -7381,6 +7645,7 @@ function Animal({
   // spring, blink scheduling. One object, mutated in place every frame.
   const talkRef = useRef({
     open: 0, wide: 0, round: 0,
+    openPre: 0, widePre: 0, roundPre: 0,   // first stage of the two-pole smoothing
     gain: 1,
     lastSyllable: -1,
     nod: 0, nodVel: 0,
@@ -7392,21 +7657,34 @@ function Animal({
     // secondary motion
     wasSpeaking: false,
     silentFor: 10,       // seconds since this bear last spoke
-    breath: 0,           // 1 -> 0 after a phrase starts: chest swell
-    ear: 0,              // 1 -> 0 after a stressed syllable: ear flick
+    ear: 0,              // 1 -> 0 after an accent: ear flick
     listen: 0, listenVel: 0, listenClock: 1.5,   // slow "mm-hm" nods while the other bear talks
+    lastAccent: -1,
+    backchannelIn: -1,   // >0: seconds until a listener nod answers the speaker's accent
+    headLift: 0,         // smoothed pitch-follow (rad, +down)
   });
   const talkRng = useMemo(() => seededRandom(311 + seed * 29), [seed]);
+  const mouthTmpQ = useMemo(() => new THREE.Quaternion(), []);
+  const mouthTmpV = useMemo(() => new THREE.Vector3(), []);
 
   // Banjo-bear arm override: eight arm bones + their rest quaternions, so the
   // picking loop can compose `rest * userEuler` each frame and hard-replace
   // whatever the base clip wrote for arms.
   const banjoBonesRef = useRef<Partial<Record<string, THREE.Bone>>>({});
   const banjoRestQRef = useRef<Partial<Record<string, THREE.Quaternion>>>({});
+  const banjoFingerRRef = useRef<THREE.Bone | null>(null);
+  const banjoFingerLRef = useRef<THREE.Bone | null>(null);
+  const banjoFingerRRestQRef = useRef<THREE.Quaternion | null>(null);
+  const banjoFingerLRestQRef = useRef<THREE.Quaternion | null>(null);
   // Rocking-chair bear: whole-skeleton pose cache (rotation AND scale rest
   // values, so scale sliders can stretch/shrink a bone relative to its own
   // authored length rather than to an arbitrary 1).
   const chairBonesRef = useRef<Partial<Record<string, THREE.Bone>>>({});
+  const postureRef = useRef<PostureState>(makePostureState());
+  // rocking-chair bear: legs held still (no sit_log kick), and this frame's
+  // posture with the rock's lean / hunch folded in
+  const legLockRef = useRef<LegLock | null>(null);
+  const rockPostureRef = useRef<RockingPosture>({ ...ROCKING_CHAIR_POSTURE });
   const chairRestQRef = useRef<Partial<Record<string, THREE.Quaternion>>>({});
   const chairRestSRef = useRef<Partial<Record<string, THREE.Vector3>>>({});
   // Banjo-bear Food-socket freeze: sit_log animates Food to trace the right paw
@@ -7443,6 +7721,10 @@ function Animal({
     // Banjo-bear arm bone discovery. Cheap, fires once per model swap.
     banjoBonesRef.current = {};
     banjoRestQRef.current = {};
+    banjoFingerRRef.current = null;
+    banjoFingerLRef.current = null;
+    banjoFingerRRestQRef.current = null;
+    banjoFingerLRestQRef.current = null;
     banjoFoodRef.current = null;
     banjoFoodPos.current = null;
     banjoFoodQuat.current = null;
@@ -7455,6 +7737,23 @@ function Animal({
     handRRestQRef.current = null;
     mouthBoneRef.current = null;
     faceMeshRef.current = null;
+    mouthRigRef.current = null;
+    {
+      const want = ["jaw", "lip_lower", "lip_upper", "lip_corner_L", "lip_corner_R"] as const;
+      const found: Partial<Record<(typeof want)[number], THREE.Object3D>> = {};
+      model.traverse((o) => {
+        if ((want as readonly string[]).includes(o.name) && (o as THREE.Bone).isBone) {
+          found[o.name as (typeof want)[number]] = o;
+        }
+      });
+      if (want.every((n) => found[n])) {
+        const bones = found as Record<(typeof want)[number], THREE.Object3D>;
+        const restPos: Record<string, THREE.Vector3> = {};
+        const restQ: Record<string, THREE.Quaternion> = {};
+        for (const n of want) { restPos[n] = bones[n].position.clone(); restQ[n] = bones[n].quaternion.clone(); }
+        mouthRigRef.current = { bones, restPos, restQ };
+      }
+    }
 
     // Every bear GLB carrying the Blender face morphs gets them wired up -
     // the blink runs on all of them, the mouth only moves on voice bears.
@@ -7516,6 +7815,14 @@ function Animal({
           banjoBonesRef.current[o.name] = b;
           banjoRestQRef.current[o.name] = b.quaternion.clone();
         }
+        if (b.isBone && o.name === "fingers_R") {
+          banjoFingerRRef.current = b;
+          banjoFingerRRestQRef.current = b.quaternion.clone();
+        }
+        if (b.isBone && o.name === "fingers_L") {
+          banjoFingerLRef.current = b;
+          banjoFingerLRestQRef.current = b.quaternion.clone();
+        }
         if (!food && (o.name === "Food" || o.name === "food")) {
           food = o;
         }
@@ -7574,6 +7881,10 @@ function Animal({
       }
     });
     if (placement.rockingChairPose) {
+      const want = (placement.animation ?? "").toLowerCase();
+      const clip = gltf.animations?.find((c) => c.name.toLowerCase() === want)
+        ?? gltf.animations?.find((c) => want && c.name.toLowerCase().includes(want));
+      legLockRef.current = makeLegLock(model, clip);
       const partNames = new Set<string>(ROCKING_CHAIR_BONE_NAMES);
       model.traverse((o) => {
         const b = o as THREE.Bone;
@@ -7585,9 +7896,11 @@ function Animal({
       });
     }
 
-  }, [model, placement.url, placement.bearId, placement.banjoPlayer, placement.rockingChairPose, gltf.animations, seed]);
+  }, [model, placement.url, placement.bearId, placement.banjoPlayer, placement.rockingChairPose, placement.animation, gltf.animations, seed]);
 
-  const { actions, names: actionNames } = useAnimations(gltf.animations || [], groupRef);
+  const { actions, names: actionNames, mixer } = useAnimations(gltf.animations || [], groupRef);
+  // Which model the mixer's bindings were made against (see the play effect).
+  const boundModelRef = useRef<THREE.Object3D | null>(null);
 
   // Track the currently-playing action so the animation useEffect can idempotently
   // "start once, keep running". Without this the effect's cleanup fadeOut() +
@@ -7601,14 +7914,24 @@ function Animal({
   // Only the bears take part; everything else ignores all of this.
   const social = placement.animation === "sit_log";
   const headRef = useRef<THREE.Object3D | null>(null);
-  // chest is a leaf bone (shoulders/head hang off `center`), so scaling it
-  // swells the ribcage without dragging the arms or head along.
-  const chestRef = useRef<THREE.Object3D | null>(null);
   const earLRef = useRef<THREE.Object3D | null>(null);
   const earRRef = useRef<THREE.Object3D | null>(null);
   const glance = useRef({ t: 0, next: 2.5 + seed * 1.7, phase: "wait" as "wait" | "turn" | "hold" | "back", w: 0, target: "" });
+  // voice bears' conversational gaze: smoothed world-space look target
+  const lookRef = useRef({
+    target: new THREE.Vector3(),
+    init: false,
+    hold: 0,
+    otherDelay: 0,
+    partnerRequested: false,
+    wantOther: false,
+    wantFish: false,
+    fishHold: 0,
+    fishCooldown: 3.5 + seed * 1.4,
+  });
   const tmpV = useMemo(() => new THREE.Vector3(), []);
   const tmpV2 = useMemo(() => new THREE.Vector3(), []);
+  const fishLookEnd = useMemo(() => new THREE.Vector3(), []);
   const tmpQ = useMemo(() => new THREE.Quaternion(), []);
   const tmpQ2 = useMemo(() => new THREE.Quaternion(), []);
   const rng = useMemo(() => seededRandom(97 + seed * 13), [seed]);
@@ -7616,17 +7939,14 @@ function Animal({
   useEffect(() => {
     if (!social) return;
     let head: THREE.Object3D | null = null;
-    let chest: THREE.Object3D | null = null;
     let earL: THREE.Object3D | null = null;
     let earR: THREE.Object3D | null = null;
     model.traverse((o) => {
       if (o.name === "head") head = o;
-      else if (o.name === "chest") chest = o;
       else if (o.name === "ear01_L") earL = o;
       else if (o.name === "ear01_R") earR = o;
     });
     headRef.current = head;
-    chestRef.current = chest;
     earLRef.current = earL;
     earRRef.current = earR;
   }, [social, model]);
@@ -7690,12 +8010,33 @@ function Animal({
     if (!key) return;
     const action = actions[key];
     if (!action) return;
+    const bearPose = placement.bearId ? BEAR_POSES[placement.bearId] : undefined;
+    const holdFrame = placement.animationHoldFrame ?? (bearPose?.paused ? bearPose.frame ?? 0 : null);
+
+    // A different model object under the same mixer root (a dev hot reload
+    // re-clones it): drei's cached bindings still point at the OLD
+    // skeleton's bones, so the mixer would animate an invisible model and
+    // leave this one in its bind pose - the T-pose after every lab slider
+    // change. Make them look their bones up again. See rebindMixer.ts.
+    const root = groupRef.current;
+    if (boundModelRef.current && boundModelRef.current !== model && root) {
+      rebindMixerRoot(mixer, root);
+    }
+    boundModelRef.current = model;
 
     // Same action already running - keep playing, don't restart. Prevents the
     // T-pose flash that comes from fadeIn(0.3) starting at weight=0 whenever
     // an unrelated dep (autosave HMR, config change) re-fires this effect.
     if (currentActionRef.current === action && action.isRunning()) {
-      action.timeScale = placement.animationSpeed ?? 1;
+      if (holdFrame != null) {
+        action.time = holdFrame / 24;
+        action.timeScale = 0;
+        action.paused = true;
+      } else {
+        action.paused = false;
+        action.timeScale = placement.animationSpeed ?? 1;
+        action.setEffectiveWeight(1);
+      }
       return;
     }
 
@@ -7712,9 +8053,6 @@ function Animal({
     // ignoring both and free-running the clip, so a pose authored against a
     // held frame looked nothing like the lab once sit_log swung the arms on.
     // animationHoldFrame stays as an explicit override for non-bear animals.
-    const bearPose = placement.bearId ? BEAR_POSES[placement.bearId] : undefined;
-    const holdFrame =
-      placement.animationHoldFrame ?? (bearPose?.paused ? bearPose.frame ?? 0 : null);
     if (holdFrame != null) {
       // Freeze on a single frame - assume 24 fps like the lab, evaluate the
       // clip once, then park timeScale at 0 so the mixer keeps writing but
@@ -7735,7 +8073,7 @@ function Animal({
     // No cleanup fadeOut - if this effect re-fires with the same action it
     // will hit the "already running" fast path above and leave state alone.
     // The mixer/action are owned by useAnimations and torn down on unmount.
-  }, [actions, actionNames, placement.animation, placement.animationOffset, placement.animationSpeed, placement.animationHoldFrame, placement.bearId]);
+  }, [actions, actionNames, mixer, model, placement.animation, placement.animationOffset, placement.animationSpeed, placement.animationHoldFrame, placement.bearId]);
 
   // Publish this animal's clips + chosen clip to the duplicate registry so a
   // clone of this bear can keep animating instead of freezing on snapshot.
@@ -7750,7 +8088,7 @@ function Animal({
     return () => { unregisterDuplicateAnimation(name); };
   }, [name, gltf.animations, placement.animation, placement.animationOffset, placement.animationSpeed]);
 
-  useFrame((_, delta) => {
+  useFrame((frameState, delta) => {
     if (!groupRef.current) return;
     const c = configRef.current;
     const o = c.objectOverrides?.[name] ?? EMPTY_OVERRIDE;
@@ -7866,6 +8204,52 @@ function Animal({
       applyArm("upperarm_R");
       applyArm("arm_R");
       applyArm("hand_R");
+
+      // Every performance control composes from the authored pose. At zero,
+      // the manually placed paws, wrists, and hands are unchanged.
+      const bpm = Number.isFinite(configRef.current.banjoPickingBpm)
+        ? configRef.current.banjoPickingBpm
+        : 96;
+      const performanceTime = banjoTimeRef && banjoTimeRef.current > 0
+        ? banjoTimeRef.current
+        : performance.now() / 1000;
+      const phase = performanceTime * bpm / 60 * Math.PI * 2;
+      const { fretPressure: fretPress, pickCurl } = getBanjoFingerPhase(performanceTime, bpm);
+      const pickAmount = Number.isFinite(configRef.current.banjoPickingAmount)
+        ? configRef.current.banjoPickingAmount
+        : 0;
+      const wristPitch = Number.isFinite(configRef.current.banjoPickingWristPitch)
+        ? configRef.current.banjoPickingWristPitch
+        : 0;
+      const wristRoll = Number.isFinite(configRef.current.banjoPickingWristRoll)
+        ? configRef.current.banjoPickingWristRoll
+        : 0;
+      const fretAmount = Number.isFinite(configRef.current.banjoFretFingerAmount)
+        ? configRef.current.banjoFretFingerAmount
+        : 0;
+      const handR = banjoBonesRef.current.hand_R;
+      if (handR && (pickAmount > 0 || wristPitch > 0 || wristRoll > 0)) {
+        HAND_DELTA_E.set(
+          -pickCurl * (0.055 * pickAmount + 0.028 * wristPitch),
+          Math.sin(phase) * 0.025 * pickAmount,
+          Math.sin(phase) * (0.045 * pickAmount + 0.014 * wristRoll),
+          "XYZ",
+        );
+        handR.quaternion.multiply(HAND_DELTA_Q.setFromEuler(HAND_DELTA_E));
+      }
+      const pickFinger = banjoFingerRRef.current;
+      const pickFingerRest = banjoFingerRRestQRef.current;
+      if (pickFinger && pickFingerRest && pickAmount > 0) {
+        HAND_DELTA_E.set(-pickCurl * 0.34 * pickAmount, 0, pickCurl * 0.12 * pickAmount, "XYZ");
+        pickFinger.quaternion.copy(pickFingerRest).multiply(HAND_DELTA_Q.setFromEuler(HAND_DELTA_E));
+      }
+      const fretFinger = banjoFingerLRef.current;
+      const fretFingerRest = banjoFingerLRestQRef.current;
+      if (fretFinger && fretFingerRest && fretAmount > 0) {
+        HAND_DELTA_E.set(-fretPress * 0.08 * fretAmount, 0, 0, "XYZ");
+        fretFinger.quaternion.copy(fretFingerRest).multiply(HAND_DELTA_Q.setFromEuler(HAND_DELTA_E));
+      }
+
     }
 
     // Rocking-chair bear full-body pose. Unlike the banjo arms above (which
@@ -7879,6 +8263,9 @@ function Animal({
     // local +Y; sx/sz just thicken it. Gated on the JSON's own `enabled` flag
     // so flipping it off in rockingChairBearPose.json (or from the lab) drops
     // straight back to whatever sit_log does natively, no code change needed.
+    // Rocking-chair bear keeps his feet planted: put the legs back to one
+    // frame of sit_log before any pose layer goes on (rockingChair.ts).
+    if (placement.rockingChairPose && legLockRef.current) applyLegLock(legLockRef.current);
     if (placement.rockingChairPose && ROCKING_CHAIR_BEAR_POSE.enabled) {
       const applyPart = (name: RockingChairBoneName) => {
         const b = chairBonesRef.current[name];
@@ -7892,63 +8279,92 @@ function Animal({
       };
       for (const name of ROCKING_CHAIR_BONE_NAMES) applyPart(name);
     }
+    // How he sits (recline / hunch / head), from the rocking-chair lab's
+    // "Posture" section - see rockingPosture.ts - swaying with the chair:
+    // leaning back as it tips back, hunching forward as it comes forward.
+    // Same clock as RockingChairRig, so he and the chair stay in step.
+    if (placement.rockingChairPose) {
+      const body = rockState(frameState.clock.elapsedTime, ROCKING_CHAIR_ROCK).body;
+      const p = rockPosture(ROCKING_CHAIR_POSTURE, body, ROCKING_CHAIR_ROCK, rockPostureRef.current);
+      applyRockingPosture(model, p, postureRef.current);
+    }
 
     // ---- talking ------------------------------------------------------------
-    // Research-backed rather than a loudness flap: three continuous mouth
-    // channels (open / wide / round) from the voice hook's spectral analysis,
-    // each eased with its own attack/release (jaw snaps open fast and closes a
-    // bit slower, lip SHAPE changes slower still - lips lag the jaw in real
-    // speech), a little per-syllable size variation so repeated syllables don't
-    // look stamped, syllable-onset nods on a damped spring, and blinks biased
-    // toward emphasis. Everything writes after the mixer, so sit_log keeps
+    // Mouth: three continuous channels (open / wide / round) from the shared
+    // lip-sync analyser (src/lib/bearLipSync.ts), each eased with its own
+    // attack/release - jaw snaps open and closes a bit slower, lip SHAPE lags
+    // the jaw - plus a little per-syllable size variation.
+    // Body (research notes in bearLipSync.ts): the head follows voice PITCH
+    // (visual prosody), nods and torso beats fire only on ACCENTED syllables
+    // with size scaled by prominence, the torso springs slower than the head
+    // so it overlaps rather than moving in lockstep, a breath swells the chest
+    // at phrase starts, and the listening bear answers accents with delayed
+    // "mm-hm" nods. Every amount is a bearTalk* knob in the lab ("Bear
+    // talking" group). All of it writes after the mixer, so sit_log keeps
     // playing underneath.
     const voice = bearVoiceRef?.current;
     const talk = talkRef.current;
     const face = faceMeshRef.current;
+    const k = configRef.current;
+    const knob = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
     const dtTalk = Math.min(delta, 0.1);
     talk.t += dtTalk;
     const isVoiceBear = placement.bearId === "back_left_log" || placement.bearId === "back_right_log";
     const speaking = Boolean(isVoiceBear && voice?.isRemoteSpeaking && placement.bearId === voice.activeBearId);
+    const listening = Boolean(isVoiceBear && voice?.isRemoteSpeaking && placement.bearId !== voice.activeBearId);
     const ease = (cur: number, target: number, up: number, down: number) =>
       cur + (target - cur) * (1 - Math.exp(-(target > cur ? up : down) * dtTalk));
 
-    // syllable onsets -> per-syllable gain, nod impulse, emphasis blink, ear flick
+    // every syllable: size variation + a tiny beat on the head
     const syl = voice?.syllable ?? 0;
     if (speaking && talk.lastSyllable >= 0 && syl !== talk.lastSyllable) {
       const strength = voice?.syllableStrength ?? 0.5;
       talk.gain = 0.82 + talkRng() * 0.3 + strength * 0.18;
-      talk.nodVel += 0.6 + strength * 0.8;           // +angle = chin down (FACE_RIGHT_LOCAL)
-      if (strength > 0.65 && talk.blinkT < 0 && talkRng() < 0.3) { talk.blinkT = 0; talk.doubleBlink = false; }
-      if (strength > 0.75 && talk.ear < 0.2) talk.ear = 1;
+      talk.nodVel += (0.15 + strength * 0.2) * knob(k.bearTalkBeat, 1);
     }
     talk.lastSyllable = syl; // also resyncs while silent so a stale count never fires a burst
 
-    // a phrase starting after a real pause swells the chest (the breath you
-    // take to speak), then settles
-    if (speaking && !talk.wasSpeaking && talk.silentFor > 0.5) talk.breath = 1;
+    // accented syllables only: the real nod, a torso beat, maybe a blink / ear
+    // flick - and a delayed backchannel nod from whoever is listening
+    const acc = voice?.accent ?? 0;
+    if (talk.lastAccent >= 0 && acc !== talk.lastAccent && voice?.isRemoteSpeaking) {
+      const a = voice.accentStrength ?? 0.5;
+      if (speaking) {
+        talk.nodVel += (0.55 + 1.3 * a) * knob(k.bearTalkNod, 1);
+        if (a > 0.5 && talk.blinkT < 0 && talkRng() < 0.35) { talk.blinkT = 0; talk.doubleBlink = false; }
+        if (a > 0.4 && talk.ear < 0.2) talk.ear = 1;
+      } else if (listening && talk.backchannelIn < 0 && talkRng() < 0.4) {
+        talk.backchannelIn = 0.35 + talkRng() * 0.35;
+      }
+    }
+    talk.lastAccent = acc;
+    if (talk.backchannelIn >= 0) {
+      talk.backchannelIn -= dtTalk;
+      if (talk.backchannelIn < 0) talk.listenVel += (0.3 + talkRng() * 0.2) * knob(k.bearTalkListener, 1);
+    }
+
     talk.silentFor = speaking ? 0 : talk.silentFor + dtTalk;
     talk.wasSpeaking = speaking;
-    talk.breath = Math.max(0, talk.breath - dtTalk / 0.7);
     talk.ear = Math.max(0, talk.ear - dtTalk / 0.28);
 
-    // the OTHER voice bear, while this one talks: slow acknowledging nods on
-    // a softer, slower spring (~0.9Hz) than the speaker's syllable nods
-    const listening = Boolean(isVoiceBear && voice?.isRemoteSpeaking && placement.bearId !== voice.activeBearId);
+    // listener: occasional slow nods of its own, on a softer ~0.9Hz spring
     if (listening) {
       talk.listenClock -= dtTalk;
       if (talk.listenClock <= 0) {
-        talk.listenVel += 0.28 + talkRng() * 0.22;
-        talk.listenClock = 2.2 + talkRng() * 3.4;
+        talk.listenVel += (0.2 + talkRng() * 0.18) * knob(k.bearTalkListener, 1);
+        talk.listenClock = 3 + talkRng() * 4;
       }
     } else {
       talk.listenClock = 1 + talkRng() * 1.5;
     }
-    talk.listenVel += (-talk.listen * 30 - talk.listenVel * 6) * dtTalk;
-    talk.listen += talk.listenVel * dtTalk;
 
     // mouth channels
     let rawOpen = 0, rawWide = 0, rawRound = 0;
-    if (speaking && voice) {
+    const fishReaction = fishReactionRef?.current;
+    if (isVoiceBear && (fishReaction?.phase === "fire" || fishReaction?.phase === "partner")) {
+      rawOpen = Math.max(0, knob(k.bearFishJawAmount, 1));
+      rawWide = 0.35;
+    } else if (speaking && voice) {
       if (voice.mouthOpen !== undefined) {
         rawOpen = voice.mouthOpen;
         rawWide = voice.mouthWide ?? 0;
@@ -7958,20 +8374,49 @@ function Animal({
         rawOpen = rms > 0.01 ? Math.min(1, (rms - 0.01) / 0.045) : 0;
       }
     }
-    talk.open = ease(talk.open, Math.min(1, rawOpen * talk.gain), 32, 15);
-    talk.wide = ease(talk.wide, rawWide, 12, 8);
-    talk.round = ease(talk.round, rawRound, 12, 8);
+    const openUp = knob(k.bearTalkOpenSpeed, 32), openDown = knob(k.bearTalkCloseSpeed, 15);
+    const shapeSpeed = knob(k.bearTalkShapeSpeed, 12);
+    // small deadzone: breath/noise-floor flicker shouldn't buzz the jaw
+    const openIn = rawOpen < 0.04 ? 0 : rawOpen;
+    // Two-pole (cascaded) smoothing: the analyser's wide/round jump by up to
+    // ~1.0 frame to frame on real speech, and a single exponential passes that
+    // straight through as a lip-corner shiver. Measured on recorded speech,
+    // the cascade cuts peak frame-to-frame acceleration ~2.5-3x on wide/round
+    // (~25% on the jaw) with the same peaks and the same syllable closures.
+    // Stage rates are 1.6x the knob so the overall speed still matches it.
+    const c2 = 1.6;
+    talk.openPre = ease(talk.openPre, Math.min(1, openIn * talk.gain * knob(k.bearTalkJawGain, 1)), openUp * c2, openDown * c2);
+    talk.open = ease(talk.open, talk.openPre, openUp * c2, openDown * c2);
+    talk.widePre = ease(talk.widePre, rawWide, shapeSpeed * c2, shapeSpeed * 0.66 * c2);
+    talk.wide = ease(talk.wide, talk.widePre, shapeSpeed * c2, shapeSpeed * 0.66 * c2);
+    talk.roundPre = ease(talk.roundPre, rawRound, shapeSpeed * c2, shapeSpeed * 0.66 * c2);
+    talk.round = ease(talk.round, talk.roundPre, shapeSpeed * c2, shapeSpeed * 0.66 * c2);
     talk.speak = ease(talk.speak, speaking ? 1 : 0, 4, 2);
 
-    // nod spring (integrated here, applied to the head in the social pass below)
-    talk.nodVel += (-talk.nod * 90 - talk.nodVel * 11) * dtTalk;
-    talk.nod += talk.nodVel * dtTalk;
+    // head: pitch-follow (higher voice -> chin up; research says F0 is what
+    // head motion tracks most), eased so it glides rather than jitters
+    const liftTarget = speaking
+      ? -Math.max(-0.5, Math.min(1, (voice?.pitch ?? 0) / 8)) * 0.07 * knob(k.bearTalkPitchHead, 1)
+      : 0;
+    talk.headLift = ease(talk.headLift, liftTarget, 7, 4);
+
+    const nodSpring = clampSpring(stepSpring({ value: talk.nod, velocity: talk.nodVel }, 0, 90, 11, dtTalk), -0.12, 0.22);
+    const listenSpring = clampSpring(stepSpring({ value: talk.listen, velocity: talk.listenVel }, 0, 30, 6, dtTalk), -0.08, 0.14);
+    talk.nod = nodSpring.value;
+    talk.nodVel = Math.max(-6, Math.min(6, nodSpring.velocity));
+    talk.listen = listenSpring.value;
+    talk.listenVel = Math.max(-4, Math.min(4, listenSpring.velocity));
+    talk.headLift = Number.isFinite(talk.headLift) ? Math.max(-0.1, Math.min(0.06, talk.headLift)) : 0;
+    talk.open = Number.isFinite(talk.open) ? Math.max(0, Math.min(1, talk.open)) : 0;
+    talk.wide = Number.isFinite(talk.wide) ? Math.max(0, Math.min(1, talk.wide)) : 0;
+    talk.round = Number.isFinite(talk.round) ? Math.max(0, Math.min(1, talk.round)) : 0;
 
     // blink: idle rhythm every ~2.5-7s (a touch faster while talking),
     // occasionally a double blink. 60ms close, 30ms hold, 90ms open.
     let blink = 0;
-    if (talk.blinkT < 0) {
-      talk.blinkClock -= dtTalk;
+    const blinkRate = Math.max(0, knob(k.bearBlinkRate, 1));
+    if (talk.blinkT < 0 && blinkRate > 0) {
+      talk.blinkClock -= dtTalk * blinkRate;
       if (talk.blinkClock <= 0) {
         talk.blinkT = 0;
         talk.doubleBlink = talkRng() < 0.15;
@@ -7988,17 +8433,79 @@ function Animal({
       }
     }
 
-    if (face) {
+    const rig = mouthRigRef.current;
+    if (rig) {
+      // Bone-driven mouth (rig research in scripts/add_bear_mouth_rig.py):
+      //  jaw        - hinge rotation about the head's right axis + a small
+      //               forward/down slide coupled to it (the condyle translates
+      //               as well as rotates when a real jaw opens)
+      //  lip_lower  - rides the jaw; held sealed up against the upper lip at
+      //               rest ("lip seal"), releasing as the jaw opens; pouts
+      //               forward for oo/w
+      //  lip_upper  - lifts a touch on open/ee vowels, pushes forward on oo
+      //  corners    - out/back/up for ee/s (wide), in/forward for oo (round);
+      //               they also follow ~50% of the jaw through their weights
+      const openShape = Math.min(1, talk.open * 1.5);
+      let wide = talk.wide * (0.35 + 0.65 * openShape) * knob(k.bearTalkWide, 1);
+      let round = talk.round * (0.45 + 0.55 * openShape) * knob(k.bearTalkRound, 1);
+      if (wide + round > 1) { const n = 1 / (wide + round); wide *= n; round *= n; }
+      wide = Math.min(1, wide); round = Math.min(1, round);
+      const lips = Math.max(0, knob(k.bearTalkLips, 1));
+      const sealStart = Math.max(0, Math.min(0.8, knob(k.bearMouthSealStart, 0.04)));
+      const sealEnd = Math.max(sealStart + 0.01, Math.min(1, knob(k.bearMouthSealEnd, 0.48)));
+      const sealT = Math.max(0, Math.min(1, (talk.open - sealStart) / (sealEnd - sealStart)));
+      const sealRelease = sealT * sealT * (3 - 2 * sealT);
+      const seal = Math.max(0, knob(k.bearMouthRestSeal, 1)) * (1 - sealRelease);
+      const jawAngle = Math.max(-0.03,
+        talk.open * 0.35 * knob(k.bearTalkJawMax, 0.9) * (1 - 0.25 * round) - 0.015 * seal);
+      const R = rig.restPos, Q = rig.restQ, b = rig.bones;
+      const q = mouthTmpQ, v = mouthTmpV;
+
+      b.jaw.quaternion.copy(Q.jaw).multiply(q.setFromAxisAngle(FACE_RIGHT_LOCAL, jawAngle));
+      b.jaw.position.copy(R.jaw)
+        .addScaledVector(FACE_FWD_LOCAL, 0.006 * talk.open)
+        .addScaledVector(FACE_UP_LOCAL, -0.003 * talk.open);
+
+      b.lip_lower.quaternion.copy(Q.lip_lower).multiply(q.setFromAxisAngle(FACE_RIGHT_LOCAL, -0.10 * seal - 0.05 * round * lips));
+      b.lip_lower.position.copy(R.lip_lower).addScaledVector(FACE_FWD_LOCAL, 0.012 * round * lips);
+
+      b.lip_upper.quaternion.copy(Q.lip_upper);
+      b.lip_upper.position.copy(R.lip_upper)
+        .addScaledVector(FACE_UP_LOCAL, (0.005 * talk.open + 0.003 * wide) * lips)
+        .addScaledVector(FACE_FWD_LOCAL, 0.013 * round * lips);
+
+      for (const side of [1, -1] as const) {
+        const cb = side > 0 ? b.lip_corner_L : b.lip_corner_R;
+        const rp = side > 0 ? R.lip_corner_L : R.lip_corner_R;
+        const rq = side > 0 ? Q.lip_corner_L : Q.lip_corner_R;
+        cb.quaternion.copy(rq);
+        cb.position.copy(rp)
+          .addScaledVector(v.copy(FACE_RIGHT_LOCAL), side * (0.026 * wide - 0.028 * round) * lips)
+          .addScaledVector(FACE_UP_LOCAL, 0.006 * wide * lips)
+          .addScaledVector(FACE_FWD_LOCAL, (-0.012 * wide + 0.015 * round) * lips);
+      }
+      if (face) {
+        // Bones provide the primary motion; the authored shapes restore soft
+        // muzzle volume and lip contours that a rigid jaw cannot provide alone.
+        const corrective = knob(k.bearTalkJawCorrective, 0.2);
+        const shapeCorrective = knob(k.bearTalkShapeCorrective, 0.35);
+        const openShape = Math.min(1, talk.open * 1.5);
+        face.influences[face.jaw] = Math.min(1, openShape * knob(k.bearTalkJawMax, 0.9) * corrective);
+        if (face.wide >= 0) face.influences[face.wide] = Math.min(1, wide * shapeCorrective);
+        if (face.round >= 0) face.influences[face.round] = Math.min(1, round * shapeCorrective);
+        if (face.blink >= 0) face.influences[face.blink] = blink;
+      }
+    } else if (face) {
       const inf = face.influences;
       const openShape = Math.min(1, talk.open * 1.5);
-      let wide = talk.wide * (0.35 + 0.65 * openShape);
-      let round = talk.round * (0.45 + 0.55 * openShape);
-      if (wide + round > 1) { const k = 1 / (wide + round); wide *= k; round *= k; }
-      // Speech never uses the full roar: 0.9 of the authored jaw, and a pucker
-      // pulls the jaw in a little (lips round over a narrower opening).
-      inf[face.jaw] = talk.open * 0.9 * (1 - 0.25 * round);
-      if (face.wide >= 0) inf[face.wide] = wide;
-      if (face.round >= 0) inf[face.round] = round;
+      let wide = talk.wide * (0.35 + 0.65 * openShape) * knob(k.bearTalkWide, 1);
+      let round = talk.round * (0.45 + 0.55 * openShape) * knob(k.bearTalkRound, 1);
+      if (wide + round > 1) { const n = 1 / (wide + round); wide *= n; round *= n; }
+      // jawMax caps the authored jawOpen shape (1 = the full Blender roar);
+      // a pucker pulls the jaw in a little (lips round over a narrower opening).
+      inf[face.jaw] = Math.min(1, talk.open * knob(k.bearTalkJawMax, 0.9) * (1 - 0.25 * round));
+      if (face.wide >= 0) inf[face.wide] = Math.min(1, wide);
+      if (face.round >= 0) inf[face.round] = Math.min(1, round);
       if (face.blink >= 0) inf[face.blink] = blink;
     } else {
       // Fallback for a GLB without the face morphs: the old jaw-bone tilt,
@@ -8008,7 +8515,7 @@ function Animal({
       if (mouth) {
         mouthEnvelopeRef.current = talk.open;
         mouthMixerQRef.current.copy(mouth.quaternion);
-        mouthJawQRef.current.setFromAxisAngle(FACE_RIGHT_LOCAL, mouthEnvelopeRef.current * 0.35);
+        mouthJawQRef.current.setFromAxisAngle(FACE_RIGHT_LOCAL, mouthEnvelopeRef.current * 0.35 * knob(k.bearTalkJawMax, 0.9) / 0.9);
         mouth.quaternion.copy(mouthMixerQRef.current).multiply(mouthJawQRef.current);
       }
     }
@@ -8033,19 +8540,132 @@ function Animal({
     const g = glance.current;
     const voice = bearVoiceRef?.current;
     const isVoiceBear = placement.bearId === "back_left_log" || placement.bearId === "back_right_log";
-    const remoteConversation = Boolean(voice?.isRemoteSpeaking && isVoiceBear);
-    const isActiveSpeaker = remoteConversation && placement.bearId === voice?.activeBearId;
-    const activeBearHead = remoteConversation && !isActiveSpeaker
-      ? [...reg.values()].find((candidate) => candidate.bearId === voice?.activeBearId)?.position
-      : undefined;
+    let tgt: THREE.Vector3 | undefined;
+    let targetWeight = 0;
 
-    if (remoteConversation) {
-      // Voice bears own their conversational pose while the mixed remote segment
-      // is active; resume the ordinary social glance state once it ends.
-      g.phase = "wait";
-      g.t = 0;
-      g.w = 0;
-      g.target = "";
+    const fishReaction = fishReactionRef?.current;
+    const reactingToFish = isVoiceBear && fishReaction && fishReaction.phase !== "idle";
+    if (reactingToFish) {
+      // The fish gag, in order: eyes follow the fish through the air, snap to
+      // the fire where it lands, the jaws drop, they turn and stare at EACH
+      // OTHER, then look back at you. Every target is a real world position
+      // (the fish, the impact point, the other bear's head, the camera); the
+      // lab's X/Y/Z knobs only nudge the first two.
+      g.phase = "wait"; g.t = 0; g.w = 0; g.target = "";
+      const kc0 = configRef.current;
+      const kn0 = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
+      const me = placement.bearId;
+      const other = me === "back_left_log" ? "back_right_log" : "back_left_log";
+      const otherHead = [...reg.values()].find((entry) => entry.bearId === other)?.position;
+      let desired: THREE.Vector3;
+      if (fishReaction.phase === "partner" && otherHead) {
+        desired = otherHead;
+      } else if (fishReaction.phase === "return") {
+        desired = tmpV2.copy(state.camera.position);
+        desired.y += kn0(kc0.bearLookUserYOffset, -0.2);
+      } else if (fishReaction.phase === "flying") {
+        // each bear has its own nudge - they sit on opposite sides of the fire
+        desired = tmpV2.copy(fishReaction.target).add(me === "back_right_log"
+          ? fishLookEnd.set(kn0(kc0.bearFishFlightLookRX, 0), kn0(kc0.bearFishFlightLookRY, 0), kn0(kc0.bearFishFlightLookRZ, 0))
+          : fishLookEnd.set(kn0(kc0.bearFishFlightLookX, 0), kn0(kc0.bearFishFlightLookY, 0), kn0(kc0.bearFishFlightLookZ, 0)));
+      } else {
+        // impact-delay and fire: the spot it went in
+        desired = tmpV2.copy(fishReaction.target).add(me === "back_right_log"
+          ? fishLookEnd.set(kn0(kc0.bearFishFireLookRX, 0), kn0(kc0.bearFishFireLookRY, -0.2), kn0(kc0.bearFishFireLookRZ, 0))
+          : fishLookEnd.set(kn0(kc0.bearFishFireLookX, 0), kn0(kc0.bearFishFireLookY, -0.2), kn0(kc0.bearFishFireLookZ, 0)));
+      }
+      if (!lookRef.current.init) {
+        lookRef.current.target.copy(desired);
+        lookRef.current.init = true;
+      }
+      // The gaze POINT glides (so heads turn instead of snapping); the head
+      // then aims fully at that point every frame. The old code instead eased
+      // the head itself by ~2% a frame - but the clip rewrites the head every
+      // frame, so that never added up and they barely moved.
+      const turn = Math.max(0.03, fishReaction.phase === "flying"
+        ? kn0(kc0.bearFishFlightTurnTime, 0.12)
+        : kn0(kc0.bearFishFireTurnTime, 0.3));
+      lookRef.current.target.lerp(desired, 1 - Math.exp(-dt / turn));
+      tgt = lookRef.current.target;
+      targetWeight = 1;
+    } else if (isVoiceBear) {
+      // Scripted conversational gaze for the two voice bears (replaces their
+      // random social glances):
+      //   Smokey (back_left_log): faces the user; looks over at Maple while
+      //     Maple is talking.
+      //   Maple (back_right_log): looks at Smokey while Smokey talks AND while
+      //     replying; faces the user the rest of the time.
+      // A conversational look is held ~1.2s through the short gaps between
+      // sentences so heads don't ping-pong on every pause, and the target
+      // point itself glides (bearLookTurnTime) so the head turns rather than
+      // snaps.
+      g.phase = "wait"; g.t = 0; g.w = 0; g.target = "";
+      const kc0 = configRef.current;
+      const me = placement.bearId;
+      const other = me === "back_left_log" ? "back_right_log" : "back_left_log";
+      const speakerId = voice?.isRemoteSpeaking ? voice.activeBearId : null;
+      const look = lookRef.current;
+      const partnerDelay = Math.max(0, Number.isFinite(kc0.bearLookPartnerDelay) ? kc0.bearLookPartnerDelay : 0.08);
+      let wantOther: boolean;
+      let wantFish = false;
+      if (speakerId) {
+        const wantsOther = speakerId === other || (speakerId === me && me === "back_right_log");
+        if (wantsOther && !look.partnerRequested) {
+          look.partnerRequested = true;
+          look.otherDelay = partnerDelay;
+        }
+        if (!wantsOther) {
+          look.partnerRequested = false;
+          look.otherDelay = 0;
+        }
+        if (look.otherDelay > 0) {
+          look.otherDelay = Math.max(0, look.otherDelay - dt);
+          wantOther = false;
+        } else {
+          wantOther = wantsOther;
+        }
+        look.hold = wantOther ? 1.2 : 0;
+        look.fishHold = 0;
+      } else if (look.hold > 0) {
+        look.hold -= dt;
+        wantOther = look.wantOther;
+        wantFish = look.wantFish;
+      } else {
+        look.partnerRequested = false;
+        look.otherDelay = 0;
+        wantOther = false;
+        if (me === "back_right_log") {
+          look.fishCooldown -= dt;
+          if (look.fishHold <= 0 && look.fishCooldown <= 0) {
+            look.fishHold = Math.max(0.2, Number.isFinite(kc0.bearFishIdleLookTime) ? kc0.bearFishIdleLookTime : 2);
+            look.fishCooldown = Math.max(1, Number.isFinite(kc0.bearFishIdleInterval) ? kc0.bearFishIdleInterval : 6);
+          }
+          if (look.fishHold > 0) {
+            look.fishHold -= dt;
+            wantFish = true;
+          }
+        }
+      }
+      look.wantOther = wantOther;
+      look.wantFish = wantFish;
+      const otherHead = wantOther
+        ? [...reg.values()].find((c) => c.bearId === other)?.position
+        : undefined;
+      const fishPosition = wantFish ? reg.get(name)?.fishPosition : undefined;
+      const desired = otherHead
+        ?? (fishPosition
+          ? tmpV2.copy(fishPosition).setY(
+            fishPosition.y + (Number.isFinite(kc0.bearFishIdleGazeYOffset) ? kc0.bearFishIdleGazeYOffset : -1.2),
+          )
+          : tmpV2.copy(state.camera.position));
+      if (!otherHead && !fishPosition) {
+        desired.y += Number.isFinite(kc0.bearLookUserYOffset) ? kc0.bearLookUserYOffset : -0.2;
+      }
+      if (!look.init) { look.target.copy(desired); look.init = true; }
+      const turn = Math.max(0.05, Number.isFinite(kc0.bearLookTurnTime) ? kc0.bearLookTurnTime : 0.35);
+      look.target.lerp(desired, 1 - Math.exp(-dt / turn));
+      tgt = look.target;
+      targetWeight = Math.max(0, Math.min(1, Number.isFinite(kc0.bearLookAmount) ? kc0.bearLookAmount : 0.85));
     } else {
       g.t += dt;
       if (g.phase === "wait" && g.t >= g.next) {
@@ -8063,17 +8683,16 @@ function Animal({
       else if (g.phase === "back" && g.t >= 1.1) {
         g.phase = "wait"; g.t = 0; g.next = 4 + rng() * 6; g.target = "";
       }
+      const smooth = (u: number) => u * u * (3 - 2 * u);
+      const want =
+        g.phase === "turn" ? smooth(Math.min(g.t / 0.85, 1)) :
+        g.phase === "hold" ? 1 :
+        g.phase === "back" ? 1 - smooth(Math.min(g.t / 1.1, 1)) : 0;
+      g.w += (want - g.w) * Math.min(1, dt * 8);
+      tgt = g.target ? reg.get(g.target)?.position : undefined;
+      targetWeight = g.w;
     }
 
-    const smooth = (u: number) => u * u * (3 - 2 * u);
-    const want =
-      g.phase === "turn" ? smooth(Math.min(g.t / 0.85, 1)) :
-      g.phase === "hold" ? 1 :
-      g.phase === "back" ? 1 - smooth(Math.min(g.t / 1.1, 1)) : 0;
-    g.w += (want - g.w) * Math.min(1, dt * 8);
-
-    const tgt = activeBearHead ?? (g.target ? reg.get(g.target)?.position : undefined);
-    const targetWeight = activeBearHead ? 0.16 : g.w;
     if (tgt && targetWeight > 0.001) {
       // Rotate the face-forward vector onto the target, done in the head's PARENT
       // space so it is independent of however the clip has posed the head.
@@ -8089,39 +8708,54 @@ function Animal({
 
         const cur = tmpV.copy(FACE_FWD_LOCAL).applyQuaternion(head.quaternion);
         const ang = cur.angleTo(tmpV2);
-        if (ang > MAX_GLANCE) {
+        // the fish gag gets a wider neck - they have to see each other
+        const maxTurn = reactingToFish
+          ? THREE.MathUtils.degToRad(Number.isFinite(configRef.current.bearFishMaxTurn) ? configRef.current.bearFishMaxTurn : 80)
+          : MAX_GLANCE;
+        if (ang > maxTurn) {
           // too far round to be plausible - only go as far as the neck allows
-          tmpV2.copy(cur).lerp(tmpV2, MAX_GLANCE / ang).normalize();
+          tmpV2.copy(cur).lerp(tmpV2, maxTurn / ang).normalize();
         }
         tmpQ2.setFromUnitVectors(cur, tmpV2).multiply(head.quaternion);
         head.quaternion.slerp(tmpQ2, targetWeight);
       }
     }
-    // Talking head motion, additive on top of the mixer + glance: the
-    // syllable-driven nod spring (integrated in the mouth pass above) plus a
-    // slow, never-repeating yaw/roll drift while speaking - incommensurate
-    // sine frequencies so it never settles into a visible loop the way the
-    // old single 2.4rad/s wobble did.
+    // Talking head and facial motion layer. Torso motion is intentionally disabled
+    // until the rig has a dedicated upper-body control bone.
     const talk = talkRef.current;
-    if (talk.speak > 0.001 || Math.abs(talk.nod) > 1e-4 || Math.abs(talk.listen) > 1e-4) {
-      const tt = talk.t;
-      const sway = talk.speak;
-      tmpQ.setFromAxisAngle(FACE_RIGHT_LOCAL, talk.nod + talk.listen + sway * 0.012 * Math.sin(tt * 1.7 + 0.4));
+    const speaking = Boolean(isVoiceBear && voice?.isRemoteSpeaking && placement.bearId === voice.activeBearId);
+    const listening = Boolean(isVoiceBear && voice?.isRemoteSpeaking && placement.bearId !== voice.activeBearId);
+    const kc = configRef.current;
+    const kn = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
+    const tt = talk.t;
+    const sway = talk.speak * kn(kc.bearTalkSway, 1);
+
+    // Head: accent nods + tiny syllable beats (nod spring), pitch-follow lift,
+    // listener nods, and a slow never-repeating drift while speaking
+    // (incommensurate sines, so it never settles into a visible loop).
+    if (talk.speak > 0.001 || Math.abs(talk.nod) > 1e-4 || Math.abs(talk.listen) > 1e-4 || Math.abs(talk.headLift) > 1e-4) {
+      tmpQ.setFromAxisAngle(FACE_RIGHT_LOCAL, talk.nod + talk.listen + talk.headLift + sway * 0.012 * Math.sin(tt * 1.7 + 0.4));
       head.quaternion.multiply(tmpQ);
       tmpQ.setFromAxisAngle(FACE_UP_LOCAL, sway * (0.045 * Math.sin(tt * 0.83 + seed) + 0.02 * Math.sin(tt * 2.21)));
       head.quaternion.multiply(tmpQ);
       tmpQ.setFromAxisAngle(FACE_FWD_LOCAL, sway * 0.025 * Math.sin(tt * 1.31 + 1.1));
       head.quaternion.multiply(tmpQ);
     }
-    // breath: a quick 0 -> 1 -> 0 swell of the chest after a phrase starts
-    const chest = chestRef.current;
-    if (chest && talk.breath > 0) {
-      chest.scale.multiplyScalar(1 + 0.04 * Math.sin(Math.PI * (1 - talk.breath)));
+
+    // Quiet voice bears keep a small amount of life between lines without
+    // changing the authored hands, prop, or torso pose.
+    if (isVoiceBear && !speaking && !listening) {
+      tmpQ.setFromAxisAngle(FACE_RIGHT_LOCAL, 0.012 * Math.sin(tt * 0.47 + seed));
+      head.quaternion.multiply(tmpQ);
+      tmpQ.setFromAxisAngle(FACE_UP_LOCAL, 0.014 * Math.sin(tt * 0.31 + seed * 1.7));
+      head.quaternion.multiply(tmpQ);
     }
-    // ear flick on stressed syllables - direction doesn't matter much for a
-    // twitch, so both ears tip the same way about their own local X
-    if (talk.ear > 0) {
-      const flick = 0.22 * Math.sin(Math.PI * (1 - talk.ear));
+
+    // Ear flick on accents - direction doesn't matter much for a twitch, so
+    // both ears tip the same way about their own local X.
+    const earAmt = kn(kc.bearTalkEars, 1);
+    if (talk.ear > 0 && earAmt > 0) {
+      const flick = 0.22 * earAmt * Math.sin(Math.PI * (1 - talk.ear));
       tmpQ.setFromAxisAngle(FACE_RIGHT_LOCAL, flick);
       earLRef.current?.quaternion.multiply(tmpQ);
       earRRef.current?.quaternion.multiply(tmpQ);
@@ -8150,6 +8784,8 @@ function Animal({
           prop={mergeBearPoseProp(placement.prop, placement.bearId ? BEAR_POSES[placement.bearId]?.prop : undefined)}
           ready={model}
           config={config}
+          heads={heads}
+          name={name}
         />
       ) : null}
       {placement.handheld ? (
@@ -8352,13 +8988,21 @@ function FloppingFish({
   config,
   onClickSound,
   onImpactSound,
+  onLaunch,
+  onImpact,
   onSelect,
+  replayOnTune = false,
 }: {
   config: CampfireSceneConfig;
   onClickSound?: () => void;
   /** Fired the instant the throw lands - the fish "hits" the fire. */
   onImpactSound?: () => void;
+  onLaunch?: (target: THREE.Vector3, progress: number) => void;
+  onImpact?: (target: THREE.Vector3) => void;
   onSelect?: (name: string) => void;
+  /** Lab only: re-throw the fish whenever its settings change, so tuning
+   *  can be watched. On the site the fish flies ONLY when clicked. */
+  replayOnTune?: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const gltf = useGLTF(FISH_URL) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
@@ -8422,8 +9066,35 @@ function FloppingFish({
         return a.lengthSq() < 1e-8 ? new THREE.Vector3(1, 0, 0) : a.normalize();
       })(),
     };
+    onLaunch?.(g.getWorldPosition(new THREE.Vector3()), 0);
     setPhase("flying");
-  }, [fireTarget]);
+  }, [fireTarget, onLaunch]);
+
+  const fishReplayKey = [
+    config.fishX, config.fishY, config.fishZ,
+    config.fishLaunchDuration, config.fishLaunchArc, config.fishLaunchSpin,
+    config.fishLaunchTargetY, config.fishLaunchFlail, config.fishLaunchOn,
+    config.bearFishFlightLookX, config.bearFishFlightLookY, config.bearFishFlightLookZ,
+    config.bearFishFireLookX, config.bearFishFireLookY, config.bearFishFireLookZ,
+    config.bearFishFlightTurnTime, config.bearFishFireTurnTime, config.bearFishMaxTurn,
+    config.bearFishImpactDelay, config.bearFishFireLookTime, config.bearFishMouthHoldTime,
+    config.bearFishReturnTime, config.bearFishJawAmount,
+    config.bearFishFlightLookRX, config.bearFishFlightLookRY, config.bearFishFlightLookRZ,
+    config.bearFishFireLookRX, config.bearFishFireLookRY, config.bearFishFireLookRZ,
+  ].join(":");
+  // Compared against the last key rather than a "skip the first run" flag:
+  // React dev mode runs every effect twice on mount, so the flag was already
+  // set by the second run and the fish flew the moment the page loaded.
+  const lastFishReplayKey = useRef(fishReplayKey);
+  useEffect(() => {
+    if (lastFishReplayKey.current === fishReplayKey) return;
+    lastFishReplayKey.current = fishReplayKey;
+    if (!replayOnTune) return;
+    if (config.fishLaunchOn < 0.5) return;
+    setPhase("idle");
+    const frame = requestAnimationFrame(launch);
+    return () => cancelAnimationFrame(frame);
+  }, [fishReplayKey, replayOnTune, config.fishLaunchOn, launch]);
 
   // Respawn is opt-in: fishRespawnDelay 0 means the fish is gone for the rest
   // of the visit, which is the point of the gag.
@@ -8536,6 +9207,8 @@ function FloppingFish({
 
   // Reusable scratch quaternion so we don't allocate 4 per frame.
   const scratchQ = useMemo(() => new THREE.Quaternion(), []);
+  // The fish's WORLD position, handed to the bears every frame of the throw.
+  const fishWorld = useMemo(() => new THREE.Vector3(), []);
 
   /** Seconds the fish takes to slump flat once a flop burst ends. */
   const FISH_SETTLE_TIME = 0.45;
@@ -8594,6 +9267,9 @@ function FloppingFish({
         // replacing it, so it starts from exactly the pose it was lying in.
         scratchQ.setFromAxisAngle(f.spinAxis, u * Math.PI * 2 * config.fishLaunchSpin);
         g.quaternion.setFromEuler(f.rot).premultiply(scratchQ);
+        // world position, so the bears (in another part of the tree) can
+        // look straight at it
+        onLaunch?.(g.getWorldPosition(fishWorld), u);
       }
 
       // Thrash for real on the way in.
@@ -8606,6 +9282,7 @@ function FloppingFish({
         flight.current = null;
         burstRef.current?.fire();
         onImpactSound?.();
+        onImpact?.(g?.parent ? g.parent.localToWorld(fishWorld.copy(f.to)) : f.to);
         setPhase("gone");
       }
       return;
@@ -8768,6 +9445,9 @@ function CampfireAnimals({
   onSelect,
   bearVoiceRef,
   banjoPanRef,
+  banjoGainRef,
+  banjoTimeRef,
+  fishReactionRef,
 }: {
   config: CampfireSceneConfig;
   onSelect: (name: string) => void;
@@ -8776,6 +9456,11 @@ function CampfireAnimals({
    *  bear's live head position relative to the camera - read by the outer
    *  CampfireScene's banjo useCampsiteAudioLoop call via the same ref. */
   banjoPanRef?: React.MutableRefObject<number>;
+  /** Loudness multiplier for the banjo from how close the camera is to him
+   *  (1 = at scene 1's normal shot). Written here, read by the audio loop. */
+  banjoGainRef?: React.MutableRefObject<number>;
+  banjoTimeRef?: React.MutableRefObject<number>;
+  fishReactionRef?: MutableRefObject<FishReaction>;
 }) {
   // Live head positions, written and read by the bears each frame, so they can find
   // each other wherever the config sliders have put them.
@@ -8793,7 +9478,9 @@ function CampfireAnimals({
   // snapping to center.
   const panToBearVec = useRef(new THREE.Vector3());
   const panRightVec = useRef(new THREE.Vector3());
-  useFrame(({ camera }) => {
+  const shotPos = useRef(new THREE.Vector3());
+  const shotTgt = useRef(new THREE.Vector3());
+  useFrame(({ camera }, delta) => {
     if (!banjoPanRef) return;
     let bearPos: THREE.Vector3 | null = null;
     for (const entry of heads.current.values()) {
@@ -8806,6 +9493,21 @@ function CampfireAnimals({
     const right = panRightVec.current.set(1, 0, 0).applyQuaternion(camera.quaternion);
     const pan = toBear.dot(right) / dist;
     banjoPanRef.current = Math.max(-1, Math.min(1, pan));
+
+    // Loudness by distance: sound falls off as 1/distance (rolloff 1), so it
+    // is measured against scene 1's own saved shot - there the banjo plays at
+    // exactly the Banjo volume knob, it swells as the camera flies in from
+    // the title / another scene, and gets louder still if you push in closer
+    // (up to banjoMaxBoost). Smoothed so a camera cut does not click.
+    if (banjoGainRef) {
+      locationCamera(LOCATION_CAMPFIRE, config, shotPos.current, shotTgt.current);
+      const refDist = Math.max(0.5, shotPos.current.distanceTo(bearPos));
+      const rolloff = Number.isFinite(config.banjoDistanceRolloff) ? Math.max(0, config.banjoDistanceRolloff) : 1;
+      const maxBoost = Number.isFinite(config.banjoMaxBoost) ? Math.max(1, config.banjoMaxBoost) : 1.8;
+      const want = Math.min(maxBoost, Math.pow(refDist / Math.max(0.05, dist), rolloff));
+      const k = 1 - Math.exp(-Math.min(delta, 0.1) / 0.15);
+      banjoGainRef.current += (want - banjoGainRef.current) * k;
+    }
   });
 
   // Cache-bust versions for the baked pose GLBs. Poll /api/dev/bake-bear-pose
@@ -8867,6 +9569,8 @@ function CampfireAnimals({
             onSelect={onSelect}
             heads={heads}
             bearVoiceRef={bearVoiceRef}
+            fishReactionRef={fishReactionRef}
+            banjoTimeRef={banjoTimeRef}
             seed={i}
           />
         );
@@ -9194,7 +9898,34 @@ function DeskCampfire({ config }: { config: CampfireSceneConfig }) {
  * keeps `desk*`: renaming them would orphan saved values.
  */
 
-function CabinSector({ config, onSelect }: { config: CampfireSceneConfig; onSelect: (n: string) => void }) {
+/** The OnlyBears gag's lab knobs, out of the scene config. */
+function onlyBearsTune(c: CampfireSceneConfig): OnlyBearsTune {
+  return {
+    speed: c.onlyBearsSpeed,
+    pawScale: c.onlyBearsPawScale,
+    scale: c.onlyBearsScale,
+    x: c.onlyBearsX,
+    y: c.onlyBearsY,
+    z: c.onlyBearsZ,
+    lean: c.onlyBearsLean,
+    look: c.onlyBearsLook,
+    breath: c.onlyBearsBreath,
+  };
+}
+
+function CabinSector({ config, onSelect, pc, onlyBears }: {
+  config: CampfireSceneConfig;
+  onSelect: (n: string) => void;
+  /** The cabin computer's desktop. Unset = a plain lit monitor. */
+  pc?: PcGlassProps;
+  /** The OnlyBears gag bear, mounted behind the computer while it plays. */
+  onlyBears?: {
+    mounted: boolean;
+    stateRef: React.MutableRefObject<OnlyBearsState>;
+    onPawLand: () => void;
+    onGone: () => void;
+  };
+}) {
   // Top surface of the code-built Table is at y ≈ 0.62. GLB props that live on
   // the table start there; drag/scale in the lab.
   const TABLE_TOP_Y = 0.62;
@@ -9320,10 +10051,25 @@ function CabinSector({ config, onSelect }: { config: CampfireSceneConfig; onSele
       </Selectable>
       {/* On-table props. Base positions place them on the top surface of the
           code-built table (y = 0.62) around the bear's writing spot. */}
-      <Selectable name="old_bear_computer" onSelect={onSelect} config={config} basePosition={[0.35, TABLE_TOP_Y, -0.15]} baseRotationY={Math.PI}>
+      <Selectable name="old_bear_computer" onSelect={onSelect} config={config} basePosition={[0.35, TABLE_TOP_Y, -0.15]} baseRotationY={Math.PI} interactive={!!pc?.hot}>
         <SafeAsset label="old-bear computer">
-          <LitComputer config={config} />
+          <LitComputer config={config} pc={pc} />
         </SafeAsset>
+        {/* The OnlyBears bear stands behind the monitor - in the computer's
+            own frame, so he follows it wherever it is dragged - and only
+            exists while the gag is playing. */}
+        {onlyBears?.mounted ? (
+          <SafeAsset label="onlybears bear">
+            <OnlyBearsBear
+              url={BEAR_OLD_URL}
+              tune={onlyBearsTune(config)}
+              look={oldBearLookFromConfig(config as unknown as Record<string, unknown>)}
+              stateRef={onlyBears.stateRef}
+              onPawLand={onlyBears.onPawLand}
+              onGone={onlyBears.onGone}
+            />
+          </SafeAsset>
+        ) : null}
         {/* Screen glow: bluish spill from the monitor face. Spot-light so
             it only shines out the FRONT of the screen (a pointLight was
             lighting the back of the case too). Target sits 1 unit further
@@ -9332,15 +10078,25 @@ function CabinSector({ config, onSelect }: { config: CampfireSceneConfig; onSele
             pointing into the case instead, flip the Z offset in the light
             position slider. Angle is wide (~80 deg) with strong penumbra so
             it reads as diffuse screen wash, not a torch. */}
+        {/* every knob lives in the lab's "3 · Cabin — computer screen light" group */}
         <spotLight
+          visible={(config.deskComputerLightOn ?? 1) >= 0.5}
           position={[config.deskComputerLightX, config.deskComputerLightY, config.deskComputerLightZ]}
-          target-position={[config.deskComputerLightX, config.deskComputerLightY, config.deskComputerLightZ + 1]}
+          target-position={[
+            config.deskComputerLightX,
+            config.deskComputerLightY + (Number.isFinite(config.deskComputerAimY) ? config.deskComputerAimY : 0),
+            config.deskComputerLightZ + 1,
+          ]}
           color={new THREE.Color(config.deskComputerColorR, config.deskComputerColorG, config.deskComputerColorB)}
           intensity={config.deskComputerIntensity}
           distance={config.deskComputerDistance}
-          angle={1.35}
-          penumbra={0.7}
+          angle={THREE.MathUtils.degToRad(Math.max(1, Math.min(89, Number.isFinite(config.deskComputerAngle) ? config.deskComputerAngle : 77)))}
+          penumbra={Math.max(0, Math.min(1, Number.isFinite(config.deskComputerPenumbra) ? config.deskComputerPenumbra : 0.7))}
           decay={2}
+          castShadow={(config.deskComputerShadow ?? 0) >= 0.5}
+          shadow-mapSize-width={512}
+          shadow-mapSize-height={512}
+          shadow-bias={-0.0005}
         />
       </Selectable>
       <Selectable name="old_bear_books" onSelect={onSelect} config={config} basePosition={[-0.15, TABLE_TOP_Y, -0.25]} baseRotationY={0.3}>
@@ -9401,15 +10157,17 @@ function CabinSector({ config, onSelect }: { config: CampfireSceneConfig; onSele
         {/* GLB's bbox is roughly a symmetric -1..1 cube (centered pivot), so
             +1 on Y is a guess at lifting its base onto the floor rather than
             burying half of it - first thing to check/fix from the lab. */}
-        <SafeAsset label="rocking chair">
-          <GLBModel url={ROCKING_CHAIR_URL} />
-        </SafeAsset>
-        <Animal
-          name="bear_rocking_chair"
-          placement={ROCKING_CHAIR_BEAR}
-          config={config}
-          onSelect={onSelect}
-        />
+        <RockingChairRig>
+          <SafeAsset label="rocking chair">
+            <GLBModel url={ROCKING_CHAIR_URL} />
+          </SafeAsset>
+          <Animal
+            name="bear_rocking_chair"
+            placement={ROCKING_CHAIR_BEAR}
+            config={config}
+            onSelect={onSelect}
+          />
+        </RockingChairRig>
       </Selectable>
       </group>
     </group>
@@ -10472,7 +11230,13 @@ const LOCATION_CAMPFIRE = 0;
 const LOCATION_ARCADE = 1;
 const LOCATION_CABIN = 2;
 /** The extra plate the focused screen grows. Selecting it lets the camera go. */
-const CRT_BACK_ITEM = { label: "Back", lines: ["Leave the screen"] };
+const CRT_BACK_ITEM: CrtMenu["items"][number] = {
+  label: "Back",
+  lines: ["Leave the screen"],
+  subtitle: "Back to the Campfire",
+  icon: "back",
+  caption: "Exit",
+};
 
 function CampfireWorld({
   config,
@@ -10497,9 +11261,13 @@ function CampfireWorld({
   onCrtFocusChange,
   crtZoomRef,
   banjoPanRef,
+  banjoGainRef,
+  banjoTimeRef,
   cameraSnapSignal,
+  onlyBearsPlaySignal,
   cameraLivePoseRef,
   bearVoiceRef,
+  onFishImpact,
 }: {
   config: CampfireSceneConfig;
   onCameraChange: (pos: [number, number, number], tgt: [number, number, number]) => void;
@@ -10516,6 +11284,8 @@ function CampfireWorld({
   /** Increment to imperatively snap the camera back to config.cameraX/Y/Z +
    *  targetX/Y/Z. Used by the "Reset camera" button in the lab. */
   cameraSnapSignal?: number;
+  /** Lab: play the OnlyBears gag in place (or send him away). */
+  onlyBearsPlaySignal?: number;
   /** while true, freeze IntroFlight at its pulled-back start pose */
   titleHeld?: boolean;
   onFishClickSound?: () => void;
@@ -10547,11 +11317,15 @@ function CampfireWorld({
    *  live position relative to the camera - read outside the canvas to pan
    *  the banjo loop. */
   banjoPanRef?: React.MutableRefObject<number>;
+  /** Banjo loudness from camera distance - see CampfireAnimals. */
+  banjoGainRef?: React.MutableRefObject<number>;
+  banjoTimeRef?: React.MutableRefObject<number>;
   cameraLivePoseRef?: React.MutableRefObject<
     { pos: [number, number, number]; tgt: [number, number, number] } | null
   >;
   /** Live remote-audio state for the two scene-one bears. */
   bearVoiceRef?: BearVoiceStateRef;
+  onFishImpact?: () => void;
 }) {
   /*
    * Clicking the fire throws embers up out of it.
@@ -10568,6 +11342,54 @@ function CampfireWorld({
    * this is purely additive, so the lab can still drag the fire around.
    */
   const fireBurstRef = useRef<EmberBurstHandle>(null);
+  const playLeftBagFall = useCampsiteOneShot(LEFT_BAG_FALL_URL);
+  const playRightBagFall = useCampsiteOneShot(RIGHT_BAG_FALL_URL);
+  const playFishingRodFall = useCampsiteOneShot(FISHING_ROD_FALL_URL);
+  const tipSoundVolume = clampUnit(config.masterVolume) * clampUnit(config.clickVolume);
+  const handleLeftBagContact = useCallback(() => playLeftBagFall(tipSoundVolume), [playLeftBagFall, tipSoundVolume]);
+  const handleRightBagContact = useCallback(() => {
+    setRodPlay((n) => n + 1);
+  }, []);
+  const handleRightBagLand = useCallback(() => playRightBagFall(tipSoundVolume), [playRightBagFall, tipSoundVolume]);
+  const handleRodContact = useCallback(() => playFishingRodFall(tipSoundVolume), [playFishingRodFall, tipSoundVolume]);
+  const fishReactionRef = useRef<FishReaction>({ phase: "idle", target: new THREE.Vector3(), phaseStartedAt: 0, flightProgress: 0 });
+  const handleFishLaunch = useCallback((target: THREE.Vector3, progress: number) => {
+    fishReactionRef.current.phase = "flying";
+    fishReactionRef.current.target.copy(target);
+    fishReactionRef.current.phaseStartedAt = performance.now();
+    fishReactionRef.current.flightProgress = progress;
+  }, []);
+  const handleFishImpact = useCallback((target: THREE.Vector3) => {
+    fishReactionRef.current.phase = "impact-delay";
+    fishReactionRef.current.target.copy(target);
+    fishReactionRef.current.phaseStartedAt = performance.now();
+    fishReactionRef.current.flightProgress = 1;
+  }, []);
+  useFrame(() => {
+    const reaction = fishReactionRef.current;
+    const now = performance.now();
+    const elapsed = (now - reaction.phaseStartedAt) / 1000;
+    if (reaction.phase === "impact-delay" && elapsed >= Math.max(0, config.bearFishImpactDelay)) {
+      reaction.phase = "fire";
+      reaction.phaseStartedAt = now;
+    } else if (reaction.phase === "fire" && elapsed >= Math.min(
+      Math.max(0, config.bearFishFireLookTime),
+      Math.max(0.1, config.bearFishMouthHoldTime),
+    )) {
+      reaction.phase = "partner";
+      reaction.phaseStartedAt = now;
+    } else if (reaction.phase === "partner" && elapsed >= Math.max(
+      0,
+      Math.max(0.1, config.bearFishMouthHoldTime) - Math.max(0, config.bearFishFireLookTime),
+    )) {
+      reaction.phase = "return";
+      reaction.phaseStartedAt = now;
+    } else if (reaction.phase === "return" && elapsed >= Math.max(0, config.bearFishReturnTime)) {
+      reaction.phase = "idle";
+      reaction.phaseStartedAt = now;
+      onFishImpact?.();
+    }
+  });
   const fireBurstOn = config.fireClickBurstOn >= 0.5;
   // Repeat-clicking the fire used to stack the burst (and would have stacked
   // the whoosh too) - one timestamp, checked before either fires.
@@ -10644,6 +11466,74 @@ function CampfireWorld({
    */
   const [crtStage, setCrtStage] = useState<0 | 1 | 2 | 3>(0);
   const crtFocus = crtStage > 0;
+
+  /*
+   * The cabin computer: a '95-style desktop on its monitor (RetroDesktop).
+   * Click the computer and the camera flies in, the way it does for the
+   * CRT; Back, Shut Down or Escape flies it back out.
+   *
+   * Its sounds are its own, and they are the HARDWARE of the era rather than
+   * any OS jingle - a ball mouse's microswitch, a buckling-spring keyboard,
+   * hard-drive head chatter, the monitor's degauss thunk as it wakes, the
+   * heads parking, and PC-speaker beeps. All synthesized; see
+   * lib/retroPcSounds. Levels: master x pcSoundVolume (the lab's "Cabin
+   * computer sounds"). Read through a ref so the handlers stay stable.
+   */
+  const pcVolRef = useRef(0);
+  pcVolRef.current = clampUnit(config.masterVolume) * clampUnit(config.pcSoundVolume ?? 0.8);
+  const pcSounds = useMemo<PcSounds>(() => ({
+    click: () => pcMouseClick(pcVolRef.current),
+    key: () => pcKey(pcVolRef.current * 0.85),
+    seek: () => pcSeek(pcVolRef.current * 0.9, 5 + Math.floor(Math.random() * 4)),
+    wake: () => { pcMouseClick(pcVolRef.current); pcWake(pcVolRef.current); },
+    park: () => pcPark(pcVolRef.current),
+    error: () => pcBeep(pcVolRef.current),
+    done: () => pcChirp(pcVolRef.current),
+  }), []);
+  /*
+   * OnlyBears: clicking it on the desktop plays the bear gag instead of
+   * opening a window (see OnlyBearsBear). The bear is only mounted while it
+   * plays; its timeline and the camera's reveal share obStateRef.
+   */
+  const obStateRef = useRef<OnlyBearsState>(makeOnlyBearsState());
+  const [obMounted, setObMounted] = useState(false);
+  const startOnlyBears = useCallback(() => {
+    const st = obStateRef.current;
+    if (st.mode === "in") return;
+    // coming back mid-retreat picks up from where the paw is
+    st.mode = "in";
+    st.reveal = false;
+    setObMounted(true);
+  }, []);
+  const endOnlyBears = useCallback(() => {
+    const st = obStateRef.current;
+    if (st.mode === "in") { st.mode = "out"; st.reveal = false; }
+  }, []);
+  const obGone = useCallback(() => {
+    obStateRef.current = makeOnlyBearsState();
+    setObMounted(false);
+  }, []);
+  const obPawLand = useCallback(() => { pcPawThud(pcVolRef.current); }, []);
+  const pc = useRetroDesktop({
+    enabled: !editing,
+    sounds: pcSounds,
+    onOnlyBears: startOnlyBears,
+    busy: () => obStateRef.current.mode !== "off",
+    onBusyEscape: endOnlyBears,
+  });
+  const pcScreenRef = useRef<THREE.Mesh | null>(null);
+  const pcFocus = pc.focused;
+  const pcExit = pc.exit;
+  const pcGlass = useMemo<PcGlassProps>(() => ({
+    stateRef: pc.stateRef,
+    onClick: pc.onScreenClick,
+    onHover: pc.onScreenHover,
+    onOver: pc.onComputerOver,
+    hot: !pcFocus && !editing,
+    focused: pcFocus,
+    enabled: !editing,
+    screenRef: pcScreenRef,
+  }), [pc.stateRef, pc.onScreenClick, pc.onScreenHover, pc.onComputerOver, pcFocus, editing]);
   const [crtIndex, setCrtIndex] = useState(0);
   /** Back plate lit on a section screen. The menu's own plates need no flag:
    *  hovering one simply makes it the active plate, which already lights. */
@@ -10707,6 +11597,36 @@ function CampfireWorld({
       setCrtIndex(0);
     }
   }, [panel, onCrtExitSound]);
+
+  // Ringing away from the cabin backs out of the computer too.
+  useEffect(() => {
+    if (panel !== LOCATION_CABIN) pcExit();
+  }, [panel, pcExit]);
+
+  // Leaving the computer while the bear is up sends him away at once. Only
+  // on the way OUT of the close-up - the lab's Play button runs him with no
+  // close-up at all.
+  const pcFocusWas = useRef(pcFocus);
+  useEffect(() => {
+    if (pcFocusWas.current && !pcFocus && obMounted) obGone();
+    pcFocusWas.current = pcFocus;
+  }, [pcFocus, obMounted, obGone]);
+
+  // The lab's Play button: run the gag in place, or send him away.
+  const obSignalWas = useRef(onlyBearsPlaySignal);
+  useEffect(() => {
+    if (obSignalWas.current === onlyBearsPlaySignal) return;
+    obSignalWas.current = onlyBearsPlaySignal;
+    if (obStateRef.current.mode === "in") endOnlyBears();
+    else startOnlyBears();
+  }, [onlyBearsPlaySignal, startOnlyBears, endOnlyBears]);
+
+  const onlyBearsMount = useMemo(() => ({
+    mounted: obMounted,
+    stateRef: obStateRef,
+    onPawLand: obPawLand,
+    onGone: obGone,
+  }), [obMounted, obPawLand, obGone]);
 
   // Report focus changes upward so the parent can loop CRT background music
   // while the close-up is held.
@@ -11008,10 +11928,11 @@ function CampfireWorld({
       <FogRig config={config} />
       <CameraRig config={config} paused={flying || panelled} />
       {panelled ? (
-        <LocationCamera config={config} panel={panel} active={!flying} editing={editing} suspended={crtFocus} />
+        <LocationCamera config={config} panel={panel} active={!flying} editing={editing} suspended={crtFocus || pcFocus} />
       ) : null}
       {/* Mounted whether or not a location owns the camera - see CrtFocusCamera. */}
       <CrtFocusCamera active={crtFocus} view={crtFocusView} config={config} handoff={panelled} zoomRef={crtZoomRef} />
+      <PcFocusCamera active={pcFocus} screenRef={pcScreenRef} config={config} handoff={panelled} revealRef={obStateRef} />
       {flying ? (
         <IntroFlight
           to={intro.to}
@@ -11041,7 +11962,7 @@ function CampfireWorld({
         // !crtFocus: while the CRT close-up holds the camera, orbiting would
         // both fight it and - because onEnd writes the pose back - overwrite
         // this location's saved shot with the close-up. Back releases it.
-        enabled={!flying && !selectedObject && !crtFocus && (!panelled || editing)}
+        enabled={!flying && !selectedObject && !crtFocus && !pcFocus && (!panelled || editing)}
         livePoseRef={cameraLivePoseRef}
         snapTo={(() => {
           // Reset target is per-campsite: in panelled mode, snap to that
@@ -11103,7 +12024,7 @@ function CampfireWorld({
             <SafeAsset label="tent"><Tent config={config} onSelect={onSelect} /></SafeAsset>
           )}
           <Benches config={config} onSelect={onSelect} />
-          <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} banjoPanRef={banjoPanRef} />
+          <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} banjoPanRef={banjoPanRef} banjoGainRef={banjoGainRef} banjoTimeRef={banjoTimeRef} fishReactionRef={fishReactionRef} />
           {/* Wood pile near the bonfire, as if stacked ready to feed the fire. */}
           <Selectable
             name="campfire_wood_pile"
@@ -11377,6 +12298,7 @@ function CampfireWorld({
               rattleAmp={config.hikeBagRattleAmp}
               rattleFreq={config.hikeBagRattleFreq}
               rattleDamp={config.hikeBagRattleDamp}
+              onLand={handleLeftBagContact}
             >
             <group position={[20.07, 0.005, 0.069]}>
               <SafeAsset label="hiking backpack">
@@ -11410,7 +12332,8 @@ function CampfireWorld({
               rattleFreq={config.bagRattleFreq}
               rattleDamp={config.bagRattleDamp}
               contactAngle={config.bagTipContact}
-              onContact={() => setRodPlay((n) => n + 1)}
+              onContact={handleRightBagContact}
+              onLand={handleRightBagLand}
             >
               <SafeAsset label="backpack">
                 <GLBModel url={BACKPACK_URL} />
@@ -11442,6 +12365,7 @@ function CampfireWorld({
               rattleAmp={config.rodRattleAmp}
               rattleFreq={config.rodRattleFreq}
               rattleDamp={config.rodRattleDamp}
+              onLand={handleRodContact}
             >
               <SafeAsset label="fishing rod">
                 <GLBModel url={FISHING_ROD_URL} />
@@ -11450,7 +12374,15 @@ function CampfireWorld({
           </Selectable>
           {(config.objectOverrides?.["fish"]?.hide ?? 0) < 0.5 && (
             <SafeAsset label="flopping fish">
-              <FloppingFish config={config} onClickSound={onFishClickSound} onImpactSound={onFireWhooshSound} onSelect={onSelect} />
+              <FloppingFish
+                config={config}
+                onClickSound={onFishClickSound}
+                onImpactSound={onFireWhooshSound}
+                onLaunch={handleFishLaunch}
+                onImpact={handleFishImpact}
+                onSelect={onSelect}
+                replayOnTune={editing || panel == null}
+              />
             </SafeAsset>
           )}
           {/* Named "campfire" group so ObjectDragLayer can pick it up as the
@@ -11562,7 +12494,7 @@ function CampfireWorld({
 
         <Location index={LOCATION_CABIN} config={config} gate={panelled && !flying}>
           <SafeAsset label="cabin">
-            <CabinSector config={config} onSelect={onSelect} />
+            <CabinSector config={config} onSelect={onSelect} pc={pcGlass} onlyBears={onlyBearsMount} />
           </SafeAsset>
         </Location>
       </ObjectDragLayer>
@@ -11585,8 +12517,10 @@ export default function CampfireScene({
   onLocationViewChange,
   titleHeld = false,
   cameraSnapSignal,
+  onlyBearsPlaySignal,
   cameraLivePoseRef,
   bearVoiceRef,
+  onFishImpact,
 }: {
   config: CampfireSceneConfig;
   onCameraChange?: (pos: [number, number, number], tgt: [number, number, number]) => void;
@@ -11608,6 +12542,8 @@ export default function CampfireScene({
   titleHeld?: boolean;
   /** Bumped by the lab's "Reset camera" button to snap back to the saved pose. */
   cameraSnapSignal?: number;
+  /** Bumped by the lab's OnlyBears Play button: play the gag, or send him away. */
+  onlyBearsPlaySignal?: number;
   /** Populated by the OrbitControls-managed camera every "change" event, so the
    *  lab can commit whatever is on screen right now via Save without needing a
    *  drag first. */
@@ -11616,6 +12552,7 @@ export default function CampfireScene({
   >;
   /** Optional because the scene lab has no voice client. */
   bearVoiceRef?: BearVoiceStateRef;
+  onFishImpact?: () => void;
 }) {
   const cameraChangeHandler = onCameraChange ?? (() => {});
   const selectHandler = onSelect ?? (() => {});
@@ -11687,10 +12624,16 @@ export default function CampfireScene({
   // audibly moves across the stereo field like the rest of the scene does
   // visually.
   const banjoPanRef = useRef(0);
+  // Louder the closer the camera is to him (see CampfireAnimals); starts
+  // quiet so the fly-in swells up rather than starting at full volume.
+  const banjoGainRef = useRef(0.2);
+  const banjoTimeRef = useRef(0);
   useCampsiteAudioLoop(BANJO_URL_SOUND, {
     volume: master * clampUnit(config.banjoVolume),
     enabled: panel === LOCATION_CAMPFIRE,
+    liveMultiplier: banjoGainRef,
     panRef: banjoPanRef,
+    timeRef: banjoTimeRef,
   });
   const playClick = useCampsiteOneShot(CLICK_URL);
   const playHover = useCampsiteOneShot(HOVER_URL);
@@ -11818,9 +12761,13 @@ export default function CampfireScene({
         onCrtSelectSound={playCrtSelectCue}
         crtZoomRef={crtMusicMultiplierRef}
         banjoPanRef={banjoPanRef}
+        banjoGainRef={banjoGainRef}
+        banjoTimeRef={banjoTimeRef}
         cameraSnapSignal={cameraSnapSignal}
+        onlyBearsPlaySignal={onlyBearsPlaySignal}
         cameraLivePoseRef={cameraLivePoseRef}
         bearVoiceRef={bearVoiceRef}
+        onFishImpact={onFishImpact}
       />
       {perfOn ? <PerfProbe onSample={setPerf} /> : null}
     </Canvas>
@@ -11847,6 +12794,7 @@ useGLTF.preload(TOUCAN_URL);
 useGLTF.preload(DEER_URL);
 useGLTF.preload(DOE_URL);
 useGLTF.preload(BEAR_URL);
+useGLTF.preload(BEAR_OLD_URL);
 useGLTF.preload(BEAR_URL_FRONT_LOG);
 useGLTF.preload(BEAR_URL_BACK_RIGHT_LOG);
 useGLTF.preload(FISH_URL);

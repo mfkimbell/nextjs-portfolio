@@ -5,10 +5,11 @@ export type BearVoiceBearId = "back_left_log" | "back_right_log";
 /** Live voice data read by the scene without causing React renders at audio-frame rate. */
 export type BearVoiceState = {
   activeBearId: BearVoiceBearId;
+  activeSpeechId?: string;
   isRemoteSpeaking: boolean;
   remoteAudioLevel: number;
   /** Transport phase is separate from a future speaker identity event. */
-  phase?: "idle" | "remote-speaking" | "interrupted";
+  phase?: "idle" | "queued" | "remote-speaking" | "interrupted";
   /** Monotonic mixed-audio segment marker; safe for a future speaker-event channel to replace. */
   segmentId?: number;
   /** The current identity is a stable fallback until the backend supplies one. */
@@ -30,6 +31,12 @@ export type BearVoiceState = {
   syllable?: number;
   /** 0..1 strength of the most recent onset (stressed syllables are bigger). */
   syllableStrength?: number;
+  /** Semitones vs the speaker's running median F0 (0 when unvoiced) - drives head lift. */
+  pitch?: number;
+  /** Increments on each PROMINENT syllable only (~1/4 of them, >=0.7s apart) - nods, lean, backchannels. */
+  accent?: number;
+  /** 0..1 prominence of the latest accent. */
+  accentStrength?: number;
 };
 
 export type BearVoiceStateRef = MutableRefObject<BearVoiceState>;
