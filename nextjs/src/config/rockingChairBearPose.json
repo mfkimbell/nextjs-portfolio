@@ -42,38 +42,78 @@
       "sz": 1
     },
     "shoulder_L": {
-      "rx": -0.12,
-      "ry": -0.64,
-      "rz": -0.71,
-      "sx": 0.98,
-      "sy": 1.17,
-      "sz": 1
+      "rx": 0.22,
+      "ry": -0.07,
+      "rz": -0.65,
+      "sx": 0.8,
+      "sy": 1.02,
+      "sz": 0.95
     },
     "upperarm_L": {
-      "rx": 0.38,
-      "ry": 0.1,
-      "rz": -0.67,
+      "rx": 0.36,
+      "ry": -0.22,
+      "rz": 0.15,
       "sx": 1,
       "sy": 1,
       "sz": 1
     },
     "arm_L": {
-      "rx": 0.32,
-      "ry": -0.26,
-      "rz": -0.2,
+      "rx": 1.16,
+      "ry": 0.45,
+      "rz": 0.07,
       "sx": 1,
       "sy": 1,
       "sz": 1
     },
     "hand_L": {
-      "rx": 0.48,
-      "ry": -0.48,
-      "rz": -0.21,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0,
       "sx": 1,
       "sy": 1,
       "sz": 1
     },
     "fingers_L": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0,
+      "sx": 1,
+      "sy": 1,
+      "sz": 1
+    },
+    "shoulder_R": {
+      "rx": -0.12,
+      "ry": 0.64,
+      "rz": 0.71,
+      "sx": 0.98,
+      "sy": 1.17,
+      "sz": 1
+    },
+    "upperarm_R": {
+      "rx": 0.38,
+      "ry": -0.1,
+      "rz": 0.67,
+      "sx": 1,
+      "sy": 1,
+      "sz": 1
+    },
+    "arm_R": {
+      "rx": 0.32,
+      "ry": 0.26,
+      "rz": 0.2,
+      "sx": 1,
+      "sy": 1,
+      "sz": 1
+    },
+    "hand_R": {
+      "rx": 0.48,
+      "ry": 0.48,
+      "rz": 0.21,
+      "sx": 1,
+      "sy": 1,
+      "sz": 1
+    },
+    "fingers_R": {
       "rx": 0.69,
       "ry": 0,
       "rz": 0,
@@ -81,65 +121,25 @@
       "sy": 1.19,
       "sz": 1
     },
-    "shoulder_R": {
-      "rx": 0.22,
-      "ry": 0.07,
-      "rz": 0.65,
-      "sx": 0.8,
-      "sy": 1.02,
-      "sz": 0.95
-    },
-    "upperarm_R": {
-      "rx": 0.36,
-      "ry": 0.22,
-      "rz": -0.15,
-      "sx": 1,
-      "sy": 1,
-      "sz": 1
-    },
-    "arm_R": {
-      "rx": 1.16,
-      "ry": -0.45,
-      "rz": -0.07,
-      "sx": 1,
-      "sy": 1,
-      "sz": 1
-    },
-    "hand_R": {
-      "rx": 0,
-      "ry": 0,
-      "rz": 0,
-      "sx": 1,
-      "sy": 1,
-      "sz": 1
-    },
-    "fingers_R": {
-      "rx": 0,
-      "ry": 0,
-      "rz": 0,
-      "sx": 1,
-      "sy": 1,
-      "sz": 1
-    },
     "thigh_L": {
-      "rx": 0.19,
-      "ry": -0.31,
-      "rz": 0.05,
-      "sx": 0.73,
-      "sy": 1.11,
-      "sz": 0.57
+      "rx": 0,
+      "ry": 0,
+      "rz": 0,
+      "sx": 1,
+      "sy": 1,
+      "sz": 1
     },
     "leg_L": {
-      "rx": -0.52,
-      "ry": -1.05,
-      "rz": -0.28,
-      "sx": 1.44,
-      "sy": 1.19,
-      "sz": 0.9
+      "rx": 0,
+      "ry": 0,
+      "rz": 0,
+      "sx": 1,
+      "sy": 1,
+      "sz": 1
     },
     "foot_L": {
-      "rx": -0.18,
-      "ry": -0.16,
+      "rx": 0,
+      "ry": 0,
       "rz": 0,
       "sx": 1,
       "sy": 1,
@@ -154,24 +154,24 @@
       "sz": 1
     },
     "thigh_R": {
-      "rx": 0,
-      "ry": 0,
-      "rz": 0,
-      "sx": 1,
-      "sy": 1,
-      "sz": 1
+      "rx": 0.19,
+      "ry": 0.31,
+      "rz": -0.05,
+      "sx": 0.73,
+      "sy": 1.11,
+      "sz": 0.57
     },
     "leg_R": {
-      "rx": 0,
-      "ry": 0,
-      "rz": 0,
-      "sx": 1,
-      "sy": 1,
-      "sz": 1
+      "rx": -0.52,
+      "ry": 1.05,
+      "rz": 0.28,
+      "sx": 1.44,
+      "sy": 1.19,
+      "sz": 0.9
     },
     "foot_R": {
-      "rx": 0,
-      "ry": 0,
+      "rx": -0.18,
+      "ry": 0.16,
       "rz": 0,
       "sx": 1,
       "sy": 1,
@@ -198,8 +198,8 @@
     "recline": 12.5,
     "hunch": 45,
     "headPitch": 0,
-    "headYaw": -2,
-    "headRoll": -0.5
+    "headYaw": 2,
+    "headRoll": 0.5
   },
   "rock": {
     "enabled": true,
@@ -216,5 +216,6 @@
       "hunch": -0.5,
       "head": 6.5
     }
-  }
+  },
+  "_about": "Rocking-chair bear pose. MIRRORED: every _L/_R pair has been swapped and each delta had ry/rz negated, so his left side is now his right. Done in the DATA rather than with a negative scale on the group - a negative scale reverses triangle winding and forces DoubleSide on shared materials, which leaks onto the other bears using the same GLB. Swapping here has none of that."
 }

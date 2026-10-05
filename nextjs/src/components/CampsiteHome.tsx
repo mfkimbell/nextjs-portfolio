@@ -9,6 +9,7 @@ import ViewportDebug from "@/components/ViewportDebug";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
 import BearVoiceControls from "@/components/BearVoiceControls";
 import { useBearVoiceAgent } from "@/hooks/useBearVoiceAgent";
+import { useLiveKitBearAgent } from "@/hooks/use-livekit-bear-agent";
 import { DEFAULT_CAMPFIRE_CONFIG, type CampfireSceneConfig } from "@/components/scene-lab/sceneConfig";
 import { useCampsiteOneShot } from "@/lib/campsiteSounds";
 
@@ -32,6 +33,7 @@ const STORAGE_KEY = "scene-lab-config-v1";
 const MODE_KEY = "campsite-mode";
 
 type Mode = "config" | "site";
+type VoiceTransport = "twilio" | "livekit";
 
 const PANELS = [
   { title: "By the fire", blurb: "Pull up a log." },
@@ -56,11 +58,29 @@ export default function CampsiteHome() {
   // full scene-lab under /scene-lab, which reads/writes the JSON directly.
   // No setter needed here; keeping it triggers a no-unused-vars error.
   const config: CampfireSceneConfig = DEFAULT_CAMPFIRE_CONFIG;
+  const [voiceTransport, setVoiceTransport] = useState<VoiceTransport>("twilio");
+  const [twilioSmokeyVoice, setTwilioSmokeyVoice] = useState("oubi7HGxNVjXMnWLgwBT");
+  const [twilioMapleVoice, setTwilioMapleVoice] = useState("u0REnIJvUgcGQYW2Ux8K");
+  const [liveKitSmokeyVoice, setLiveKitSmokeyVoice] = useState("ash");
+  const [smokeyPitch, setSmokeyPitch] = useState(0.95);
+  const [maplePitch, setMaplePitch] = useState(1.05);
   const bearVoiceAgent = useBearVoiceAgent({
     speechVolume: config.speechVolume,
     smokeySpeechVolume: config.smokeySpeechVolume,
     mapleSpeechVolume: config.mapleSpeechVolume,
+    smokeyVoiceId: twilioSmokeyVoice,
+    mapleVoiceId: twilioMapleVoice,
   });
+  const liveKitBearAgent = useLiveKitBearAgent(liveKitSmokeyVoice, { smokey: smokeyPitch, maple: maplePitch });
+  const activeBearAgent = voiceTransport === "livekit" ? liveKitBearAgent : bearVoiceAgent;
+  const selectTwilioTransport = useCallback(() => {
+    liveKitBearAgent.stop();
+    setVoiceTransport("twilio");
+  }, [liveKitBearAgent]);
+  const selectLiveKitTransport = useCallback(() => {
+    bearVoiceAgent.stop();
+    setVoiceTransport("livekit");
+  }, [bearVoiceAgent]);
   // Title screen gate for site mode. Fresh every time you enter preview - the
   // cinematic is part of the vibe, so returning visitors see it too.
   const [showTitle, setShowTitle] = useState(true);
@@ -176,11 +196,30 @@ export default function CampsiteHome() {
           panel={panel}
           intro
           titleHeld={titleHeld}
-          bearVoiceRef={bearVoiceAgent.voiceRef}
-          onFishImpact={bearVoiceAgent.reactToFishFire}
+          bearVoiceRef={activeBearAgent.voiceRef}
+          onFishImpact={activeBearAgent.reactToFishFire}
         />
 
-        {!showTitle && panel === 0 ? <BearVoiceControls agent={bearVoiceAgent} /> : null}
+        {!showTitle && panel === 0 ? (
+          <div className="pointer-events-auto absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 gap-1 rounded-full border border-white/20 bg-black/70 p-1 text-[0.65rem] text-white shadow-lg backdrop-blur-md">
+            <button type="button" onClick={selectTwilioTransport} className={`rounded-full px-2 py-1 ${voiceTransport === "twilio" ? "bg-amber-200 text-stone-950" : "text-white/70"}`}>Twilio</button>
+            <button type="button" onClick={selectLiveKitTransport} className={`rounded-full px-2 py-1 ${voiceTransport === "livekit" ? "bg-amber-200 text-stone-950" : "text-white/70"}`}>LiveKit beta</button>
+          </div>
+        ) : null}
+        {!showTitle && panel === 0 ? (
+          <BearVoiceControls
+            agent={activeBearAgent}
+            transport={voiceTransport}
+            voice={voiceTransport === "livekit" ? liveKitSmokeyVoice : twilioSmokeyVoice}
+            onVoiceChange={voiceTransport === "livekit" ? setLiveKitSmokeyVoice : setTwilioSmokeyVoice}
+            mapleVoice={voiceTransport === "twilio" ? twilioMapleVoice : undefined}
+            onMapleVoiceChange={voiceTransport === "twilio" ? setTwilioMapleVoice : undefined}
+            smokeyPitch={smokeyPitch}
+            maplePitch={maplePitch}
+            onSmokeyPitchChange={setSmokeyPitch}
+            onMaplePitchChange={setMaplePitch}
+          />
+        ) : null}
 
 
       {showTitle ? (

@@ -22,6 +22,12 @@ REQUIRED_BONES = {
     "lip_corner_R": "head",
 }
 TARGET_NAMES = ["jawOpen", "mouthWide", "mouthRound", "eyeBlink"]
+ONLY_BEAR_KEYS = ["tucked", "raised", "over", "cover"]
+ONLY_BEAR_REQUIRED_BONES = {
+    "center",
+    "shoulder_L", "upperarm_L", "arm_L", "hand_L", "fingers_L",
+    "shoulder_R", "upperarm_R", "arm_R", "hand_R", "fingers_R",
+}
 
 
 def read_glb(path):
@@ -122,6 +128,31 @@ def validate(path):
     }
 
 
+def validate_only_bears_pose(path):
+    with open(path, encoding="utf-8") as handle:
+        pose = json.load(handle)
+    if pose.get("coverHand") != "left" or pose.get("supportHand") != "right":
+        raise ValueError("onlyBearsPose.json: expected left cover and right support contract")
+    if set(pose.get("keys", {})) != set(ONLY_BEAR_KEYS):
+        raise ValueError("onlyBearsPose.json: expected exactly tucked, raised, over, cover keys")
+    for key in ONLY_BEAR_KEYS:
+        bones = pose["keys"][key]
+        missing = ONLY_BEAR_REQUIRED_BONES - set(bones)
+        if missing:
+            raise ValueError(f"onlyBearsPose.json: {key} missing bones {sorted(missing)}")
+        for bone_name in ONLY_BEAR_REQUIRED_BONES:
+            quaternion = bones[bone_name]
+            if len(quaternion) != 4:
+                raise ValueError(f"onlyBearsPose.json: {key}.{bone_name} is not a quaternion")
+            length = sum(component * component for component in quaternion) ** 0.5
+            if abs(length - 1.0) > 1e-3:
+                raise ValueError(f"onlyBearsPose.json: {key}.{bone_name} is not normalized")
+    for hand in ("hand_L", "hand_R"):
+        if hand not in pose.get("handScale", {}):
+            raise ValueError(f"onlyBearsPose.json: missing hand scale for {hand}")
+    return {"file": os.path.basename(path), "keys": ONLY_BEAR_KEYS, "coverHand": "left", "supportHand": "right"}
+
+
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     paths = sorted(glob.glob(os.path.join(root, "public", "wildpoly", "bear_sit_*.glb")))
@@ -129,6 +160,8 @@ def main():
         raise SystemExit("No bear_sit_*.glb files found")
     for path in paths:
         print(json.dumps(validate(path), sort_keys=True))
+    pose_path = os.path.join(root, "src", "config", "onlyBearsPose.json")
+    print(json.dumps(validate_only_bears_pose(pose_path), sort_keys=True))
 
 
 if __name__ == "__main__":

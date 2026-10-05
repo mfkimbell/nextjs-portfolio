@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "livekit:dev": "LIVEKIT_BEAR_ID=smokey LIVEKIT_AGENT_NAME=smokey-agent tsx src/livekit-agent.ts dev",
+    "livekit:maple": "LIVEKIT_BEAR_ID=maple LIVEKIT_AGENT_NAME=maple-agent tsx src/livekit-agent.ts dev",
+    "livekit:coordinator": "tsx src/livekit-coordinator.ts dev",
+    "livekit:start": "LIVEKIT_BEAR_ID=smokey LIVEKIT_AGENT_NAME=smokey-agent tsx src/livekit-agent.ts start",
     "build": "tsc",
     "heroku-postbuild": "npm run build",
     "start": "node dist/index.js",
@@ -12,9 +16,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@livekit/agents": "^1.9.1",
+    "@livekit/agents-plugin-elevenlabs": "^1.9.1",
+    "@livekit/agents-plugin-openai": "^1.9.1",
+    "@livekit/rtc-node": "^1.1.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-ws": "^5.0.2",
+    "livekit-server-sdk": "^2.19.1",
     "openai": "^4.85.4",
     "twilio": "^5.4.2"
   },

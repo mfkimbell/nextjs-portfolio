@@ -383,6 +383,7 @@ Potential advantage over Twilio: LiveKit's room data/text stream APIs are native
 | Area | Twilio implementation | LiveKit implementation | Current read |
 |---|---|---|---|
 | Browser mic/audio | `@twilio/voice-sdk` starts a browser WebRTC call | `livekit-client` joins a room and publishes microphone track | Both support browser mic; LiveKit maps more directly to app UI. |
+| Audible voice quality | Browser audio still travels through a phone-call-oriented Twilio media path and reads as more compressed/narrow | Browser and bear agents exchange native WebRTC audio tracks without the telephony call mix | In current testing, LiveKit WebRTC sounds noticeably better and more natural. |
 | Primary mental model | Phone call / TwiML App / ConversationRelay | Room with participants, tracks, data, and agent participant | LiveKit likely fits animated website characters better. |
 | Server token route | Twilio Access Token with VoiceGrant / SyncGrant | LiveKit AccessToken with room grants and optional agent dispatch | Similar security model: secret server-side token minting. |
 | Agent backend | Express/WebSocket backend returns TwiML and handles `/conversation-relay` | LiveKit Agents worker/server joins rooms as participant | Both need a backend/worker. LiveKit worker model is more native for AI rooms. |
@@ -394,6 +395,7 @@ Potential advantage over Twilio: LiveKit's room data/text stream APIs are native
 | Realtime events to frontend | Extra Twilio Sync stream or custom channel | Native LiveKit text streams/data/RPC/state | LiveKit likely easier for toucan UI state. |
 | Transcripts | Backend publishes to Twilio Sync | Agent/session transcript events or text streams | Need verify exact event hooks during prototype. |
 | Two speakers | Custom speaker tags + Sync events | Custom data/text messages in same room | LiveKit cleaner. |
+| Independent bear audio | Browser receives one mixed remote call stream; Media Streams can mirror telephone audio to a server but do not create separate browser tracks | Smokey and Maple can publish separate audio tracks with stable participant/track identities | LiveKit is the preferred architecture for bear interruptions, per-bear lip sync, panning, volume, and voice effects. |
 | Distinct voices | Harder in a single ConversationRelay call/session | Easier if agent controls TTS per line/voice | LiveKit likely better for two actual toucan voices. |
 | Telephony future | Excellent: phone numbers, SMS, WhatsApp, handoff | Supports SIP/telephony, but Twilio is stronger here | Twilio wins for omnichannel/contact-center roadmap. |
 | Website-native UX | Possible but phone-call-shaped | Natural | LiveKit wins for portfolio/characters. |
@@ -437,6 +439,9 @@ Potential advantage over Twilio: LiveKit's room data/text stream APIs are native
 ### LiveKit pros
 
 - Room/participant model naturally fits browser + AI character(s).
+- Each bear can own an independent audio track. The browser can stop, mute, pan, meter, pitch-process, and lip-sync Smokey and Maple separately instead of inferring speaker identity from one mixed call track.
+- LiveKit's native WebRTC tracks sound noticeably better in current browser testing than the Twilio call path, with clearer and more natural bear voices.
+- A correction can interrupt only Smokey's track and begin Maple's track at the intended boundary; a brief intentional overlap is also possible.
 - Agent is a participant in the same realtime session.
 - Native data/text streams can carry transcript and active speaker events.
 - Better fit for two animated toucans.
@@ -455,6 +460,39 @@ Potential advantage over Twilio: LiveKit's room data/text stream APIs are native
 - If self-hosting, WebRTC/TURN/SFU operations are more complex than Twilio's hosted voice path.
 
 ## LiveKit hosting comparison / easy hosting plan
+
+## Initial LiveKit Setup
+
+The first repository milestone is a server-only `POST /api/livekit/token` endpoint. It reads `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET`, creates a fifteen-minute room token, and grants the browser permission to publish its microphone and subscribe to agent tracks. The browser receives only the signed token, room name, and public LiveKit URL; it never receives the API secret.
+
+For the first agent prototype, the existing `OPENAI_API_KEY` is sufficient. Use OpenAI Realtime or an STT -> OpenAI model -> TTS pipeline first. ElevenLabs is optional later when a particular Southern-accented character voice is required.
+
+The repository's bear track worker is `agent/src/livekit-agent.ts`, and the shared planner is `agent/src/livekit-coordinator.ts`. LiveKit output now uses the user's ElevenLabs account through `@livekit/agents-plugin-elevenlabs`, with `LIVEKIT_SMOKEY_ELEVENLABS_VOICE_ID`, `LIVEKIT_MAPLE_ELEVENLABS_VOICE_ID`, and `ELEVEN_API_KEY` (the worker also accepts the existing `ELEVENLABS_API_KEY` name). These are worker settings rather than scene settings, so restart `make livekit` after changing them.
+
+### Controlled Three-Party Orchestrator
+
+The implemented LiveKit architecture now uses three workers:
+
+```text
+bear-coordinator
+  -> LiveKit Inference STT for the visitor
+  -> OpenAI structured exchange planner
+  -> exact bear.command data messages
+
+smokey-agent
+  -> OpenAI gpt-4o-mini-tts
+  -> Smokey WebRTC audio track
+
+maple-agent
+  -> OpenAI gpt-4o-mini-tts
+  -> Maple WebRTC audio track
+```
+
+The coordinator plans Smokey's full response, Maple's optional correction/joke, the exact phrase where Maple should enter, and Smokey's context-aware recovery before any speech starts. It sends only Smokey's audible prefix, schedules Maple against that prefix's estimated playout, then waits for Maple's matching completion event before sending Smokey's recovery. A new visitor turn broadcasts `bear.cancel` to both tracks and invalidates the pending queue. Every command has a `turnId` and sequence number so stale completion events cannot advance a newer conversation.
+
+Maple is scheduled speculatively from the estimated duration of Smokey's already-planned prefix instead of waiting for Smokey's completion event. `LIVEKIT_MAPLE_OVERLAP_MS` controls how early Maple starts relative to that estimate. The local default is 850 milliseconds because TTS startup latency is otherwise audible. This is a temporary timing approximation; pre-synthesizing Maple's audio before Smokey starts is the next latency optimization.
+
+This is intentionally a controlled STT -> LLM -> TTS pipeline instead of two autonomous voice-to-voice models. It preserves early interruption planning, exact scripts, separate audio tracks, and shared conversational context. `make livekit` starts all three workers.
 
 Decision as of 2026-07-27: start the LiveKit experiment using **LiveKit Cloud** rather than self-hosting.
 

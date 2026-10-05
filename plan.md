@@ -1,6 +1,340 @@
-# Professional Bear Animation Stability Plan
+# OnlyBears Posture And Screen-Cover Repair Plan
+
+## Status And Scope
+
+This is the active implementation plan for the cabin computer's OnlyBears gag. Do not try another Scene Lab transform-only fix. The current failure is a bad authored pose combined with contradictory runtime deformation, not merely a camera or root-offset problem.
+
+Preserve unrelated work in the dirty worktree. Touch only the OnlyBears authoring/export/runtime files named below unless a measured dependency requires more.
+
+## Intended Shot
+
+The gag must read in this order:
+
+1. The visitor is close to the CRT and sees the OnlyBears page.
+2. A compact old bear rises from a crouch directly behind the monitor.
+3. His anatomical left paw comes over the monitor and lands flat on the glass, obscuring most of the illuminated screen.
+4. His anatomical right paw braces naturally on the monitor top or desk.
+5. The camera pulls back enough to reveal his face and upper torso, but not so far or high that the cabin roof dominates the shot.
+6. He remains crouched behind the laptop. His head, glasses, ears, paws, and fur must not intersect the ceiling, laptop shell, keyboard, or desk.
+7. On dismissal, he folds the laptop shut, looks left, looks right, then grabs it and runs off with it in a clearly comic escape. The desktop restores only after the laptop thief exits.
+
+The old bear should feel as though he was hiding behind the laptop, not like a giant standing through the cabin. His face should be visible above and slightly to one side of the screen. The covering paw is the visual punchline and the laptop theft is the exit punchline.
+
+## Current Failure Evidence
+
+The supplied screenshot is the failure baseline:
+
+- the head and glasses penetrate the roof lattice;
+- the beard hangs above the monitor instead of a crouched torso reading behind it;
+- neither paw is visible on the display;
+- the OnlyBears page remains almost completely readable;
+- the bear appears vertically stretched and disconnected from the intended action;
+- the reveal camera includes too much ceiling and does not frame an understandable silhouette.
+
+The repository's older reference, `Claude outputs/old_grey_bear_onlybears_reveal.png`, is useful only as evidence that a paw can reach the monitor. It is not the final visual target: that bear is also oversized and its screen contact is crude.
+
+## Research Findings
+
+### Transform Hierarchy
+
+`OnlyBearsBear` is a child of the `old_bear_computer` `Selectable` in `nextjs/src/components/scene-lab/CampfireScene.tsx`. The bear and computer therefore share computer-local transforms. The cabin is a separate sibling. This means:
+
+- computer edits preserve bear-to-monitor coordinates;
+- computer scale changes alter the entire bear/computer assembly relative to the cabin;
+- cabin clearance cannot be inferred from monitor-local contact alone;
+- the current reveal camera exposes the bad geometry but does not create it.
+
+### Pose And Runtime Contradictions
+
+The implementation does not have one consistent hand contract:
+
+- `OnlyBearsBear.tsx` overview comments say the right arm covers and the left paw rests;
+- current `onlyBearsPose.json` says the left paw covers and the right paw supports;
+- runtime comments describe `hand_R` as pressed against the glass;
+- runtime applies a post-authored roll and scale to both hands.
+
+The current uncommitted pose rewrite changed from the tracked right-paw cover to a left-paw cover without updating the entire system consistently. The new asymmetric pose is not saved in `scripts/onlybears/onlybears_lab.blend`, so the JSON is not reproducible from the checked-in authoring source.
+
+### Measured Geometry
+
+The monitor screen in computer-local coordinates is approximately:
+
+```text
+x: -0.595 to 0.397
+y:  0.492 to 1.276
+z: -0.253 plane
+```
+
+Evaluating the current cover pose gives approximate joint positions:
+
+```text
+right hand:    [1.142,  1.745, -1.719]
+right fingers: [1.531,  1.262, -1.736]
+left hand:     [0.345,  0.233, -0.963]
+left fingers:  [0.373, -0.261, -1.339]
+head joint:    [0.350,  2.857, -1.929]
+```
+
+Neither wrist is on the screen plane. The right chain is above and outside the display; the left chain is below it; both are substantially behind it. Enlarging the hands cannot repair an arm chain whose contact point is wrong.
+
+The old-bear model is approximately `0.980 x 2.376 x 1.453` before the pose root scale. `onlyBearsPose.json` uses root scale `3.1`, producing an extremely large bear relative to the `1.413`-unit-tall computer. This is the principal reason the reveal reads as a head in the ceiling.
+
+### History
+
+- Commit `3034d73` introduced the original gag, camera, pose JSON, and authoring blend.
+- That commit is a comparison baseline, not a wholesale rollback target.
+- The current computer transform and asymmetric pose postdate the checked-in Blender authoring scene.
+- `PcFocusCamera` has remained screen-matrix-relative and is not the primary contact bug.
+
+### Workflow Gap
+
+There is no checked-in deterministic exporter for `onlyBearsPose.json`. The `.blend` file and runtime JSON can silently diverge. Existing bear validation also excludes `bear_old_grey.glb` and does not test screen contact or cabin clearance.
+
+Blender's IK workflow is appropriate for solving each arm against explicit targets, but constraints must be baked/exported to the same local bone quaternion space consumed by Three.js. Three.js skinning then uses those local bone transforms; adding an unverified runtime roll after export invalidates the contact solved in Blender.
+
+## Non-Negotiable Design Decisions
+
+1. Anatomical left paw covers the screen.
+2. Anatomical right paw supports on the monitor top or desk.
+3. The bear is crouched. Do not scale a standing bear until the face happens to fit.
+4. Screen contact is authored in Blender against the shipped computer mesh.
+5. Cabin clearance is validated in the full shipped cabin composition.
+6. Paw orientation is baked into the pose. Remove the generic runtime `onlyBearsPawRoll` deformation from the final contact path.
+7. Per-hand scale is allowed only for mild cartoon readability. It may not substitute for wrist placement.
+8. Camera tuning happens after geometry passes contact and clearance checks.
+9. Do not move or scale the cabin to hide the failure.
+10. Do not solve this with `onlyBearsX/Y/Z` sliders alone.
+
+## Implementation Sequence
+
+### Phase 1: Freeze And Instrument The Baseline
+
+1. Preserve the current dirty worktree and record a focused diff for:
+   - `nextjs/src/components/scene-lab/OnlyBearsBear.tsx`
+   - `nextjs/src/config/onlyBearsPose.json`
+   - `nextjs/src/config/campfireScene.json`
+   - `nextjs/scripts/onlybears/onlybears_lab.blend`
+2. Export or record the exact shipped computer, study, cabin, and screen transforms from the current config.
+3. Add a temporary authoring/debug view that can display:
+   - screen rectangle and normal;
+   - monitor-top contact plane;
+   - cabin ceiling clearance plane or bounding volume;
+   - left/right hand and finger anchors;
+   - head, ears, glasses, and beard bounds.
+4. Capture the current gag at fixed normalized times before editing:
+   - `t=0.00` hidden/tucked;
+   - `t=0.26` risen;
+   - `t=0.42` raised;
+   - `t=0.60` over;
+   - `t=0.82` cover impact;
+   - `t=1.02` reveal begins;
+   - `t=1.40` reveal hold.
+5. Store those images under a kebab-case debug/output folder. Do not use screenshots taken at arbitrary wall-clock moments as the only comparison.
+
+### Phase 2: Rebuild The Blender Authoring Scene
+
+1. Open `nextjs/scripts/onlybears/onlybears_lab.blend`.
+2. Replace stale proxies with the exact shipped assets:
+   - `nextjs/public/wildpoly/bear_old_grey.glb`;
+   - `nextjs/public/laptop.glb`;
+   - the current cabin asset and relevant desk geometry.
+3. Reproduce the runtime hierarchy in computer-local space, then add a second full-composition collection for cabin-clearance validation.
+4. Add named collision/contact proxies:
+   - `screen-contact-plane` matching the visible glass bounds;
+   - `monitor-top-plane`;
+   - `desk-plane`;
+   - `ceiling-clearance-volume`;
+   - `cover-paw-contact` target;
+   - `support-paw-contact` target.
+5. Use the current `sit_log` hold frame as the starting body pose, then lower the pelvis/center and fold the legs into a crouch. Keep the spine/head compact rather than translating only the root downward.
+6. Establish root scale from the environment:
+   - face and shoulders readable behind the CRT;
+   - top of glasses/ears at least one visible paw thickness below the nearest roof geometry;
+   - torso mostly hidden by the monitor;
+   - no body penetration through the desk.
+
+### Phase 3: Re-author Four Poses
+
+Author each pose directly. Do not mirror a final contact pose.
+
+1. `tucked`
+   - bear fully concealed behind the monitor from the close-up camera;
+   - compact crouch already established;
+   - both elbows and paws clear of the monitor shell.
+2. `raised`
+   - head rises only enough to establish the bear;
+   - left elbow leads and left paw is above the monitor;
+   - right paw begins moving toward its support target;
+   - ceiling clearance already passes at the highest overshoot.
+3. `over`
+   - left wrist crosses the monitor top;
+   - left palm is oriented toward the screen plane;
+   - elbow arc remains anatomically readable and does not pass through the face;
+   - right paw is planted or nearly planted.
+4. `cover`
+   - left palm is parallel to and slightly in front of the screen plane;
+   - paw silhouette obscures at least 65% of visible screen area and crosses the screen center;
+   - fingers do not disappear behind the glass or monitor shell;
+   - right paw visibly bears weight on monitor top or desk;
+   - face remains visible and looks toward the visitor;
+   - spine is leaned forward from the hips, not stretched vertically;
+   - all cabin-clearance and desk-clearance checks pass.
+
+Use Blender IK constraints with pole targets for arm shaping, then bake the solved local rotations. Verify deformation with the actual skinned mesh, not bone locations alone.
+
+### Phase 4: Deterministic Export
+
+1. Add `nextjs/scripts/onlybears/export-onlybears-pose.py`.
+2. Export:
+   - source asset paths and hashes;
+   - hold frame;
+   - root position, rotation, and scale;
+   - each authored key pose's local bone quaternions;
+   - explicit `coverHand: "left"` and `supportHand: "right"` metadata;
+   - per-hand scale values;
+   - expected screen, support, head, and ceiling measurement data.
+3. Fail export when required bones or named proxies are missing.
+4. Write deterministic JSON ordering and bounded float precision.
+5. Run the exporter twice and require a zero diff on the second run.
+6. Commit the updated `.blend`, exporter, and generated `onlyBearsPose.json` together. Never hand-edit generated quaternions.
+
+### Phase 5: Simplify Runtime Ownership
+
+1. Update `OnlyBearsBear.tsx` so comments, metadata, and behavior all agree that left covers and right supports.
+2. Remove the post-export 180-degree roll from both hands. If a tiny correction is still required, put it in the Blender pose and re-export.
+3. Apply cover-paw scaling only to the left hand and keep it modest. Start at `1.0`; do not exceed `1.35` without visual approval.
+4. Apply support-paw scale independently and keep it near `1.0`.
+5. Disable snap overshoot and impact wobble while validating the pose.
+6. Reintroduce motion layers one at a time:
+   - interpolation;
+   - rise overshoot;
+   - arm wind-up;
+   - impact squash;
+   - breathing;
+   - head look.
+7. After each layer, recapture the seven fixed frames and verify that contact and clearance have not changed beyond tolerance.
+8. Ensure breathing never writes an ancestor of either planted arm.
+9. Ensure head-look correction cannot rotate the glasses or ears into the roof.
+
+### Phase 6: Camera Composition
+
+Only after the pose is correct:
+
+1. Keep close-up focus derived from the live screen world matrix.
+2. Tune reveal framing to show:
+   - complete covering paw;
+   - support paw;
+   - head, glasses, and upper torso;
+   - enough monitor and desk to explain the action;
+   - minimal ceiling.
+3. Lower `pcRevealHeight` and `pcRevealAimUp` if the camera currently favors the roof.
+4. Do not use camera cropping to conceal ceiling intersections.
+5. Validate desktop and mobile aspect ratios. The bear and covering paw must remain readable at both.
+
+### Phase 7: Tests And Validation
+
+Add focused tests beside the implementation or under a kebab-case OnlyBears test module.
+
+Required automated checks:
+
+1. Pose schema contains all required bones for all four keys.
+2. Metadata declares left cover/right support and runtime follows it.
+3. Cover-paw contact point projects inside the screen rectangle.
+4. Cover paw overlaps at least 65% of the screen rectangle in the authored cover pose.
+5. Cover-paw depth is within a small contact tolerance of the screen plane and remains in front of it.
+6. Support paw is within tolerance of monitor top or desk target.
+7. Head/accessory bounds remain below the ceiling-clearance volume at every sampled frame, including overshoot and impact wobble.
+8. No sampled frame contains non-finite transforms or non-unit quaternions beyond tolerance.
+9. Export is deterministic.
+10. `bear_old_grey.glb` is included in asset validation.
+
+Required visual checks:
+
+1. Capture the seven fixed frames at desktop and mobile widths.
+2. Produce one contact-debug capture with proxies visible.
+3. Produce one final capture with proxies hidden.
+4. Compare against the supplied failure screenshot and explicitly verify:
+   - screen mostly hidden by paw;
+   - head entirely below roof;
+   - face visible;
+   - both arms readable and attached;
+   - no desk, keyboard, monitor, or cabin penetration;
+   - dismissal restores the desktop.
+
+Required commands:
+
+```text
+pnpm exec tsc --noEmit
+pnpm build
+pnpm validate:bear-assets
+git diff --check
+```
+
+Run repository tests relevant to any new utility or component test added by the implementation.
+
+## Acceptance Criteria
+
+The repair is complete only when all of these are true:
+
+- the left paw visibly covers at least 65% of the screen at impact and hold;
+- the screen center lies under the covering paw silhouette;
+- the right paw makes believable support contact;
+- the head, ears, glasses, beard, and paws have visible clearance from the roof in every sampled frame;
+- the bear reads as crouched behind the computer, not scaled through the cabin;
+- the face is visible in the reveal shot;
+- close-up and reveal shots work at desktop and mobile aspect ratios;
+- there is one consistent hand contract in comments, JSON, exporter, tests, and runtime;
+- the pose can be regenerated from the checked-in Blender file with a deterministic script;
+- all automated and visual checks pass.
+
+## Files Expected To Change
+
+- `nextjs/scripts/onlybears/onlybears_lab.blend`
+- `nextjs/scripts/onlybears/export-onlybears-pose.py` (new)
+- `nextjs/src/config/onlyBearsPose.json`
+- `nextjs/src/components/scene-lab/OnlyBearsBear.tsx`
+- `nextjs/src/components/scene-lab/only-bears-bear.types.ts` if local types are extracted during the work
+- matching OnlyBears tests
+- `nextjs/src/config/campfireScene.json` only for final camera/timing defaults
+- `nextjs/scripts/validate_bear_assets.py` for old-bear validation
+
+Avoid changing `CampfireScene.tsx` beyond minimal integration or debug wiring. Do not alter the general bear dialogue, campfire bears, LiveKit transport, or unrelated cabin props.
+
+## Stop Conditions
+
+Stop and report rather than compensating blindly if:
+
+- the shipped old-bear GLB does not match the armature in the Blender lab;
+- exported local rotations do not reproduce the Blender pose in Three.js;
+- the desired paw coverage is impossible without severe mesh distortion;
+- the cabin cannot fit a readable bear at plausible scale;
+- the computer or cabin transforms change during implementation.
+
+In those cases, capture measured evidence and request a design decision. Do not add another layer of runtime offsets.
+
+## Research References
+
+- Blender inverse kinematics constraints: `https://docs.blender.org/manual/en/latest/animation/constraints/tracking/ik_solver.html`
+- Blender pose libraries and reusable authored poses: `https://docs.blender.org/manual/en/latest/animation/armatures/posing/editing/pose_library.html`
+- Three.js skinned-mesh runtime model: `https://threejs.org/docs/#api/en/objects/SkinnedMesh`
+- Repository baseline commit: `3034d73`
+- Current failure/reference assets: `Claude outputs/old_grey_bear_onlybears_reveal.png`, `Claude outputs/onlybears_preview.mp4`, and the user-supplied screenshot
+
+---
+
+# Archived Professional Bear Animation Stability Plan
 
 ## Deterministic Bear Dialogue Handoff
+
+## Parallel Media Streams Prototype
+
+Twilio Media Streams is being added as an opt-in mirror alongside ConversationRelay, not as a replacement. With `TWILIO_MEDIA_STREAMS_MIRROR=true`, `/call` starts a named `both_tracks` stream to `WSS /media-stream` before connecting ConversationRelay. The server records stream lifecycle metadata only; it does not modify call audio.
+
+This prototype establishes the Heroku/ngrok WebSocket route, TwiML setup, signature validation, and track observability needed for a future bidirectional media pipeline. It does **not** create independent browser tracks: Twilio Media Streams sends raw telephone tracks to the server, while the browser Voice SDK still receives one remote call stream. Separate browser playback requires a second browser media transport or browser-owned per-bear TTS.
+
+## LiveKit Shared Conversation Orchestrator
+
+LiveKit now runs a shared `bear-coordinator` plus TTS-only `smokey-agent` and `maple-agent` workers. The coordinator transcribes the visitor once, plans the complete exchange early, and emits exact per-bear commands. The bear workers publish separate tracks and report completion before the coordinator advances. Planned interruptions split Smokey's text before TTS, so Maple's entry does not depend on retrospective transcript timing or mid-word cancellation.
 
 ### Objective
 

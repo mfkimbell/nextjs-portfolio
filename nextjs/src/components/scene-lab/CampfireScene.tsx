@@ -8,11 +8,12 @@ import { CampCritters, TipOver, RACCOON2_URL, type ActName } from "@/components/
 import { TIP_TABLES } from "@/components/scene-lab/tipTables";
 import { useComputerPointer, useRetroDesktop, useRetroDesktopTexture, type PcSounds, type PcState } from "@/components/scene-lab/RetroDesktop";
 import { pcBeep, pcChirp, pcKey, pcMouseClick, pcPark, pcPawThud, pcSeek, pcWake } from "@/lib/retroPcSounds";
-import OnlyBearsBear, { makeOnlyBearsState, type OnlyBearsState, type OnlyBearsTune } from "@/components/scene-lab/OnlyBearsBear";
+import OnlyBearsBear, { OB_T, makeOnlyBearsState, type OnlyBearsState, type OnlyBearsTune } from "@/components/scene-lab/OnlyBearsBear";
 import { oldBearLookFromConfig, useOldBearLook } from "@/components/scene-lab/oldBear";
 import { applyRockingPosture, makePostureState, readRockingPosture, type PostureState, type RockingPosture } from "@/components/scene-lab/rockingPosture";
 import {
-  applyChairRock, applyLegLock, makeLegLock, readRockMotion, rockAngle, rockPosture, rockState, type LegLock,
+  applyChairRock, applyHipPin, applyLegLock, applyLegSampler, makeHipPin, makeLegLock, makeLegSampler, readRockMotion, rockAngle, rockPosture, rockState,
+  type HipPin, type LegLock, type LegSampler,
 } from "@/components/scene-lab/rockingChair";
 import { RetroCrtTv, Table, Chair, meleeMenuHit, meleePageBackHit, meleeGridHit, type CrtScreen, type CrtMenu, type CrtPage } from "@/components/scene-lab/CampProps";
 import { roles } from "@/lib/experience";
@@ -60,6 +61,16 @@ const FIRE_CLICK_COOLDOWN_MS = 500;
 // (cursor, the CRT's own music track) is there too.
 const CRT_ZOOM_IN_URL = "/CRT/zoom into CRT.wav";
 const CRT_ZOOM_OUT_URL = "/CRT/zoom out of crt.wav";
+// The glide onto the monitor. Was sitting unused in public/sound - the PC
+// close-up only had the CRT degauss thump (pcWake), which is the monitor
+// switching on, not the camera travelling. This is the travel.
+const PC_GLIDE_IN_URL = "/sound/Go into computer.mp3";
+// Pulling back out reuses the between-scenes swoosh, slowed a touch so it
+// reads as a retreat rather than a second arrival.
+const PC_GLIDE_OUT_URL = "/sound/switch-between-scenes.wav";
+// The old bear's chair. Also unused until now - the cabin was the only
+// location with no ambience of its own at all.
+const ROCKING_CHAIR_SOUND_URL = "/sound/rocking-chair.mp3";
 const CRT_MUSIC_URL = "/sound/CRT music.mp3";
 /** CRT_MUSIC's volume multiplier at the two ends of the zoom: quiet while
  *  you're just standing in the arcade panel, lifted once the close-up is
@@ -462,7 +473,92 @@ const STOOL_URL = "/bear/1/Stool%20by%20Poly%20by%20Google%20-%20cLydFlVg-wI.glb
 const CAMERA_URL = "/bear/1/Camera%20by%20Poly%20by%20Google%20-%200nfSsetwy0Z.glb";
 // Don Carson chopping-block log with axe stuck in it. Source ~0.27 x 0.30 x
 // 0.28 with a small offset from origin; light anchor + baseScale places it.
-const LOG_AXE_URL = "/bear/1/Log%20%26%20Axe%20-%20Game%20Asset%20by%20Don%20Carson%20-%20ayOM0vyW_qd.glb";
+// Split in Blender into two nodes, "Log" and "Axe" (the axe's origin at its
+// own middle), so the axe can be flipped out of the block and back in - the
+// original single-mesh file is still in public/bear/1 for reference.
+const LOG_AXE_URL = "/bear/1/log_axe_split.glb";
+// Rowboat ("Boat by Pixel"). Source is 1.34 wide x 0.53 tall x 3.2 long once
+// its node's x100 is applied, centred on its middle - so it is lifted by half
+// its height (0.265) to sit on the ground. Gunwale (top edge) at 0.236 above
+// the middle, 0.664 out from the centre line amidships (measured in Blender).
+const BOAT_URL = "/bear/1/boat.glb";
+const BOAT_LIFT = 0.265;
+// Oar ("medieval fantasy - oar"): 3.09 long in its own units, lying along Z
+// with the grip at +Z and the blade at -Z; its bounding box is centred at
+// (-47.758, 0.0885, 0.219) after the file's own node transforms, and it is
+// 0.133 thick. Measured in Blender.
+const OAR_URL = "/bear/1/oar.glb";
+const OAR_CENTRE: [number, number, number] = [-47.758, 0.0885, 0.219];
+
+type OarPose = {
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: number;
+};
+const OAR_SCALE = 0.58;                  // ~1.8 boat units = a 2.2 m oar at the boat's lab size
+const OAR_HALF_THICK = 0.0665;           // half its thickness, in its own units
+const BOAT_GUNWALE_Y = BOAT_LIFT + 0.236;
+const BOAT_GUNWALE_X = 0.664;
+
+/** Oar axes (x = width, y = thickness, z = grip end) -> a pose, given where
+ *  its own +Z and +Y should point and where its middle goes. */
+function oarPose(z: THREE.Vector3, y: THREE.Vector3, centre: THREE.Vector3): OarPose {
+  const x = new THREE.Vector3().crossVectors(y, z).normalize();
+  const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+  return {
+    position: centre.toArray() as [number, number, number],
+    rotation: new THREE.Euler().setFromQuaternion(q).toArray().slice(0, 3) as [number, number, number],
+    scale: OAR_SCALE,
+  };
+}
+
+/**
+ * An oar leaning on the boat, in the boat's own frame (ground at y = 0,
+ * starboard side at +x): one end on the ground just out from the hull, the
+ * shaft resting on the gunwale, the other end up over the boat.
+ *   side    +1 starboard / -1 port
+ *   leanDeg how far off vertical
+ *   along   where along the boat (its length runs along z, about -1.6..1.6)
+ *   gripDown true = grip on the ground, blade up; false = blade on the ground
+ * Checked in Blender for the first one: the grip touches the ground and the
+ * shaft touches the gunwale's edge.
+ */
+function oarLean(side: 1 | -1, leanDeg: number, along: number, gripDown: boolean): OarPose {
+  const half = 1.545 * OAR_SCALE;
+  const lean = THREE.MathUtils.degToRad(leanDeg);
+  const contactX = BOAT_GUNWALE_X + OAR_HALF_THICK * OAR_SCALE + 0.01;
+  const footX = contactX + BOAT_GUNWALE_Y * Math.tan(lean);
+  // from the top end down to the foot
+  const shaftDown = new THREE.Vector3(side * Math.sin(lean), -Math.cos(lean), 0);
+  // flat faces the hull
+  const face = new THREE.Vector3(side * Math.cos(lean), Math.sin(lean), 0);
+  const centre = new THREE.Vector3(side * footX, 0.015, along).addScaledVector(shaftDown, -half);
+  return oarPose(gripDown ? shaftDown : shaftDown.clone().negate(), face, centre);
+}
+
+/** The oar people see on the site (campfire_oar). */
+const OAR_LEAN = oarLean(1, 22, 0.2, true);
+/**
+ * Spare poses to choose from in the lab (Boat oars -> show the spare oars).
+ * Each is its own selectable object, so any of them can be dragged too.
+ */
+const OAR_OPTIONS: { name: string; pose: OarPose }[] = [
+  { name: "campfire_oar_2", pose: oarLean(1, 22, 1.0, false) },       // starboard, blade down, toward the bow
+  { name: "campfire_oar_3", pose: oarLean(1, 38, -0.6, true) },       // starboard, lying back further
+  { name: "campfire_oar_4", pose: oarLean(1, 10, -1.2, true) },       // starboard, nearly upright
+  { name: "campfire_oar_5", pose: oarLean(-1, 22, 0.2, true) },       // port side, mirror of the main one
+  { name: "campfire_oar_6", pose: oarLean(-1, 30, -0.8, false) },     // port, blade down
+  {                                                                    // lying across the gunwales
+    name: "campfire_oar_7",
+    pose: oarPose(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, BOAT_GUNWALE_Y + OAR_HALF_THICK * OAR_SCALE, -0.3)),
+  },
+  {                                                                    // flat on the ground beside the hull
+    name: "campfire_oar_8",
+    pose: oarPose(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(BOAT_GUNWALE_X + 0.35, OAR_HALF_THICK * OAR_SCALE, 0)),
+  },
+];
 const LAPTOP_URL = "/bear/1/Laptop%20by%20Kenney%20-%20GnbwSUiVty.glb";
 // Quaternius A-frame tent, edited from the original download:
 //   - groundsheet removed (18 horizontal tris off the Green primitive, the
@@ -479,7 +575,7 @@ const LAPTOP_URL = "/bear/1/Laptop%20by%20Kenney%20-%20GnbwSUiVty.glb";
 const TENT_AFRAME_URL = "/bear/1/tent_a_frame.glb";
 const OLD_BEAR_TABLE_URL = "/bear/3/Table%20by%20Hunter%20Paramore%20-%207qAyGZnerYt.glb";
 const OLD_BEAR_CHAIR_URL = "/bear/3/Chair%20by%20Quaternius%20-%20iMNqRzPwwe.glb";
-const OLD_BEAR_COMPUTER_URL = "/bear/3/low_poly_computer_with_devices.glb";
+const OLD_BEAR_COMPUTER_URL = "/laptop.glb";
 const OLD_BEAR_BOOKS_URL = "/bear/3/Book%20Stack%20by%20Danni%20Bittman%20-%201WggoIFq8tx.glb";
 const OLD_BEAR_MUG_URL = "/bear/3/Mug%20With%20Office%20Tool%20by%20CreativeTrio%20-%204jSgnM5WWk.glb";
 const OLD_BEAR_BOXES_URL = "/bear/3/Cardboard%20Boxes%20by%20Quaternius%20-%20V9KbWC8Vd6.glb";
@@ -1039,6 +1135,14 @@ type HeadRegistry = Map<string, {
   position: THREE.Vector3;
   fishPosition?: THREE.Vector3;
 }>;
+/** The flipped axe, for the bears to follow with their eyes. */
+type AxeWatch = {
+  /** true from the throw until a beat after it lands back in the block */
+  active: boolean;
+  /** the axe's WORLD position, updated every frame of the flip */
+  position: THREE.Vector3;
+};
+
 type FishReaction = {
   phase: "idle" | "flying" | "impact-delay" | "fire" | "partner" | "return";
   /** WORLD position of what the back bears are reacting to: the fish itself
@@ -1176,6 +1280,12 @@ interface AnimalPlacement {
   /** euler radians applied INSIDE the placement, to correct a model authored in a
    *  different orientation. Separate from rotationY so facing still works normally. */
   modelRotation?: [number, number, number];
+  /** Mirror this animal left-to-right, so his left side becomes his right.
+   *  Done with a negative X scale on the placement group, which flips the
+   *  winding order of every face, so the materials are switched to DoubleSide
+   *  too - otherwise he renders inside-out. Toggleable per scene via
+   *  `mirrorConfigKey`. */
+  mirror?: boolean;
   /** runtime-animate the arms into a banjo-picking pose, overriding whatever the
    *  base clip writes for shoulder/upperarm/arm/hand on both sides. */
   banjoPlayer?: boolean;
@@ -3555,6 +3665,481 @@ function RockingChairRig({ children }: { children: ReactNode }) {
   return <group ref={ref}>{children}</group>;
 }
 
+/**
+ * The chopping block with its axe. Click it and the axe pops out of the log,
+ * spins end over end up in the air and drops back in exactly where it was
+ * (whole turns only, so it always lands in its original slot), with a small
+ * thunk through the log as it bites. While it is in the air it publishes its
+ * world position on `watch` so the bears turn their heads to follow it.
+ */
+function LogAndAxe({
+  config,
+  play,
+  watch,
+  onLand,
+  replayOnTune = false,
+}: {
+  config: CampfireSceneConfig;
+  /** bump to throw it (ignored while it is already in the air) */
+  play: number;
+  watch?: MutableRefObject<AxeWatch>;
+  onLand?: () => void;
+  /** Lab only: flip again whenever its settings change, so tuning can be seen. */
+  replayOnTune?: boolean;
+}) {
+  const gltf = useGLTF(LOG_AXE_URL) as unknown as { scene: THREE.Group };
+  const { model, axe, log, rest } = useMemo(() => {
+    const m = gltf.scene.clone(true);
+    m.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) { mesh.castShadow = true; mesh.receiveShadow = true; }
+    });
+    const a = m.getObjectByName("Axe") ?? null;
+    const l = m.getObjectByName("Log") ?? null;
+    return {
+      model: m,
+      axe: a,
+      log: l,
+      rest: a ? { p: a.position.clone(), q: a.quaternion.clone() } : null,
+    };
+  }, [gltf.scene]);
+
+  const flight = useRef<{ t: number } | null>(null);
+  const settle = useRef(-1);      // seconds since landing, for the thunk + the bears' last look
+  const lastPlay = useRef(play);
+  const onLandRef = useRef(onLand);
+  onLandRef.current = onLand;
+  const cfgRef = useRef(config);
+  cfgRef.current = config;
+  const tmpQ = useMemo(() => new THREE.Quaternion(), []);
+  const tmpQ2 = useMemo(() => new THREE.Quaternion(), []);
+  const tmpS = useMemo(() => new THREE.Vector3(), []);
+  const SPIN_AXIS = useMemo(() => new THREE.Vector3(0, 0, 1), []);  // through the flat of the blade: end over end
+  const UP = useMemo(() => new THREE.Vector3(0, 1, 0), []);
+
+  useEffect(() => {
+    if (lastPlay.current === play) return;
+    lastPlay.current = play;
+    if (flight.current) return;
+    flight.current = { t: 0 };
+    settle.current = -1;
+  }, [play]);
+
+  // lab: re-flip when a setting actually changes (compared to the last value,
+  // so React dev mode's double effect run on load does not throw it)
+  const tuneKey = [config.axeFlipHeight, config.axeFlipDuration, config.axeFlipSpins, config.axeFlipTwist, config.axeFlipApex].join(":");
+  const lastTuneKey = useRef(tuneKey);
+  useEffect(() => {
+    if (lastTuneKey.current === tuneKey) return;
+    lastTuneKey.current = tuneKey;
+    if (!replayOnTune || flight.current) return;
+    flight.current = { t: 0 };
+    settle.current = -1;
+  }, [tuneKey, replayOnTune]);
+
+  useFrame((_, delta) => {
+    if (!axe || !rest) return;
+    const c = cfgRef.current;
+    const dt = Math.min(delta, 1 / 20);
+    const n = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
+    const f = flight.current;
+    if (f) {
+      const dur = Math.max(0.3, n(c.axeFlipDuration, 1.4));
+      f.t += dt;
+      const u = Math.min(1, f.t / dur);
+      // height is asked for in WORLD metres; the axe lives in the GLB's tiny
+      // source units under the Selectable's scale, so convert
+      axe.parent?.getWorldScale(tmpS);
+      const unit = Math.max(1e-4, tmpS.y);
+      // Apex is placed LATER than the halfway point so the axe hangs on the
+      // way up and drops back quicker, which reads as weight. `axeFlipApex` is
+      // the fraction of the flight spent rising: 0.5 is a symmetric lob, 0.58
+      // makes the fall about 1.4x faster than the rise. Remapping u (rather
+      // than scaling h) keeps the parabola, so the height curve is still flat
+      // at the top and there is no kink at the apex.
+      const apex = Math.min(0.8, Math.max(0.3, n(c.axeFlipApex, 0.58)));
+      const p = u < apex ? 0.5 * (u / apex) : 0.5 + 0.5 * ((u - apex) / (1 - apex));
+      const h = (4 * p * (1 - p)) * n(c.axeFlipHeight, 1.2) / unit;
+      // whole turns only, so it comes down in exactly its own slot; eased
+      // out so the last turn slows into the catch
+      // negative = the other way round
+      const spins = Math.round(n(c.axeFlipSpins, 2));
+      const twists = Math.round(n(c.axeFlipTwist, 0));
+      const e = 1 - (1 - u) * (1 - u);
+      tmpQ.setFromAxisAngle(SPIN_AXIS, e * spins * Math.PI * 2);
+      tmpQ2.setFromAxisAngle(UP, e * twists * Math.PI * 2);
+      axe.quaternion.copy(rest.q).premultiply(tmpQ).premultiply(tmpQ2);
+      axe.position.copy(rest.p);
+      axe.position.y += h;
+      if (u >= 1) {
+        axe.position.copy(rest.p);
+        axe.quaternion.copy(rest.q);
+        flight.current = null;
+        settle.current = 0;
+        onLandRef.current?.();
+      }
+    } else if (settle.current >= 0) {
+      settle.current += dt;
+    }
+    // the bite: the block dips and rings for a moment
+    if (log) {
+      const st = settle.current;
+      const k = st >= 0 && st < 0.35 ? Math.exp(-st * 14) * Math.cos(st * 55) : 0;
+      log.scale.set(1 + 0.03 * k, 1 - 0.05 * k, 1 + 0.03 * k);
+    }
+    if (watch) {
+      const w = watch.current;
+      // they keep watching a moment after it lands, then let go
+      w.active = !!f || (settle.current >= 0 && settle.current < n(c.axeWatchHold, 0.6));
+      if (w.active) axe.getWorldPosition(w.position);
+    }
+  });
+
+  return <primitive object={model} />;
+}
+
+/**
+ * The wood pile, made of its 32 separate split logs. Every click sends the
+ * top log off: it tips off the stack, drops to the ground, rolls away to the
+ * RIGHT of the screen, curves round and rolls DOWN the screen until it is out
+ * of shot - then it is gone. Click again for the next one.
+ *
+ * "Right" and "down" are taken from the camera at the moment of the click, so
+ * it reads the same wherever the shot is framed. Every log is its own node in
+ * the GLB (authored in place at the pile's origin); on load each is re-centred
+ * on its own middle and measured - long axis (principal component of its
+ * vertices) and thickness - so it rolls about itself: it swings round to lie
+ * across its path, and turns distance / radius as it goes, so it never skids.
+ */
+type PileLog = {
+  node: THREE.Object3D;
+  rest: THREE.Vector3;
+  restQ: THREE.Quaternion;
+  radius: number;
+  /** its vertices where it lies in the pile (for picking the rightmost) */
+  points: THREE.Vector3[];
+  /** its long axis, in the pile's frame */
+  axis: THREE.Vector3;
+  /** which row of the stack it is in, 0 = the top row */
+  row: number;
+  /** set once it has been sent off. Everything here is in WORLD space: the
+   *  pile can be tilted and scaled in the lab, but the ground is the world's
+   *  flat y = critterGroundY, so the log is rolled on that - never on the
+   *  pile's own (possibly tilted) floor, which is what left it hovering. */
+  run: null | {
+    t: number;
+    /** where it lay, its turn, and its thickness - world */
+    from: THREE.Vector3;
+    fromQ: THREE.Quaternion;
+    radius: number;
+    /** path: right across the screen, then down it */
+    right: THREE.Vector3;
+    down: THREE.Vector3;
+    turn: number;          // signed angle right -> down, radians
+    /** length of the first leg (up to the tent, or woodRollRight) */
+    leg: number;
+    /** lays it flat and square to its first heading; the curve then just
+     *  turns this about the vertical, so it never flips end for end */
+    lie: THREE.Quaternion;
+    travelled: number;     // along the path, metres
+    offset: THREE.Vector3; // horizontal, from where it lay
+    roll: number;          // radians turned about its own axis
+    landed: boolean;
+    done: boolean;
+  };
+};
+
+function WoodPile({
+  config,
+  play,
+  replayOnTune = false,
+  onLogLand,
+  onEmpty,
+}: {
+  config: CampfireSceneConfig;
+  /** every bump sends the next log off */
+  play: number;
+  replayOnTune?: boolean;
+  onLogLand?: () => void;
+  /** the last log has gone */
+  onEmpty?: () => void;
+}) {
+  const gltf = useGLTF(WOOD_PILE_URL) as unknown as { scene: THREE.Group };
+  const { model, logs } = useMemo(() => {
+    const m = gltf.scene.clone(true);
+    const found: PileLog[] = [];
+    for (const node of [...m.children]) {
+      const verts: THREE.Vector3[] = [];
+      node.updateMatrixWorld(true);
+      node.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        const pos = mesh.geometry.getAttribute("position");
+        for (let i = 0; i < pos.count; i += 1) {
+          const v = new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+          verts.push(v);
+        }
+      });
+      if (!verts.length) continue;
+      const c = new THREE.Vector3();
+      for (const v of verts) c.add(v);
+      c.divideScalar(verts.length);
+      // long axis: power iteration on the covariance
+      let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+      for (const v of verts) {
+        const dx = v.x - c.x, dy = v.y - c.y, dz = v.z - c.z;
+        xx += dx * dx; xy += dx * dy; xz += dx * dz; yy += dy * dy; yz += dy * dz; zz += dz * dz;
+      }
+      const axis = new THREE.Vector3(1, 0.3, 0.2);
+      for (let k = 0; k < 24; k += 1) {
+        axis.set(xx * axis.x + xy * axis.y + xz * axis.z, xy * axis.x + yy * axis.y + yz * axis.z, xz * axis.x + yz * axis.y + zz * axis.z).normalize();
+      }
+      let rad = 0;
+      const d = new THREE.Vector3();
+      for (const v of verts) { d.copy(v).sub(c); rad += d.sub(axis.clone().multiplyScalar(d.dot(axis))).length(); }
+      rad /= verts.length;
+      // The pile is 26 split logs plus 6 thin sticks / splinters (about a
+      // quarter of a log's thickness). Only the logs are wanted: drop the rest.
+      if (rad < 0.04) {
+        node.removeFromParent();
+        continue;
+      }
+      // re-centre the geometry on the log's middle so it turns about itself
+      node.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.geometry = mesh.geometry.clone();
+        mesh.geometry.translate(-c.x, -c.y, -c.z);
+      });
+      node.position.add(c);
+      found.push({
+        node,
+        rest: node.position.clone(),
+        restQ: node.quaternion.clone(),
+        radius: Math.max(0.01, rad),
+        points: verts,
+        axis: axis.clone(),
+        row: 0,
+        run: null,
+      });
+    }
+    // Rows. The pile is a pyramid of rows (8, 7, 6, 5 from the bottom), but the
+    // whole stack leans a little, so raw height does not separate them - the
+    // top row's low end is as low as the next row's high end. Fit a line
+    // across the logs (the lean), measure each log's height above THAT, and
+    // start a new row wherever there is a jump of most of a log's thickness.
+    // Checked against the model: rows of 5 / 6 / 7 / 8, clean.
+    if (found.length) {
+      // the logs all lie the same way; measure positions ACROSS them (fitting
+      // both horizontal directions is ill-conditioned - the logs barely move
+      // along their own length), fit height = a + b * across, and take each
+      // log's height above that line
+      const along = new THREE.Vector3();
+      for (const lg of found) along.add(lg.axis.x > 0 ? lg.axis.clone().negate() : lg.axis);
+      along.setY(0);
+      if (along.lengthSq() < 1e-8) along.set(1, 0, 0);
+      along.normalize();
+      const across = new THREE.Vector3(-along.z, 0, along.x);
+      let n0 = 0, su = 0, sy = 0, suu = 0, suy = 0;
+      for (const lg of found) {
+        const u = lg.rest.dot(across);
+        n0 += 1; su += u; sy += lg.rest.y; suu += u * u; suy += u * lg.rest.y;
+      }
+      const den = n0 * suu - su * su;
+      const slope = Math.abs(den) > 1e-12 ? (n0 * suy - su * sy) / den : 0;
+      const icpt = (sy - slope * su) / n0;
+      const lift = (lg: PileLog) => lg.rest.y - (icpt + slope * lg.rest.dot(across));
+      const byHeight = [...found].sort((p, q) => lift(q) - lift(p));
+      let row = 0;
+      for (let i = 0; i < byHeight.length; i += 1) {
+        if (i > 0 && lift(byHeight[i - 1]) - lift(byHeight[i]) > 0.7 * byHeight[i].radius) row += 1;
+        byHeight[i].row = row;
+      }
+    }
+    return { model: m, logs: found };
+  }, [gltf.scene]);
+
+  const launched = useRef(0);       // how many have been sent
+  const pending = useRef(0);        // clicks not yet turned into a launch
+  const lastPlay = useRef(play);
+  const cfgRef = useRef(config);
+  cfgRef.current = config;
+  const onLandRef = useRef(onLogLand);
+  onLandRef.current = onLogLand;
+  const onEmptyRef = useRef(onEmpty);
+  onEmptyRef.current = onEmpty;
+  const scratch = useMemo(() => ({
+    q: new THREE.Quaternion(), q2: new THREE.Quaternion(), qm: new THREE.Quaternion(), qmInv: new THREE.Quaternion(),
+    s: new THREE.Vector3(), v: new THREE.Vector3(), dir: new THREE.Vector3(), axis: new THREE.Vector3(),
+    up: new THREE.Vector3(0, 1, 0), id: new THREE.Quaternion(),
+  }), []);
+
+  const restack = useCallback(() => {
+    for (const lg of logs) {
+      lg.node.position.copy(lg.rest);
+      lg.node.quaternion.copy(lg.restQ);
+      lg.node.visible = true;
+      lg.run = null;
+    }
+    launched.current = 0;
+    pending.current = 0;
+  }, [logs]);
+
+  useEffect(() => {
+    if (lastPlay.current === play) return;
+    pending.current += Math.max(0, play - lastPlay.current);
+    lastPlay.current = play;
+  }, [play]);
+
+  const tuneKey = [config.woodRollRight, config.woodRollTurnRadius, config.woodRollAway, config.woodRollTime, config.woodRollToTent, config.woodRollTentGap].join(":");
+  const lastTuneKey = useRef(tuneKey);
+  useEffect(() => {
+    if (lastTuneKey.current === tuneKey) return;
+    lastTuneKey.current = tuneKey;
+    if (!replayOnTune) return;
+    restack();
+    pending.current = 1;
+  }, [tuneKey, replayOnTune, restack]);
+
+  useFrame(({ camera, scene }, delta) => {
+    if (!logs.length) return;
+    const c = cfgRef.current;
+    const n = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
+    const dt = Math.min(delta, 1 / 20);
+    const S = scratch;
+    model.updateWorldMatrix(true, false);
+    model.getWorldQuaternion(S.qm);
+    model.getWorldScale(S.s);
+    const unit = Math.max(1e-4, S.s.x);
+    const groundW = n(c.critterGroundY, -0.02);
+
+    // a click: send the next log, with "right" and "down the screen" read off
+    // the camera now, flattened onto the (world) ground
+    while (pending.current > 0 && launched.current < logs.length) {
+      pending.current -= 1;
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).setY(0);
+      const down = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion).setY(0);
+      if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+      if (down.lengthSq() < 1e-8) down.set(0, 0, 1);
+      right.normalize(); down.normalize();
+      // Which log goes next: the TOP row is cleared first (so nothing is ever
+      // left hovering over a gap), and in that row the one furthest to the
+      // RIGHT of the screen - the outer end - so it has a clear run.
+      let lg: PileLog | null = null;
+      let best = -Infinity;
+      let topRow = Infinity;
+      for (const cand of logs) if (!cand.run && cand.row < topRow) topRow = cand.row;
+      for (const cand of logs) {
+        if (cand.run || cand.row !== topRow) continue;
+        S.v.copy(cand.rest).applyMatrix4(model.matrixWorld);
+        const score = S.v.x * right.x + S.v.z * right.z;
+        if (score > best) { best = score; lg = cand; }
+      }
+      if (!lg) break;
+      launched.current += 1;
+      const from = lg.rest.clone().applyMatrix4(model.matrixWorld);
+      const fromQ = S.qm.clone().multiply(lg.restQ);
+      // first leg: right across the screen - or, if the tent is off that way,
+      // straight at the tent, stopping just short of it
+      let leg = Math.max(0, n(c.woodRollRight, 3.5));
+      const tent = (n(c.woodRollToTent, 1) >= 0.5) ? scene.getObjectByName("campfire_tent") : undefined;
+      if (tent) {
+        const toTent = tent.getWorldPosition(new THREE.Vector3()).sub(from).setY(0);
+        const dist = toTent.length();
+        if (dist > 1e-3 && toTent.dot(right) / dist > Math.cos(THREE.MathUtils.degToRad(75))) {
+          right.copy(toTent).normalize();
+          leg = Math.max(0.3, dist - Math.max(0, n(c.woodRollTentGap, 1.0)));
+        }
+      }
+      const axisW = lg.axis.clone().applyQuaternion(S.qm).normalize();
+      const flatW = axisW.clone().setY(0);
+      if (flatW.lengthSq() < 1e-8) flatW.set(1, 0, 0);
+      flatW.normalize();
+      const across = new THREE.Vector3().crossVectors(S.up, right).normalize();
+      if (flatW.dot(across) < 0) across.negate();
+      const lie = new THREE.Quaternion().setFromUnitVectors(flatW, across)
+        .multiply(new THREE.Quaternion().setFromUnitVectors(axisW, flatW));
+      const turn = Math.atan2(right.clone().cross(down).y, right.dot(down));
+      lg.run = {
+        t: 0, from, fromQ, radius: lg.radius * unit, right, down, turn, leg, lie,
+        travelled: 0, offset: new THREE.Vector3(), roll: 0, landed: false, done: false,
+      };
+      if (launched.current >= logs.length) onEmptyRef.current?.();
+    }
+    pending.current = 0;
+
+    const turnR = Math.max(0.01, n(c.woodRollTurnRadius, 0.8));
+    const legAway = Math.max(0, n(c.woodRollAway, 9));
+    const dur = Math.max(0.5, n(c.woodRollTime, 3.6));
+    const fallT = 0.35;
+    S.qmInv.copy(S.qm).invert();
+
+    for (const lg of logs) {
+      const run = lg.run;
+      if (!run || run.done) continue;
+      run.t += dt;
+      const r = run.radius;
+      // path length: the straight to the right, the curve, then away
+      const straight1 = Math.max(0, run.leg - turnR);
+      const arc = turnR * Math.abs(run.turn);
+      const total = straight1 + arc + legAway;
+      // it picks up speed as it goes (u^1.5 along the path)
+      const u = Math.min(1, run.t / dur);
+      const target = total * Math.pow(u, 1.5);
+      const headingAt = (sAlong: number) => (sAlong <= straight1 ? 0
+        : sAlong >= straight1 + arc ? run.turn
+        : Math.sign(run.turn) * ((sAlong - straight1) / turnR));
+      // walk the path in small steps so the curve is followed faithfully
+      let left = target - run.travelled;
+      while (left > 1e-6) {
+        const step = Math.min(left, 0.02);
+        S.dir.copy(run.right).applyAxisAngle(S.up, headingAt(run.travelled + step * 0.5));
+        run.offset.addScaledVector(S.dir, step);
+        run.travelled += step;
+        run.roll += step / r;
+        left -= step;
+      }
+      const ang = headingAt(run.travelled);
+      S.dir.copy(run.right).applyAxisAngle(S.up, ang);
+
+      // off the stack and down onto the ground (gravity), a couple of small
+      // bounces, then it stays ON the ground: centre exactly one radius up
+      const restY = groundW + r;
+      const drop = Math.max(0, run.from.y - restY);
+      let y: number;
+      if (run.t < fallT) {
+        const f = run.t / fallT;
+        y = run.from.y - drop * f * f;
+      } else {
+        const b = run.t - fallT;
+        y = restY + drop * 0.15 * Math.exp(-b * 7) * Math.abs(Math.sin(b * 18));
+        if (!run.landed) { run.landed = true; onLandRef.current?.(); }
+      }
+      S.v.set(run.from.x + run.offset.x, y, run.from.z + run.offset.z);
+
+      // lie across the path: flat and square to the way it is going (its first
+      // heading, turned with the curve), swung in as it drops off the stack,
+      // then roll about that axis - distance / radius, no skidding
+      S.axis.crossVectors(S.up, S.dir).normalize();
+      S.q.setFromAxisAngle(S.up, ang).multiply(run.lie);
+      const k = Math.min(1, run.t / fallT);
+      S.q2.copy(S.id).slerp(S.q, k * k * (3 - 2 * k));
+      S.q.setFromAxisAngle(S.axis, run.roll);
+      S.q.multiply(S.q2).multiply(run.fromQ);          // world rotation
+
+      // back into the pile's own frame for the node
+      lg.node.position.copy(model.worldToLocal(S.v));
+      lg.node.quaternion.copy(S.qmInv).multiply(S.q);
+
+      if (u >= 1) { run.done = true; lg.node.visible = false; }
+    }
+  });
+
+  return <primitive object={model} />;
+}
+
 function GLBModel({ url }: { url: string }) {
   const gltf = useGLTF(url) as unknown as { scene: THREE.Group };
   const model = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
@@ -3694,6 +4279,39 @@ function LitWoodenCabin({ config }: { config: CampfireSceneConfig }) {
     [config.deskBugR, config.deskBugG, config.deskBugB]
   );
 
+  // Where the spot points, in the model's own frame.
+  //
+  // yaw turns it about the vertical, pitch tips it up and down: -90 is straight
+  // down (a porch lamp), 0 is level, +90 straight up. The target just has to be
+  // somewhere along the ray, so the arbitrary 10 units is only there to keep it
+  // clear of the light itself.
+  //
+  // NOTE: an ancestor group mirrors X, so a positive yaw swings the beam the
+  // opposite way to what the number suggests. Easier to live with than to
+  // special-case, since the slider is used by eye.
+  const lampSpotRef = useRef<THREE.SpotLight>(null);
+  const lampTargetRef = useRef<THREE.Object3D>(null);
+  const lampAim = useMemo<[number, number, number]>(() => {
+    const yaw = THREE.MathUtils.degToRad(config.arcadeCabinLampYawDeg);
+    const pitch = THREE.MathUtils.degToRad(config.arcadeCabinLampPitchDeg);
+    const r = 10;
+    return [
+      config.arcadeCabinLampX + Math.sin(yaw) * Math.cos(pitch) * r,
+      config.arcadeCabinLampY + Math.sin(pitch) * r,
+      config.arcadeCabinLampZ + Math.cos(yaw) * Math.cos(pitch) * r,
+    ];
+  }, [
+    config.arcadeCabinLampX, config.arcadeCabinLampY, config.arcadeCabinLampZ,
+    config.arcadeCabinLampYawDeg, config.arcadeCabinLampPitchDeg,
+  ]);
+  // three defaults a spotLight's target to an object parked at the origin and
+  // NOT in the scene graph, so it never updates. Point it at ours instead.
+  useEffect(() => {
+    if (lampSpotRef.current && lampTargetRef.current) {
+      lampSpotRef.current.target = lampTargetRef.current;
+    }
+  }, [config.arcadeCabinLampDirectional]);
+
   return (
     <>
       <primitive object={model} />
@@ -3712,15 +4330,41 @@ function LitWoodenCabin({ config }: { config: CampfireSceneConfig }) {
       )}
       {/* Sits in the model's frame so it tracks the lantern through the mirror
           and every scale above it. `distance` stays in WORLD units - three does
-          not scale light falloff by the parent transform. */}
-      <pointLight
-        position={[config.arcadeCabinLampX, config.arcadeCabinLampY, config.arcadeCabinLampZ]}
-        color={lampColor}
-        intensity={config.arcadeCabinLampIntensity}
-        distance={config.arcadeCabinLampDistance}
-        decay={config.arcadeCabinLampDecay}
-        castShadow={false}
-      />
+          not scale light falloff by the parent transform.
+
+          A pointLight has no direction - it radiates equally every way - so
+          aiming it means swapping in a spotLight. `arcadeCabinLampDirectional`
+          picks which: 0 keeps the original omnidirectional lamp, 1 gives a cone
+          aimed by yaw/pitch. Intensity, reach, decay and colour are shared, so
+          flipping the toggle only changes the shape of the pool of light. */}
+      {config.arcadeCabinLampDirectional >= 0.5 ? (
+        <>
+          <spotLight
+            ref={lampSpotRef}
+            position={[config.arcadeCabinLampX, config.arcadeCabinLampY, config.arcadeCabinLampZ]}
+            color={lampColor}
+            intensity={config.arcadeCabinLampIntensity}
+            distance={config.arcadeCabinLampDistance}
+            decay={config.arcadeCabinLampDecay}
+            angle={THREE.MathUtils.degToRad(config.arcadeCabinLampConeDeg)}
+            penumbra={config.arcadeCabinLampPenumbra}
+            castShadow={false}
+          />
+          {/* A spotLight aims at its `target`, which has to be a real object in
+              the graph. Keeping it a sibling here means it inherits the same
+              mirror and scale as the light, so the aim stays put. */}
+          <object3D ref={lampTargetRef} position={lampAim} />
+        </>
+      ) : (
+        <pointLight
+          position={[config.arcadeCabinLampX, config.arcadeCabinLampY, config.arcadeCabinLampZ]}
+          color={lampColor}
+          intensity={config.arcadeCabinLampIntensity}
+          distance={config.arcadeCabinLampDistance}
+          decay={config.arcadeCabinLampDecay}
+          castShadow={false}
+        />
+      )}
     </>
   );
 }
@@ -6114,25 +6758,22 @@ function StringBulbBloom({
 }
 
 /**
- * The screen face of low_poly_computer_with_devices.glb.
+ * The screen face of laptop.glb after its normalization into the cabin frame.
  *
- * Picked by MESH, not by material: the file ships a single "base" material for
- * the entire machine - tower, keyboard, mouse mat and all - so there is no
- * "screen" material to look for. Object_20 is the only flat quad in the file
- * (0.994 x 0.785 x 0.0) and it stands at the monitor's front face, z -0.257,
- * against the case's own -1.5..-0.17. That is the screen.
+ * Picked by MESH, not by material. The laptop screen is the flat
+ * Cube.002_Material.001_0 mesh; its parent model is normalized below so this
+ * component can keep using the cabin's canonical screen frame.
  */
-const COMPUTER_SCREEN_MESH = "Object_20";
+const COMPUTER_SCREEN_MESH = "Cube.002_Material.001_0";
 
 /*
- * Where that quad sits in the model's own frame, read out of the GLB: its
- * node is translated to (-0.0993, 0.8842, -0.2574), scaled 1.0021, and the
- * quad itself spans +-0.4958 x +-0.3916 facing +Z. (The file's two root
- * nodes rotate X by -90 and +90 degrees, which cancel.) The desktop's
- * picture plane goes 4mm proud of it, so it is always the nearer hit.
+ * The laptop is normalized into the old computer's local frame in LitComputer
+ * below. Its screen is 0.978 x 0.667 in that frame and faces +Z. Keeping this
+ * canonical screen frame means the bear pose and close camera do not need a
+ * second coordinate conversion just because the prop changed.
  */
 const PC_SCREEN_CENTER: [number, number, number] = [-0.0993, 0.8842, -0.2574 + 0.004];
-const PC_SCREEN_SIZE: [number, number] = [0.4958 * 2 * 1.0021, 0.3916 * 2 * 1.0021];
+const PC_SCREEN_SIZE: [number, number] = [0.9783, 0.6675];
 
 /** What the cabin sector needs to put the desktop on the monitor. */
 type PcGlassProps = {
@@ -6149,6 +6790,7 @@ type PcGlassProps = {
   enabled: boolean;
   /** The picture plane, for the close-up camera to aim at. */
   screenRef: React.MutableRefObject<THREE.Mesh | null>;
+  onlyBearsState?: React.MutableRefObject<OnlyBearsState>;
 };
 
 /**
@@ -6163,6 +6805,7 @@ type PcGlassProps = {
 function PcGlass({ pc, body, brightness = 1 }: { pc: PcGlassProps; body: THREE.Object3D; brightness?: number }) {
   const [over, setOver] = useState(false);
   const bodyRef = useRef<THREE.Object3D | null>(body);
+  const hingeRef = useRef<THREE.Group>(null);
   bodyRef.current = body;
   const onOver = pc.onOver;
   useComputerPointer({
@@ -6175,13 +6818,22 @@ function PcGlass({ pc, body, brightness = 1 }: { pc: PcGlassProps; body: THREE.O
     onOver: useCallback((o: boolean) => { setOver(o); onOver(o); }, [onOver]),
   });
   const texture = useRetroDesktopTexture(pc.stateRef, pc.hot && over);
+  useFrame(() => {
+    const state = pc.onlyBearsState?.current;
+    const closing = state?.mode === "out"
+      ? THREE.MathUtils.smoothstep(state.exitT, 0, OB_T.exitFoldEnd)
+      : 0;
+    if (hingeRef.current) hingeRef.current.rotation.x = -Math.PI * 0.78 * closing;
+  });
   return (
-    <mesh ref={pc.screenRef} position={PC_SCREEN_CENTER}>
-      <planeGeometry args={PC_SCREEN_SIZE} />
-      {/* colour multiplies the picture: >1 brightens the glass (not tone
-          mapped, so it can go past white), <1 dims it */}
-      <meshBasicMaterial map={texture} toneMapped={false} color={new THREE.Color().setScalar(Math.max(0, brightness))} />
-    </mesh>
+    <group ref={hingeRef} position={[PC_SCREEN_CENTER[0], PC_SCREEN_CENTER[1] - PC_SCREEN_SIZE[1] / 2, PC_SCREEN_CENTER[2]]}>
+      <mesh ref={pc.screenRef} position={[0, PC_SCREEN_SIZE[1] / 2, 0]}>
+        <planeGeometry args={PC_SCREEN_SIZE} />
+        {/* colour multiplies the picture: >1 brightens the glass (not tone
+            mapped, so it can go past white), <1 dims it */}
+        <meshBasicMaterial map={texture} toneMapped={false} color={new THREE.Color().setScalar(Math.max(0, brightness))} />
+      </mesh>
+    </group>
   );
 }
 
@@ -6234,7 +6886,13 @@ function LitComputer({ config, pc }: { config: CampfireSceneConfig; pc?: PcGlass
 
   return (
     <>
-      <primitive object={model} />
+      <group
+        position={[-0.0993, 0.4676, -0.5784]}
+        rotation={[0, -Math.PI / 2, 0]}
+        scale={0.055}
+      >
+        <primitive object={model} />
+      </group>
       {pc ? <PcGlass pc={pc} body={model} brightness={Number.isFinite(config.deskComputerGlassBrightness) ? config.deskComputerGlassBrightness : 1} /> : null}
     </>
   );
@@ -7577,6 +8235,7 @@ function Animal({
   cords,
   bearVoiceRef,
   fishReactionRef,
+  axeWatchRef,
   banjoTimeRef,
   seed = 0,
 }: {
@@ -7590,6 +8249,8 @@ function Animal({
   cords?: RefObject<CordRegistry>;
   bearVoiceRef?: BearVoiceStateRef;
   fishReactionRef?: MutableRefObject<FishReaction>;
+  /** The flipped axe, while it is in the air - every log bear watches it. */
+  axeWatchRef?: MutableRefObject<AxeWatch>;
   banjoTimeRef?: MutableRefObject<number>;
   seed?: number;
 }) {
@@ -7684,9 +8345,24 @@ function Animal({
   // rocking-chair bear: legs held still (no sit_log kick), and this frame's
   // posture with the rock's lean / hunch folded in
   const legLockRef = useRef<LegLock | null>(null);
+  // Smokey / Maple at the campfire: their legs run on their own clock (see
+  // the voice-bear block in useFrame) instead of sit_log's knee bounce
+  const legSamplerRef = useRef<{ s: LegSampler; duration: number; t: number; pin: HipPin | null } | null>(null);
   const rockPostureRef = useRef<RockingPosture>({ ...ROCKING_CHAIR_POSTURE });
   const chairRestQRef = useRef<Partial<Record<string, THREE.Quaternion>>>({});
   const chairRestSRef = useRef<Partial<Record<string, THREE.Vector3>>>({});
+  const chairGuardRef = useRef(new Map<string, { bone: THREE.Object3D; q: THREE.Quaternion }>());
+  /*
+   * three's mixer only rewrites a bone when its clip value CHANGED since last
+   * frame, so a bone on a constant track would still be holding last frame's
+   * posed rotation when the pose goes on again - and multiplying onto that
+   * spins it a little more every frame. Before the mixer runs (priority -1),
+   * hand every posed bone back its clip rotation, so the mixer either
+   * overwrites it with the new value or leaves exactly the right one.
+   */
+  useFrame(() => {
+    for (const g of chairGuardRef.current.values()) g.bone.quaternion.copy(g.q);
+  }, -1);
   // Banjo-bear Food-socket freeze: sit_log animates Food to trace the right paw
   // over the loop. The lab pauses the clip at a single frame so Food (and any
   // parented banjo) stays put; on the site the clip runs unpaused, so we sample
@@ -7697,6 +8373,10 @@ function Animal({
   const banjoFoodPos = useRef<THREE.Vector3 | null>(null);
   const banjoFoodQuat = useRef<THREE.Quaternion | null>(null);
   const banjoFoodScale = useRef<THREE.Vector3 | null>(null);
+  const centerBoneRef = useRef<THREE.Bone | null>(null);
+  // null = not captured yet. Captured on the first frame AFTER the mixer has
+  // run, never at load time - see the pin in useFrame for why.
+  const centerRestYRef = useRef<number | null>(null);
 
   // Per-bear pose is now baked directly into per-bear GLBs by
   // /api/dev/bake-bear-pose (invoked when the lab saves). Site loads the
@@ -7738,6 +8418,8 @@ function Animal({
     mouthBoneRef.current = null;
     faceMeshRef.current = null;
     mouthRigRef.current = null;
+    centerBoneRef.current = null;
+    centerRestYRef.current = null;
     {
       const want = ["jaw", "lip_lower", "lip_upper", "lip_corner_L", "lip_corner_R"] as const;
       const found: Partial<Record<(typeof want)[number], THREE.Object3D>> = {};
@@ -7769,6 +8451,80 @@ function Animal({
         blink: dict.eyeBlink ?? -1,
       };
     });
+
+    /*
+     * A mirrored placement has a negative scale, which reverses the winding
+     * order of every triangle. With the default FrontSide culling that renders
+     * him inside-out - you see the inside of his far cheek through his face.
+     * DoubleSide draws both windings, which is what MirroredGLBModel does for
+     * the mirrored cabin for exactly the same reason.
+     */
+    if (placement.mirror) {
+      model.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh || !m.material) return;
+        // Cloned first. three's clone(true) SHARES materials between instances,
+        // and bear_old_grey.glb is also the OnlyBears bear and the contact
+        // bear - flipping side in place would quietly turn those DoubleSide
+        // too. Same trap as the shared beard geometry.
+        if (Array.isArray(m.material)) {
+          m.material = m.material.map((mat) => {
+            const c = mat.clone();
+            c.side = THREE.DoubleSide;
+            return c;
+          });
+        } else {
+          const c = m.material.clone();
+          c.side = THREE.DoubleSide;
+          m.material = c;
+        }
+      });
+    }
+
+    // Collected into an array as well as the ref: TS cannot see a closure
+    // assignment, so reading centerBoneRef.current below narrows to `never`
+    // off the `= null` reset above. Same dodge as LitComputer's `found`.
+    const centerFound: THREE.Bone[] = [];
+    model.traverse((o) => {
+      const bone = o as THREE.Bone;
+      if (!centerBoneRef.current && bone.isBone && o.name === "center") {
+        centerBoneRef.current = bone;
+        centerFound.push(bone);
+      }
+    });
+
+    // The seated height is read from the CLIP DATA, never sampled off the live
+    // bone.
+    //
+    // Sampling the bone is a race. At load it still holds the bind pose
+    // (center.y = 0.8376) rather than what sit_log holds it at (0.0156), and
+    // this effect re-runs on every model swap, hot reload and action change -
+    // so each re-sample caught the rig at whatever point a crossfade happened
+    // to be at, and the bears settled at a different height every time. That
+    // is the random Y drift. Clip data is the same number on every run.
+    //
+    // Only pins when the track is genuinely constant. If a future clip animates
+    // the root up and down, the pin stays off and the motion survives.
+    {
+      const cb = centerFound[0] ?? null;
+      const clip = gltf.animations?.find((c) => c.name === "sit_log");
+      const track = cb && clip
+        ? clip.tracks.find((t) => t.name === `${cb.name}.position` || t.name.endsWith(`.${cb.name}.position`))
+        : undefined;
+      let restY: number | null = null;
+      if (track && track.values.length >= 3) {
+        let min = Infinity;
+        let max = -Infinity;
+        for (let i = 1; i < track.values.length; i += 3) {
+          const v = track.values[i];
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+        if (max - min < 1e-4) restY = track.values[1];
+        else console.warn("[scene] bear: sit_log animates center.y - leaving the root unpinned");
+      }
+      centerRestYRef.current = restY;
+    }
 
     // The model has no shared skeleton between placements; cache its jaw once
     // so voice motion can layer over the mixer's current jaw pose each frame.
@@ -7863,28 +8619,43 @@ function Animal({
     cubHeadBoneRef.current = null;
     cubEarLRef.current = null;
     cubEarRRef.current = null;
-    if (placement.url !== CUB_URL) return;
-    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-    model.traverse((o) => {
-      const b = o as THREE.Bone;
-      if (!b.isBone) return;
-      const n = norm(o.name);
-      if (!cubHeadBoneRef.current && n === "headx") {
-        cubHeadBoneRef.current = b;
-        cubHeadRestQ.current = b.quaternion.clone();
-      } else if (!cubEarLRef.current && n === "cear01l") {
-        cubEarLRef.current = b;
-        cubEarLRestQ.current = b.quaternion.clone();
-      } else if (!cubEarRRef.current && n === "cear01r") {
-        cubEarRRef.current = b;
-        cubEarRRestQ.current = b.quaternion.clone();
-      }
-    });
+    // (Not an early return: the bears' leg setup below has to run too. It used
+    // to `return` here for anything that wasn't a cub, so the leg sampler and
+    // the rocking chair's leg lock were never built and the legs kept bouncing.)
+    if (placement.url === CUB_URL) {
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+      model.traverse((o) => {
+        const b = o as THREE.Bone;
+        if (!b.isBone) return;
+        const n = norm(o.name);
+        if (!cubHeadBoneRef.current && n === "headx") {
+          cubHeadBoneRef.current = b;
+          cubHeadRestQ.current = b.quaternion.clone();
+        } else if (!cubEarLRef.current && n === "cear01l") {
+          cubEarLRef.current = b;
+          cubEarLRestQ.current = b.quaternion.clone();
+        } else if (!cubEarRRef.current && n === "cear01r") {
+          cubEarRRef.current = b;
+          cubEarRRestQ.current = b.quaternion.clone();
+        }
+      });
+    }
+    if (placement.bearId === "back_left_log" || placement.bearId === "back_right_log") {
+      const want = (placement.animation ?? "").toLowerCase();
+      const clip = gltf.animations?.find((c) => c.name.toLowerCase() === want)
+        ?? gltf.animations?.find((c) => want && c.name.toLowerCase().includes(want));
+      legSamplerRef.current = clip
+        ? { s: makeLegSampler(model, clip), duration: clip.duration, t: placement.animationOffset ?? 0, pin: makeHipPin(model, clip) }
+        : null;
+    } else {
+      legSamplerRef.current = null;
+    }
     if (placement.rockingChairPose) {
       const want = (placement.animation ?? "").toLowerCase();
       const clip = gltf.animations?.find((c) => c.name.toLowerCase() === want)
         ?? gltf.animations?.find((c) => want && c.name.toLowerCase().includes(want));
       legLockRef.current = makeLegLock(model, clip);
+      chairGuardRef.current.clear();
       const partNames = new Set<string>(ROCKING_CHAIR_BONE_NAMES);
       model.traverse((o) => {
         const b = o as THREE.Bone;
@@ -7896,7 +8667,7 @@ function Animal({
       });
     }
 
-  }, [model, placement.url, placement.bearId, placement.banjoPlayer, placement.rockingChairPose, placement.animation, gltf.animations, seed]);
+  }, [model, placement.mirror, placement.url, placement.bearId, placement.banjoPlayer, placement.rockingChairPose, placement.animation, placement.animationOffset, gltf.animations, seed]);
 
   const { actions, names: actionNames, mixer } = useAnimations(gltf.animations || [], groupRef);
   // Which model the mixer's bindings were made against (see the play effect).
@@ -7928,7 +8699,23 @@ function Animal({
     wantFish: false,
     fishHold: 0,
     fishCooldown: 3.5 + seed * 1.4,
+    // Smokey checking his chords: glances down at his fret hand now and then
+    wantFret: false,
+    fretHold: 0,
+    fretCooldown: 2.5 + seed * 1.1,
+    /** 0..1, how far into a fret glance he is (eases the extra neck & tilt) */
+    fretW: 0,
+    /** seconds into the slow look back up from the frets; -1 = not returning */
+    fretBack: -1,
+    /** where his gaze was when he started looking back up */
+    fretFrom: new THREE.Vector3(),
+    /** how long this look back takes (Smokey's frets / Maple's fish) */
+    backTime: 1.2,
   });
+  const fretLookAt = useMemo(() => new THREE.Vector3(), []);
+  // watching the flipped axe: a smoothed point on it, and how much of the
+  // head it has (eases in and out so nobody snaps)
+  const axeLookRef = useRef({ w: 0, init: false, target: new THREE.Vector3() });
   const tmpV = useMemo(() => new THREE.Vector3(), []);
   const tmpV2 = useMemo(() => new THREE.Vector3(), []);
   const fishLookEnd = useMemo(() => new THREE.Vector3(), []);
@@ -8092,6 +8879,14 @@ function Animal({
     if (!groupRef.current) return;
     const c = configRef.current;
     const o = c.objectOverrides?.[name] ?? EMPTY_OVERRIDE;
+
+    // Honour the override's `hide`. Every other placed prop goes through
+    // <Selectable>, which has a `hidden` prop; animals are placed by this
+    // component instead and were never wired to it, so the lab's hide toggle
+    // silently did nothing for any bear, deer or owl. Driven here rather than
+    // via a React `visible` prop so toggling it in the lab takes effect without
+    // re-rendering a scene tree this size.
+    groupRef.current.visible = !(o.hide >= 0.5);
     const s = placement.scale * c.animalScale * o.scale;
     const seat = BENCH_MODELS[placement.bench ?? 0] ?? OLD_LOG;
     const baseY = placement.sitOnBench ? seat.top * c.benchScale : y;
@@ -8101,7 +8896,23 @@ function Animal({
       z + c.animalZ + o.dz
     );
     groupRef.current.rotation.set(o.rotX, placement.rotationY + o.rotY, o.rotZ, "XZY");
-    groupRef.current.scale.set(s, s, s);
+    // Negative X mirrors a placement left-to-right. Nothing uses it today -
+    // the rocking-chair bear is mirrored in its POSE DATA instead
+    // (rockingChairBearPose.json), which avoids reversed winding entirely -
+    // but it is kept for a model that cannot be mirrored that way.
+    const mirrorX = placement.mirror ? -1 : 1;
+    groupRef.current.scale.set(s * mirrorX, s, s);
+
+    // The sit_log rig can carry a vertical root translation after a hot reload
+    // or interrupted action swap. Keep the seated base height invariant; head
+    // reactions are applied to the head bone later and never need root motion.
+    //
+    // The baseline comes from the sit_log track at load (see the effect above),
+    // so it is the same value on every run. null = no constant track was found,
+    // in which case leave the root alone rather than guess at a height.
+    if (placement.bearId && centerBoneRef.current && centerRestYRef.current !== null) {
+      centerBoneRef.current.position.y = centerRestYRef.current;
+    }
 
     // Cub idle: subtle head bob + ear twitch. Multiplies onto the baked rest quaternion
     // so it composes with any pose baked into cub.glb.
@@ -8266,12 +9077,37 @@ function Animal({
     // Rocking-chair bear keeps his feet planted: put the legs back to one
     // frame of sit_log before any pose layer goes on (rockingChair.ts).
     if (placement.rockingChairPose && legLockRef.current) applyLegLock(legLockRef.current);
+    // The two talking bears: sit_log bounces every log bear's leg on the same
+    // ~1.5 s beat. Maple keeps hers still; Smokey's keeps going but on its own
+    // clock, so its speed (and how big it is) can be tuned on its own.
+    const legs = legSamplerRef.current;
+    if (legs) {
+      const cfgL = configRef.current;
+      const kn = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
+      if (placement.bearId === "back_right_log") {
+        // Maple: just a little idle in her legs (size + speed from the lab),
+        // and her body's sway no longer swings them about
+        legs.t += Math.min(delta, 0.1) * (placement.animationSpeed ?? 1) * Math.max(0, kn(cfgL.bearMapleLegSpeed, 0.6));
+        applyLegSampler(legs.s, legs.t, legs.duration, Math.max(0, kn(cfgL.bearMapleLegAmount, 0.25)));
+        if (legs.pin) applyHipPin(legs.pin);
+      } else {
+        legs.t += Math.min(delta, 0.1) * (placement.animationSpeed ?? 1) * Math.max(0, kn(cfgL.bearSmokeyLegSpeed, 1));
+        applyLegSampler(legs.s, legs.t, legs.duration, Math.max(0, kn(cfgL.bearSmokeyLegAmount, 1)));
+      }
+    }
     if (placement.rockingChairPose && ROCKING_CHAIR_BEAR_POSE.enabled) {
+      const guard = chairGuardRef.current;
       const applyPart = (name: RockingChairBoneName) => {
         const b = chairBonesRef.current[name];
         const restS = chairRestSRef.current[name];
         const r = ROCKING_CHAIR_BEAR_POSE.parts[name];
         if (!b || !restS || !r) return;
+        // Remember the clip's pose for this bone (the pre-mixer reset below
+        // puts it back each frame), then layer the pose on top of it.
+        let gq = guard.get(name);
+        if (!gq) { gq = { bone: b, q: b.quaternion.clone() }; guard.set(name, gq); }
+        gq.bone = b;
+        gq.q.copy(b.quaternion);
         const eu = new THREE.Euler(r.rx, r.ry, r.rz, "XYZ");
         const dq = new THREE.Quaternion().setFromEuler(eu);
         b.quaternion.multiply(dq);
@@ -8542,10 +9378,37 @@ function Animal({
     const isVoiceBear = placement.bearId === "back_left_log" || placement.bearId === "back_right_log";
     let tgt: THREE.Vector3 | undefined;
     let targetWeight = 0;
+    // >0 while Smokey is glancing at his frets - widens his neck limit
+    let fretGlance = 0;
 
     const fishReaction = fishReactionRef?.current;
     const reactingToFish = isVoiceBear && fishReaction && fishReaction.phase !== "idle";
-    if (reactingToFish) {
+
+    // The axe flip: every log bear follows it up, round and back into the
+    // block. Its point glides a touch behind the axe so heads track rather
+    // than jitter.
+    const axe = axeWatchRef?.current;
+    const axeL = axeLookRef.current;
+    if (axe?.active) {
+      if (!axeL.init) { axeL.target.copy(axe.position); axeL.init = true; }
+      const follow = Number.isFinite(configRef.current.axeWatchFollowTime) ? configRef.current.axeWatchFollowTime : 0.08;
+      axeL.target.lerp(axe.position, 1 - Math.exp(-dt / Math.max(0.02, follow)));
+    }
+    axeL.w += ((axe?.active ? 1 : 0) - axeL.w) * (1 - Math.exp(-dt / 0.22));
+    if (!axe?.active && axeL.w < 0.001) { axeL.w = 0; axeL.init = false; }
+    // the two talking bears hand straight back to their own gaze, which then
+    // glides away from the axe; the rest ease their heads back
+    const watchingAxe = !reactingToFish && (isVoiceBear ? !!axe?.active : axeL.w > 0.001);
+
+    if (watchingAxe) {
+      g.phase = "wait"; g.t = 0; g.w = 0; g.target = "";
+      if (isVoiceBear) {
+        lookRef.current.target.copy(axeL.target);
+        lookRef.current.init = true;
+      }
+      tgt = axeL.target;
+      targetWeight = isVoiceBear ? 1 : axeL.w;
+    } else if (reactingToFish) {
       // The fish gag, in order: eyes follow the fish through the air, snap to
       // the fire where it lands, the jaws drop, they turn and stare at EACH
       // OTHER, then look back at you. Every target is a real world position
@@ -8601,6 +9464,7 @@ function Animal({
       // snaps.
       g.phase = "wait"; g.t = 0; g.w = 0; g.target = "";
       const kc0 = configRef.current;
+      const kn0v = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
       const me = placement.bearId;
       const other = me === "back_left_log" ? "back_right_log" : "back_left_log";
       const speakerId = voice?.isRemoteSpeaking ? voice.activeBearId : null;
@@ -8626,6 +9490,7 @@ function Animal({
         }
         look.hold = wantOther ? 1.2 : 0;
         look.fishHold = 0;
+        look.fretHold = 0;
       } else if (look.hold > 0) {
         look.hold -= dt;
         wantOther = look.wantOther;
@@ -8646,26 +9511,98 @@ function Animal({
           }
         }
       }
+      /*
+       * Smokey (the banjo player) glances down at his fret hand every so
+       * often, as if making sure he has the chord right - sometimes a quick
+       * double-check. Only while nobody is talking; a line from either bear
+       * cuts it off.
+       */
+      let wantFret = false;
+      const fretFingers = banjoFingerLRef.current;
+      if (me === "back_left_log" && fretFingers && kn0v(kc0.bearFretLookOn, 1) >= 0.5 && !speakerId) {
+        if (look.fretHold > 0) {
+          look.fretHold -= dt;
+          wantFret = true;
+          if (look.fretHold <= 0) {
+            // done looking; maybe one more quick peek, else a proper wait
+            const interval = Math.max(0.5, kn0v(kc0.bearFretLookInterval, 7));
+            look.fretCooldown = rng() < clampUnit(kn0v(kc0.bearFretDoubleChance, 0.35))
+              ? 0.45 + rng() * 0.5
+              : interval * (0.6 + rng() * 0.8);
+          }
+        } else if (!wantOther) {
+          look.fretCooldown -= dt;
+          if (look.fretCooldown <= 0) {
+            const hold = Math.max(0.2, kn0v(kc0.bearFretLookTime, 3));
+            look.fretHold = hold * (0.85 + rng() * 0.3);
+            wantFret = true;
+          }
+        }
+      } else if (me === "back_left_log") {
+        look.fretHold = 0;
+      }
+      // Looking back up - from Smokey's frets or Maple's fish - is slow and
+      // eased (smootherstep from where the gaze was), not the quicker glide
+      // used to look down at it.
+      if ((look.wantFret && !wantFret) || (look.wantFish && !wantFish)) {
+        look.fretBack = 0;
+        look.fretFrom.copy(look.target);
+        look.backTime = look.wantFret
+          ? kn0v(kc0.bearFretReturnTime, 1.2)
+          : kn0v(kc0.bearFishIdleReturnTime, 1.2);
+      }
+      if (wantFret || wantOther || wantFish || speakerId) look.fretBack = -1;
+      look.wantFret = wantFret;
+      let backS = -1;
+      if (look.fretBack >= 0) {
+        look.fretBack += dt;
+        const u = Math.min(1, look.fretBack / Math.max(0.05, look.backTime));
+        backS = u * u * u * (u * (u * 6 - 15) + 10);
+        look.fretW = Math.min(look.fretW, 1 - backS);
+        if (u >= 1) look.fretBack = -1;
+      } else {
+        look.fretW += ((wantFret ? 1 : 0) - look.fretW)
+          * (1 - Math.exp(-dt / Math.max(0.05, wantFret
+            ? kn0v(kc0.bearFretTurnTime, 0.25)
+            : kn0v(kc0.bearLookTurnTime, 0.35))));
+      }
+      fretGlance = look.fretW;
       look.wantOther = wantOther;
       look.wantFish = wantFish;
       const otherHead = wantOther
         ? [...reg.values()].find((c) => c.bearId === other)?.position
         : undefined;
       const fishPosition = wantFish ? reg.get(name)?.fishPosition : undefined;
+      const fretPos = wantFret && fretFingers
+        ? fretFingers.getWorldPosition(fretLookAt).add(tmpV.set(
+          kn0v(kc0.bearFretLookX, 0), kn0v(kc0.bearFretLookY, 0), kn0v(kc0.bearFretLookZ, 0),
+        ))
+        : undefined;
       const desired = otherHead
+        ?? fretPos
         ?? (fishPosition
           ? tmpV2.copy(fishPosition).setY(
             fishPosition.y + (Number.isFinite(kc0.bearFishIdleGazeYOffset) ? kc0.bearFishIdleGazeYOffset : -1.2),
           )
           : tmpV2.copy(state.camera.position));
-      if (!otherHead && !fishPosition) {
+      if (!otherHead && !fishPosition && !fretPos) {
         desired.y += Number.isFinite(kc0.bearLookUserYOffset) ? kc0.bearLookUserYOffset : -0.2;
       }
       if (!look.init) { look.target.copy(desired); look.init = true; }
-      const turn = Math.max(0.05, Number.isFinite(kc0.bearLookTurnTime) ? kc0.bearLookTurnTime : 0.35);
-      look.target.lerp(desired, 1 - Math.exp(-dt / turn));
+      if (backS >= 0) {
+        look.target.copy(look.fretFrom).lerp(desired, backS);
+      } else {
+        const turn = Math.max(0.05, wantFret
+          ? kn0v(kc0.bearFretTurnTime, 0.25)
+          : wantFish
+            ? kn0v(kc0.bearFishIdleTurnTime, 0.4)
+            : (Number.isFinite(kc0.bearLookTurnTime) ? kc0.bearLookTurnTime : 0.35));
+        look.target.lerp(desired, 1 - Math.exp(-dt / turn));
+      }
       tgt = look.target;
-      targetWeight = Math.max(0, Math.min(1, Number.isFinite(kc0.bearLookAmount) ? kc0.bearLookAmount : 0.85));
+      const baseAmount = Math.max(0, Math.min(1, Number.isFinite(kc0.bearLookAmount) ? kc0.bearLookAmount : 0.85));
+      const fretAmount = clampUnit(kn0v(kc0.bearFretLookAmount, 1));
+      targetWeight = baseAmount + (fretAmount - baseAmount) * look.fretW;
     } else {
       g.t += dt;
       if (g.phase === "wait" && g.t >= g.next) {
@@ -8708,10 +9645,11 @@ function Animal({
 
         const cur = tmpV.copy(FACE_FWD_LOCAL).applyQuaternion(head.quaternion);
         const ang = cur.angleTo(tmpV2);
-        // the fish gag gets a wider neck - they have to see each other
-        const maxTurn = reactingToFish
+        // the fish gag (and the axe) get a wider neck - they have to see it
+        const fretMax = THREE.MathUtils.degToRad(Number.isFinite(configRef.current.bearFretMaxTurn) ? configRef.current.bearFretMaxTurn : 75);
+        const maxTurn = reactingToFish || watchingAxe
           ? THREE.MathUtils.degToRad(Number.isFinite(configRef.current.bearFishMaxTurn) ? configRef.current.bearFishMaxTurn : 80)
-          : MAX_GLANCE;
+          : MAX_GLANCE + Math.max(0, fretMax - MAX_GLANCE) * fretGlance;
         if (ang > maxTurn) {
           // too far round to be plausible - only go as far as the neck allows
           tmpV2.copy(cur).lerp(tmpV2, maxTurn / ang).normalize();
@@ -8719,6 +9657,17 @@ function Animal({
         tmpQ2.setFromUnitVectors(cur, tmpV2).multiply(head.quaternion);
         head.quaternion.slerp(tmpQ2, targetWeight);
       }
+    }
+    // Checking the chords: a little extra peer down and a curious head cock
+    // on top of the aim, eased in and out with the glance.
+    if (fretGlance > 0.001) {
+      const kf = configRef.current;
+      const nod = Number.isFinite(kf.bearFretNod) ? kf.bearFretNod : 0.12;
+      const tilt = Number.isFinite(kf.bearFretTilt) ? kf.bearFretTilt : 0.12;
+      tmpQ.setFromAxisAngle(FACE_RIGHT_LOCAL, nod * fretGlance);
+      head.quaternion.multiply(tmpQ);
+      tmpQ.setFromAxisAngle(FACE_FWD_LOCAL, tilt * fretGlance);
+      head.quaternion.multiply(tmpQ);
     }
     // Talking head and facial motion layer. Torso motion is intentionally disabled
     // until the rig has a dedicated upper-body control bone.
@@ -8992,6 +9941,9 @@ function FloppingFish({
   onImpact,
   onSelect,
   replayOnTune = false,
+  respawn = 0,
+  onBack,
+  onGone,
 }: {
   config: CampfireSceneConfig;
   onClickSound?: () => void;
@@ -9003,8 +9955,16 @@ function FloppingFish({
   /** Lab only: re-throw the fish whenever its settings change, so tuning
    *  can be watched. On the site the fish flies ONLY when clicked. */
   replayOnTune?: boolean;
+  /** Bumped by a click on the tent. If the fish is gone, a fresh one flops
+   *  out of the tent and back to where the first one lay. */
+  respawn?: number;
+  /** The fish is back on the ground and clickable again. */
+  onBack?: () => void;
+  /** The fish is gone (thrown into the fire). */
+  onGone?: () => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
+  const { scene } = useThree();
   const gltf = useGLTF(FISH_URL) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
   const [hovered, setHovered] = useState(false);
 
@@ -9016,7 +9976,21 @@ function FloppingFish({
    * waits on a re-render; only the three PHASE changes go through setState,
    * because they are the only things React actually has to draw differently.
    */
-  const [phase, setPhase] = useState<"idle" | "flying" | "gone">("idle");
+  const [phase, setPhase] = useState<"idle" | "flying" | "gone" | "returning">("idle");
+  /*
+   * The return trip: tent -> where the first fish lay, in a few flopping hops.
+   * Built on the first frame of the "returning" phase, once the group exists
+   * and its parent frame can be read.
+   */
+  const returning = useRef<{
+    t: number;
+    from: THREE.Vector3;
+    to: THREE.Vector3;
+    rot: THREE.Euler;
+    spinAxis: THREE.Vector3;
+  } | null>(null);
+  /** Lab preview: bring the fish straight back after the next throw. */
+  const returnAfterThrow = useRef(false);
   const burstRef = useRef<EmberBurstHandle>(null);
   const flight = useRef<{
     t: number;
@@ -9096,13 +10070,57 @@ function FloppingFish({
     return () => cancelAnimationFrame(frame);
   }, [fishReplayKey, replayOnTune, config.fishLaunchOn, launch]);
 
-  // Respawn is opt-in: fishRespawnDelay 0 means the fish is gone for the rest
-  // of the visit, which is the point of the gag.
+  const startReturn = useCallback(() => {
+    returning.current = null;
+    setPhase("returning");
+  }, []);
+
+  // Tell the world when the fish is gone / back, so the tent only does
+  // something while there is no fish.
   useEffect(() => {
-    if (phase !== "gone" || config.fishRespawnDelay <= 0) return;
-    const id = window.setTimeout(() => setPhase("idle"), config.fishRespawnDelay * 1000);
+    if (phase === "idle") onBack?.();
+    else if (phase === "gone") onGone?.();
+  }, [phase, onBack, onGone]);
+
+  // Click the tent while the fish is gone: another one flops out of it.
+  const lastRespawn = useRef(respawn);
+  useEffect(() => {
+    if (lastRespawn.current === respawn) return;
+    lastRespawn.current = respawn;
+    if (phase === "gone") startReturn();
+  }, [respawn, phase, startReturn]);
+
+  // Timed respawn is opt-in: fishRespawnDelay 0 means the fish only comes back
+  // when the tent is clicked. (The lab's return preview uses the same path.)
+  useEffect(() => {
+    if (phase !== "gone") return;
+    const delay = returnAfterThrow.current ? 0.6 : config.fishRespawnDelay;
+    if (delay <= 0) return;
+    const id = window.setTimeout(() => {
+      returnAfterThrow.current = false;
+      if (config.fishReturnOn >= 0.5) startReturn();
+      else setPhase("idle");
+    }, delay * 1000);
     return () => window.clearTimeout(id);
-  }, [phase, config.fishRespawnDelay]);
+  }, [phase, config.fishRespawnDelay, config.fishReturnOn, startReturn]);
+
+  // Lab: changing a return slider replays the trip (throwing the fish first
+  // if it is still on the ground).
+  const fishReturnKey = [
+    config.fishReturnDuration, config.fishReturnArc, config.fishReturnHops,
+    config.fishReturnSpin, config.fishReturnOut, config.fishReturnUp, config.fishReturnOn,
+  ].join(":");
+  const lastFishReturnKey = useRef(fishReturnKey);
+  useEffect(() => {
+    if (lastFishReturnKey.current === fishReturnKey) return;
+    lastFishReturnKey.current = fishReturnKey;
+    if (!replayOnTune || config.fishReturnOn < 0.5) return;
+    if (phase === "gone") { startReturn(); return; }
+    if (phase === "idle" && config.fishLaunchOn >= 0.5) {
+      returnAfterThrow.current = true;
+      launch();
+    }
+  }, [fishReturnKey, replayOnTune, phase, config.fishReturnOn, config.fishLaunchOn, startReturn, launch]);
 
   // Every mesh on the fish needs to cast shadows, or the fire's point-light
   // shadow map won't include it and the fish sits shadowless on the ground.
@@ -9289,6 +10307,69 @@ function FloppingFish({
     }
     if (phase === "gone") return;
 
+    /*
+     * RETURN. A new fish pops out of the tent's door and flops its way back
+     * to the original spot: a few hops that shrink as it goes, tumbling
+     * end over end, thrashing the whole way.
+     */
+    if (phase === "returning") {
+      const g = groupRef.current;
+      if (!g) return;
+      const restLocal = new THREE.Vector3(config.fishX + ov.dx, config.fishY + ov.dy, config.fishZ + ov.dz);
+      if (!returning.current) {
+        const parent = g.parent;
+        const restW = parent ? parent.localToWorld(restLocal.clone()) : restLocal.clone();
+        const tent = scene.getObjectByName("campfire_tent");
+        const tentW = tent ? tent.getWorldPosition(new THREE.Vector3()) : restW.clone().add(new THREE.Vector3(2, 0, -2));
+        // The tent's opening faces the fire, so "out of the door" is the
+        // tent's origin pushed a little toward the fish's spot.
+        const dir = restW.clone().sub(tentW).setY(0);
+        if (dir.lengthSq() < 1e-8) dir.set(1, 0, 0);
+        dir.normalize();
+        const startW = tentW.clone()
+          .addScaledVector(dir, Math.max(0, config.fishReturnOut))
+          .add(new THREE.Vector3(0, config.fishReturnUp, 0));
+        const from = parent ? parent.worldToLocal(startW) : startW;
+        const across = new THREE.Vector3(restLocal.z - from.z, 0, from.x - restLocal.x);
+        returning.current = {
+          t: 0,
+          from,
+          to: restLocal.clone(),
+          rot: new THREE.Euler(config.fishRotationX + ov.rotX, config.fishRotationY + ov.rotY, 0),
+          spinAxis: across.lengthSq() < 1e-8 ? new THREE.Vector3(1, 0, 0) : across.normalize(),
+        };
+        g.position.copy(from);
+        g.rotation.copy(returning.current.rot);
+      }
+      const r = returning.current;
+      r.t += dt;
+      const u = Math.min(1, r.t / Math.max(0.1, config.fishReturnDuration));
+      const hops = Math.max(1, Math.round(config.fishReturnHops));
+      g.position.x = r.from.x + (r.to.x - r.from.x) * u;
+      g.position.z = r.from.z + (r.to.z - r.from.z) * u;
+      // each hop lower than the last; |sin| lands it on the ground between hops
+      g.position.y = r.from.y + (r.to.y - r.from.y) * Math.min(1, u * hops)
+        + Math.abs(Math.sin(u * Math.PI * hops)) * config.fishReturnArc * (1 - 0.65 * u);
+      // whole turns only, so it lands lying exactly as the first fish did
+      scratchQ.setFromAxisAngle(r.spinAxis, u * Math.PI * 2 * Math.round(config.fishReturnSpin));
+      g.quaternion.setFromEuler(r.rot).premultiply(scratchQ);
+
+      const swimKey = actions ? Object.keys(actions).find((k) => /swim/i.test(k)) : undefined;
+      if (swimKey && actions?.[swimKey]) {
+        actions[swimKey]!.timeScale = config.fishFlopSpeed * config.fishLaunchFlail;
+      }
+
+      if (u >= 1) {
+        g.position.copy(r.to);
+        g.rotation.copy(r.rot);
+        returning.current = null;
+        t.current = 0;
+        onClickSound?.();
+        setPhase("idle");
+      }
+      return;
+    }
+
     t.current += dt;
 
     // Walk through phases based on cumulative time. Sum durations = one full cycle.
@@ -9448,6 +10529,7 @@ function CampfireAnimals({
   banjoGainRef,
   banjoTimeRef,
   fishReactionRef,
+  axeWatchRef,
 }: {
   config: CampfireSceneConfig;
   onSelect: (name: string) => void;
@@ -9461,6 +10543,7 @@ function CampfireAnimals({
   banjoGainRef?: React.MutableRefObject<number>;
   banjoTimeRef?: React.MutableRefObject<number>;
   fishReactionRef?: MutableRefObject<FishReaction>;
+  axeWatchRef?: MutableRefObject<AxeWatch>;
 }) {
   // Live head positions, written and read by the bears each frame, so they can find
   // each other wherever the config sliders have put them.
@@ -9570,6 +10653,7 @@ function CampfireAnimals({
             heads={heads}
             bearVoiceRef={bearVoiceRef}
             fishReactionRef={fishReactionRef}
+            axeWatchRef={axeWatchRef}
             banjoTimeRef={banjoTimeRef}
             seed={i}
           />
@@ -9910,6 +10994,8 @@ function onlyBearsTune(c: CampfireSceneConfig): OnlyBearsTune {
     lean: c.onlyBearsLean,
     look: c.onlyBearsLook,
     breath: c.onlyBearsBreath,
+    snap: c.onlyBearsSnap,
+    impact: c.onlyBearsImpact,
   };
 }
 
@@ -9929,6 +11015,54 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
   // Top surface of the code-built Table is at y ≈ 0.62. GLB props that live on
   // the table start there; drag/scale in the lab.
   const TABLE_TOP_Y = 0.62;
+  const laptopCarryRef = useRef<THREE.Group>(null);
+  useFrame(() => {
+    const state = onlyBears?.stateRef.current;
+    const carry = laptopCarryRef.current;
+    if (!carry) return;
+    const run = state?.mode === "out"
+      ? THREE.MathUtils.smoothstep(state.exitT, OB_T.exitRunStart, OB_T.exitRunStart + 0.42)
+      : 0;
+    carry.position.set(run * 1.8, run * 0.18, run * 0.45);
+    carry.rotation.z = -run * 0.38;
+  });
+
+  // Where the monitor's screen light points.
+  //
+  // This used to be hardwired to (lightX, lightY + aimY, lightZ + 1): always
+  // straight out along local +Z, tiltable up and down and nothing else. So the
+  // beam could not be swung left or right at all, and moving the light sideways
+  // just dragged the whole beam with it.
+  //
+  // Now it is a proper aim. yaw 0 still points straight out of the monitor face
+  // (local +Z) so the old behaviour is the default; positive yaw swings toward
+  // local +X, and pitch tips it down (negative) or up. The target only has to
+  // land somewhere along the ray, so the 2-unit throw is arbitrary.
+  const deskScreenLightRef = useRef<THREE.SpotLight>(null);
+  const deskScreenTargetRef = useRef<THREE.Object3D>(null);
+  useEffect(() => {
+    if (deskScreenLightRef.current && deskScreenTargetRef.current) {
+      deskScreenLightRef.current.target = deskScreenTargetRef.current;
+    }
+  }, []);
+  const deskScreenAim = useMemo<[number, number, number]>(() => {
+    const yaw = THREE.MathUtils.degToRad(
+      Number.isFinite(config.deskComputerAimYawDeg) ? config.deskComputerAimYawDeg : 0
+    );
+    const pitch = THREE.MathUtils.degToRad(
+      Number.isFinite(config.deskComputerAimPitchDeg) ? config.deskComputerAimPitchDeg : 0
+    );
+    const r = 2;
+    return [
+      config.deskComputerLightX + Math.sin(yaw) * Math.cos(pitch) * r,
+      config.deskComputerLightY + Math.sin(pitch) * r,
+      config.deskComputerLightZ + Math.cos(yaw) * Math.cos(pitch) * r,
+    ];
+  }, [
+    config.deskComputerLightX, config.deskComputerLightY, config.deskComputerLightZ,
+    config.deskComputerAimYawDeg, config.deskComputerAimPitchDeg,
+  ]);
+
   return (
     <group name="sector_cabin">
       {/* --- the cabin and its lighting -------------------------------- */}
@@ -10051,42 +11185,47 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
       </Selectable>
       {/* On-table props. Base positions place them on the top surface of the
           code-built table (y = 0.62) around the bear's writing spot. */}
-      <Selectable name="old_bear_computer" onSelect={onSelect} config={config} basePosition={[0.35, TABLE_TOP_Y, -0.15]} baseRotationY={Math.PI} interactive={!!pc?.hot}>
-        <SafeAsset label="old-bear computer">
-          <LitComputer config={config} pc={pc} />
+       <Selectable name="old_bear_computer" onSelect={onSelect} config={config} basePosition={[0.35, TABLE_TOP_Y, -0.15]} baseRotationY={Math.PI} interactive={!!pc?.hot}>
+         <SafeAsset label="old-bear computer">
+          <group ref={laptopCarryRef}>
+            <LitComputer config={config} pc={pc} />
+            {/* The bear steals the laptop as he retreats. */}
+            {onlyBears?.mounted ? (
+              <SafeAsset label="onlybears bear">
+                <OnlyBearsBear
+                  url={BEAR_OLD_URL}
+                  tune={onlyBearsTune(config)}
+                  look={oldBearLookFromConfig(config as unknown as Record<string, unknown>)}
+                  stateRef={onlyBears.stateRef}
+                  onPawLand={onlyBears.onPawLand}
+                  onGone={onlyBears.onGone}
+                />
+              </SafeAsset>
+            ) : null}
+          </group>
         </SafeAsset>
-        {/* The OnlyBears bear stands behind the monitor - in the computer's
-            own frame, so he follows it wherever it is dragged - and only
-            exists while the gag is playing. */}
-        {onlyBears?.mounted ? (
-          <SafeAsset label="onlybears bear">
-            <OnlyBearsBear
-              url={BEAR_OLD_URL}
-              tune={onlyBearsTune(config)}
-              look={oldBearLookFromConfig(config as unknown as Record<string, unknown>)}
-              stateRef={onlyBears.stateRef}
-              onPawLand={onlyBears.onPawLand}
-              onGone={onlyBears.onGone}
-            />
-          </SafeAsset>
-        ) : null}
         {/* Screen glow: bluish spill from the monitor face. Spot-light so
             it only shines out the FRONT of the screen (a pointLight was
-            lighting the back of the case too). Target sits 1 unit further
-            along local +Z from the light itself, so the beam extends outward
-            in the direction the screen is placed - if the beam ends up
-            pointing into the case instead, flip the Z offset in the light
-            position slider. Angle is wide (~80 deg) with strong penumbra so
-            it reads as diffuse screen wash, not a torch. */}
+            lighting the back of the case too). Angle is wide (~80 deg) with
+            strong penumbra so it reads as diffuse screen wash, not a torch.
+
+            THE TARGET MUST BE A REAL OBJECT IN THE SCENE. A spotLight aims at
+            `light.target`, which three defaults to a bare Object3D that is NOT
+            parented to anything. Nothing ever calls updateMatrixWorld on it, so
+            its world matrix stays at the identity and the beam points at the
+            world origin no matter what you write to `target.position`. Setting
+            `target-position` alone - which is what this did - therefore did
+            nothing at all, which is why the aim sliders looked dead.
+
+            Rendering the target as a SIBLING puts it under the same parent as
+            the light, so the aim is expressed in the same local space and gets
+            updated every frame like anything else. */}
         {/* every knob lives in the lab's "3 · Cabin — computer screen light" group */}
+        <object3D ref={deskScreenTargetRef} position={deskScreenAim} />
         <spotLight
+          ref={deskScreenLightRef}
           visible={(config.deskComputerLightOn ?? 1) >= 0.5}
           position={[config.deskComputerLightX, config.deskComputerLightY, config.deskComputerLightZ]}
-          target-position={[
-            config.deskComputerLightX,
-            config.deskComputerLightY + (Number.isFinite(config.deskComputerAimY) ? config.deskComputerAimY : 0),
-            config.deskComputerLightZ + 1,
-          ]}
           color={new THREE.Color(config.deskComputerColorR, config.deskComputerColorG, config.deskComputerColorB)}
           intensity={config.deskComputerIntensity}
           distance={config.deskComputerDistance}
@@ -10135,12 +11274,18 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
           <GLBModel url={OLD_BEAR_TOILET_URL} />
         </SafeAsset>
       </Selectable>
-      <Animal
-        name="bear_contact"
-        placement={CONTACT_BEAR}
-        config={config}
-        onSelect={onSelect}
-      />
+      {/* Gated the same way the campfire ANIMALS list gates its own: unmounting
+          tears down the AnimationMixer and the per-frame work too, which a bare
+          visible=false would leave running every frame for a bear nobody can
+          see. Animal also respects `hide` internally as a backstop. */}
+      {(config.objectOverrides?.["bear_contact"]?.hide ?? 0) >= 0.5 ? null : (
+        <Animal
+          name="bear_contact"
+          placement={CONTACT_BEAR}
+          config={config}
+          onSelect={onSelect}
+        />
+      )}
       {/* Rocking chair + its bear, tied together: both live inside the SAME
           Selectable so the chair's own drawer (name "cabin_rocking_chair")
           drags/rotates/scales the pair as one unit. The bear also keeps its
@@ -11254,6 +12399,8 @@ function CampfireWorld({
   onFishClickSound,
   onFireWhooshSound,
   onHoverSound,
+  onPcGlideInSound,
+  onPcGlideOutSound,
   onCrtEnterSound,
   onCrtExitSound,
   onCrtBackSound,
@@ -11297,6 +12444,9 @@ function CampfireWorld({
    *  the scene. Used to play hover.mp3. */
   onHoverSound?: () => void;
   /** Fired when the camera flies IN onto the CRT close-up. */
+  /** The camera glide onto the monitor, and back out again. */
+  onPcGlideInSound?: () => void;
+  onPcGlideOutSound?: () => void;
   onCrtEnterSound?: () => void;
   /** Fired when the camera pulls OUT of the CRT close-up (Back plate, or
    *  ringing away from the arcade panel). */
@@ -11353,6 +12503,24 @@ function CampfireWorld({
   const handleRightBagLand = useCallback(() => playRightBagFall(tipSoundVolume), [playRightBagFall, tipSoundVolume]);
   const handleRodContact = useCallback(() => playFishingRodFall(tipSoundVolume), [playFishingRodFall, tipSoundVolume]);
   const fishReactionRef = useRef<FishReaction>({ phase: "idle", target: new THREE.Vector3(), phaseStartedAt: 0, flightProgress: 0 });
+  // Click the chopping block: the axe flips up and back in, the bears watch.
+  const axeWatchRef = useRef<AxeWatch>({ active: false, position: new THREE.Vector3() });
+  const [axePlay, setAxePlay] = useState(0);
+  // Click the wood pile: the logs roll away one after another, faster and faster.
+  const [woodPlay, setWoodPlay] = useState(0);
+  const [woodEmpty, setWoodEmpty] = useState(false);
+  const handleWoodEmpty = useCallback(() => setWoodEmpty(true), []);
+  // Fish thrown in the fire -> the tent becomes clickable, and a click on it
+  // flops a new fish out and back to the original spot.
+  const [fishGone, setFishGone] = useState(false);
+  const [fishRespawn, setFishRespawn] = useState(0);
+  const handleFishGone = useCallback(() => setFishGone(true), []);
+  const handleFishBack = useCallback(() => setFishGone(false), []);
+  const handleWoodLand = useCallback(
+    () => playFishingRodFall(tipSoundVolume * clampUnit(Number.isFinite(config.woodRollSoundVolume) ? config.woodRollSoundVolume : 0.5)),
+    [playFishingRodFall, tipSoundVolume, config.woodRollSoundVolume],
+  );
+  const handleAxeLand = useCallback(() => playFishingRodFall(tipSoundVolume), [playFishingRodFall, tipSoundVolume]);
   const handleFishLaunch = useCallback((target: THREE.Vector3, progress: number) => {
     fishReactionRef.current.phase = "flying";
     fishReactionRef.current.target.copy(target);
@@ -11424,6 +12592,12 @@ function CampfireWorld({
         onFireWhooshSound?.();
       }
     }
+    // after the fish is in the fire, the tent sends out another one
+    if (name === "campfire_tent" && fishGone && !editing && config.fishReturnOn >= 0.5) {
+      setFishGone(false);
+      setFishRespawn((n) => n + 1);
+      return;
+    }
     if (crittersOn && act === null) {
       // Deliberately NOT falling through to onSelectProp: selecting an object
       // that is about to be carried away strands selectedObject on a node that
@@ -11436,9 +12610,15 @@ function CampfireWorld({
       // forward, and TipOver's contact callback is what knocks the rod down -
       // at the angle the meshes actually touch, not on a timer.
       if (name === "campfire_backpack" && !bagDown) { setBagDown(true); return; }
+      // In config mode (the lab: `editing`) a click on these selects them so
+      // they can be moved like anything else - the gags only run on the site.
+      // (Changing their sliders in the lab still replays them to preview.)
+      if (name === "campfire_log_axe" && !editing) { setAxePlay((n) => n + 1); return; }
+      // one log rolls away per click, until the pile is gone
+      if (name === "campfire_wood_pile" && !woodEmpty && !editing) { setWoodPlay((n) => n + 1); return; }
     }
     onSelectProp(name);
-  }, [onSelectProp, fireBurstOn, onFireWhooshSound, crittersOn, act, bagDown, hikeBagDown]);
+  }, [onSelectProp, fireBurstOn, onFireWhooshSound, crittersOn, act, bagDown, hikeBagDown, woodEmpty, fishGone, config.fishReturnOn, editing]);
 
   /*
    * Click the tube to pull the camera in; the screen's last plate lets it go.
@@ -11503,11 +12683,12 @@ function CampfireWorld({
     // coming back mid-retreat picks up from where the paw is
     st.mode = "in";
     st.reveal = false;
+    st.exitT = 0;
     setObMounted(true);
   }, []);
   const endOnlyBears = useCallback(() => {
     const st = obStateRef.current;
-    if (st.mode === "in") { st.mode = "out"; st.reveal = false; }
+    if (st.mode === "in") { st.mode = "out"; st.reveal = false; st.exitT = 0; }
   }, []);
   const obGone = useCallback(() => {
     obStateRef.current = makeOnlyBearsState();
@@ -11533,6 +12714,7 @@ function CampfireWorld({
     focused: pcFocus,
     enabled: !editing,
     screenRef: pcScreenRef,
+    onlyBearsState: obStateRef,
   }), [pc.stateRef, pc.onScreenClick, pc.onScreenHover, pc.onComputerOver, pcFocus, editing]);
   const [crtIndex, setCrtIndex] = useState(0);
   /** Back plate lit on a section screen. The menu's own plates need no flag:
@@ -11606,6 +12788,26 @@ function CampfireWorld({
   // Leaving the computer while the bear is up sends him away at once. Only
   // on the way OUT of the close-up - the lab's Play button runs him with no
   // close-up at all.
+  /*
+   * The whoosh on the glide onto the monitor, and again pulling back out.
+   *
+   * Driven off the pcFocus transition rather than the click handler, so it also
+   * fires when the close-up is left by Escape or by the desktop exiting itself -
+   * the same reason the between-scenes swoosh watches `panel` rather than the
+   * arrow buttons.
+   *
+   * This is the camera TRAVELLING. The existing pcWake cue is the monitor's
+   * degauss thump coming out of standby - a different event that happens to
+   * land at the same moment, so the two layer deliberately.
+   */
+  const pcGlideWas = useRef(pcFocus);
+  useEffect(() => {
+    if (pcGlideWas.current === pcFocus) return;
+    pcGlideWas.current = pcFocus;
+    if (pcFocus) onPcGlideInSound?.();
+    else onPcGlideOutSound?.();
+  }, [pcFocus, onPcGlideInSound, onPcGlideOutSound]);
+
   const pcFocusWas = useRef(pcFocus);
   useEffect(() => {
     if (pcFocusWas.current && !pcFocus && obMounted) obGone();
@@ -12024,18 +13226,19 @@ function CampfireWorld({
             <SafeAsset label="tent"><Tent config={config} onSelect={onSelect} /></SafeAsset>
           )}
           <Benches config={config} onSelect={onSelect} />
-          <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} banjoPanRef={banjoPanRef} banjoGainRef={banjoGainRef} banjoTimeRef={banjoTimeRef} fishReactionRef={fishReactionRef} />
+          <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} banjoPanRef={banjoPanRef} banjoGainRef={banjoGainRef} banjoTimeRef={banjoTimeRef} fishReactionRef={fishReactionRef} axeWatchRef={axeWatchRef} />
           {/* Wood pile near the bonfire, as if stacked ready to feed the fire. */}
           <Selectable
             name="campfire_wood_pile"
             onSelect={onSelect}
             config={config}
+            interactive={crittersOn && !woodEmpty && !editing}
             basePosition={[2.6, 0, 1.2]}
             baseRotationY={-0.4}
             baseScale={0.4}
           >
             <SafeAsset label="wood pile">
-              <GLBModel url={WOOD_PILE_URL} />
+              <WoodPile config={config} play={woodPlay} replayOnTune={editing || panel == null} onLogLand={handleWoodLand} onEmpty={handleWoodEmpty} />
             </SafeAsset>
           </Selectable>
           <Selectable
@@ -12050,6 +13253,58 @@ function CampfireWorld({
               <GLBModel url={BANJO_URL} />
             </SafeAsset>
           </Selectable>
+          {/* Rowboat pulled up at the edge of the camp. First placement - drag /
+              turn / scale it from the lab (name "campfire_boat"). */}
+          <Selectable
+            name="campfire_boat"
+            onSelect={onSelect}
+            config={config}
+            basePosition={[-4.5, 0, -1.5]}
+            baseRotationY={0.6}
+            baseScale={0.6}
+          >
+            <group position={[0, BOAT_LIFT, 0]}>
+              <SafeAsset label="boat">
+                <GLBModel url={BOAT_URL} />
+              </SafeAsset>
+            </group>
+            {/* The oar leaning on its side - a child of the boat, so it goes
+                wherever the boat is dragged; its own name nudges it alone. */}
+            <Selectable
+              name="campfire_oar"
+              onSelect={onSelect}
+              config={config}
+              basePosition={OAR_LEAN.position}
+              baseScale={OAR_LEAN.scale}
+            >
+              <group rotation={OAR_LEAN.rotation}>
+                <group position={[-OAR_CENTRE[0], -OAR_CENTRE[1], -OAR_CENTRE[2]]}>
+                  <SafeAsset label="oar">
+                    <GLBModel url={OAR_URL} />
+                  </SafeAsset>
+                </group>
+              </group>
+            </Selectable>
+            {/* Spare oars in other poses, to pick a favourite from in the lab. */}
+            {config.boatOarOptions >= 0.5 && OAR_OPTIONS.map((o) => (
+              <Selectable
+                key={o.name}
+                name={o.name}
+                onSelect={onSelect}
+                config={config}
+                basePosition={o.pose.position}
+                baseScale={o.pose.scale}
+              >
+                <group rotation={o.pose.rotation}>
+                  <group position={[-OAR_CENTRE[0], -OAR_CENTRE[1], -OAR_CENTRE[2]]}>
+                    <SafeAsset label="oar">
+                      <GLBModel url={OAR_URL} />
+                    </SafeAsset>
+                  </group>
+                </group>
+              </Selectable>
+            ))}
+          </Selectable>
           {/* Chopping-block log with axe stuck in it. Source ~30 cm across
               already, so baseScale=1.65 gets it to ~50 cm (a plausible splitting
               log). Small anchor cancels the model's tiny origin offset. */}
@@ -12057,13 +13312,14 @@ function CampfireWorld({
             name="campfire_log_axe"
             onSelect={onSelect}
             config={config}
+            interactive={crittersOn && !editing}
             basePosition={[-1.9, 0, 1.6]}
             baseRotationY={0.3}
             baseScale={1.65}
           >
             <group position={[-0.013, 0.075, 0.008]}>
               <SafeAsset label="log & axe">
-                <GLBModel url={LOG_AXE_URL} />
+                <LogAndAxe config={config} play={axePlay} watch={axeWatchRef} onLand={handleAxeLand} replayOnTune={editing || panel == null} />
               </SafeAsset>
             </group>
           </Selectable>
@@ -12076,9 +13332,10 @@ function CampfireWorld({
             name="campfire_tent"
             onSelect={onSelect}
             config={config}
-            /* Not an affordance: nothing happens when a visitor clicks the
-               tent. It stays selectable so the lab can still drag it. */
-            interactive={false}
+            /* Only an affordance once the fish has been thrown in the fire:
+               then a click flops a new fish out of it (see FloppingFish).
+               It stays selectable so the lab can still drag it. */
+            interactive={fishGone && !editing && config.fishReturnOn >= 0.5}
             basePosition={[4.6, 0, -4.2]}
             baseRotationY={-0.83}
             baseScale={0.16}
@@ -12382,6 +13639,9 @@ function CampfireWorld({
                 onImpact={handleFishImpact}
                 onSelect={onSelect}
                 replayOnTune={editing || panel == null}
+                respawn={fishRespawn}
+                onGone={handleFishGone}
+                onBack={handleFishBack}
               />
             </SafeAsset>
           )}
@@ -12618,6 +13878,13 @@ export default function CampfireScene({
     volume: master * clampUnit(config.fireCracklingVolume),
     enabled: panel === LOCATION_CAMPFIRE,
   });
+  // The cabin's ambience: the rocking chair creaking away under the old bear.
+  // Scene 3 had nothing at all before this - the fire is a location away and
+  // the CRT music belongs to the arcade.
+  useCampsiteAudioLoop(ROCKING_CHAIR_SOUND_URL, {
+    volume: master * clampUnit(config.rockingChairVolume),
+    enabled: panel === LOCATION_CABIN,
+  });
   // -1..1, written every frame inside the canvas (CampfireAnimals) from the
   // banjo bear's live head position relative to the camera - makes the loop
   // genuinely space-aware instead of centered: orbit around him and he
@@ -12643,6 +13910,9 @@ export default function CampfireScene({
   const playFireWhoosh = useCampsiteOneShot(FIRE_WHOOSH_URL);
   const playCrtZoomIn = useCampsiteOneShot(CRT_ZOOM_IN_URL);
   const playCrtZoomOut = useCampsiteOneShot(CRT_ZOOM_OUT_URL);
+  const playPcGlideIn = useCampsiteOneShot(PC_GLIDE_IN_URL);
+  const playPcGlideOut = useCampsiteOneShot(PC_GLIDE_OUT_URL);
+
   const onFishClickSound = () => playFishFlop(master * clampUnit(config.clickVolume));
   // Shared by both ways of landing in the fire: clicking it directly, and the
   // fish's own throw completing on it. The click side additionally cools down
@@ -12659,6 +13929,9 @@ export default function CampfireScene({
   const playCrtSelectCue = () => playSelect(master * clampUnit(config.clickVolume));
   const playCrtEnterCue = () => playCrtZoomIn(master * clampUnit(config.swooshVolume));
   const playCrtExitCue = () => playCrtZoomOut(master * clampUnit(config.swooshVolume));
+  // out is quieter and slowed a touch: a retreat, not a second arrival
+  const playPcGlideInCue = () => playPcGlideIn(master * clampUnit(config.swooshVolume));
+  const playPcGlideOutCue = () => playPcGlideOut(master * clampUnit(config.swooshVolume) * 0.8, 0.9);
 
   // Ambient arcade music. Loops only on the arcade panel (scene 2) -
   // `enabled` drops it the moment you ring away to another campsite. Its
@@ -12755,6 +14028,8 @@ export default function CampfireScene({
         onFishClickSound={onFishClickSound}
         onFireWhooshSound={onFireWhooshSound}
         onHoverSound={playHoverCue}
+        onPcGlideInSound={playPcGlideInCue}
+        onPcGlideOutSound={playPcGlideOutCue}
         onCrtEnterSound={playCrtEnterCue}
         onCrtExitSound={playCrtExitCue}
         onCrtBackSound={playBackCue}
@@ -12827,6 +14102,8 @@ useGLTF.preload(SOJU_URL);
 useGLTF.preload(STOOL_URL);
 useGLTF.preload(CAMERA_URL);
 useGLTF.preload(LOG_AXE_URL);
+useGLTF.preload(BOAT_URL);
+useGLTF.preload(OAR_URL);
 useGLTF.preload(LAPTOP_URL);
 useGLTF.preload(BANJO_URL);
 useGLTF.preload(OLD_BEAR_TABLE_URL);

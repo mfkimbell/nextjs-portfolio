@@ -5,7 +5,7 @@ NGROK_DOMAIN ?= mkimbell.ngrok.dev
 PNPM_NEXT := corepack pnpm@10.33.4
 PNPM_AGENT := corepack pnpm@11.25.0
 
-.PHONY: dev web agent ngrok install twilio-dev
+.PHONY: dev web agent livekit ngrok install twilio-dev
 
 # Starts the local site, the ConversationRelay agent, and the reserved ngrok
 # endpoint together. APP_ENV=DEV overrides the ignored local env file only for
@@ -24,6 +24,15 @@ web:
 
 agent:
 	APP_ENV=DEV $(PNPM_AGENT) --dir agent dev
+
+livekit:
+	@set -e; \
+	APP_ENV=DEV $(PNPM_AGENT) --dir agent livekit:dev & smokey_pid=$$!; \
+	APP_ENV=DEV $(PNPM_AGENT) --dir agent livekit:maple & maple_pid=$$!; \
+	APP_ENV=DEV $(PNPM_AGENT) --dir agent livekit:coordinator & coordinator_pid=$$!; \
+	cleanup() { kill $$smokey_pid $$maple_pid $$coordinator_pid 2>/dev/null || true; }; \
+	trap cleanup EXIT INT TERM; \
+	wait $$smokey_pid $$maple_pid $$coordinator_pid
 
 ngrok:
 	ngrok http --domain=$(NGROK_DOMAIN) $(AGENT_PORT)

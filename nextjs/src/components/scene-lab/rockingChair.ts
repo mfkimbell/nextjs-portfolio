@@ -197,3 +197,97 @@ export function makeLegLock(model: THREE.Object3D, clip: THREE.AnimationClip | u
 export function applyLegLock(lock: LegLock) {
   for (const { bone, q } of lock) bone.quaternion.copy(q);
 }
+
+/* --- legs on their own clock ------------------------------------------------ */
+
+/**
+ * The same leg bones, but still MOVING - sampled out of the clip at a time of
+ * our own choosing instead of the mixer's, so a bear's leg bounce can run
+ * faster or slower than the rest of his body (or be damped toward the held
+ * frame). Used for Smokey's knee-bounce in the campfire scene.
+ */
+export type LegSampler = {
+  bone: THREE.Object3D;
+  interp: THREE.QuaternionLinearInterpolant | null;
+  still: THREE.Quaternion;
+}[];
+
+export function makeLegSampler(model: THREE.Object3D, clip: THREE.AnimationClip | undefined): LegSampler {
+  const out: LegSampler = [];
+  const lock = makeLegLock(model, clip);
+  for (const { bone, q } of lock) {
+    const track = clip?.tracks.find((tr) => tr.name === `${bone.name}.quaternion`);
+    out.push({
+      bone,
+      interp: track ? new THREE.QuaternionLinearInterpolant(track.times, track.values, 4, new Float32Array(4)) : null,
+      still: q,
+    });
+  }
+  return out;
+}
+
+const _legQ = new THREE.Quaternion();
+
+/**
+ * Pose the legs at clip time `time` (wrapped to the clip), blended from the
+ * held frame by `amount` (0 = still, 1 = the clip's full bounce, >1 = more).
+ * Run after the mixer, before any pose layers.
+ */
+export function applyLegSampler(s: LegSampler, time: number, duration: number, amount: number) {
+  const t = duration > 0 ? ((time % duration) + duration) % duration : 0;
+  for (const { bone, interp, still } of s) {
+    if (!interp) { bone.quaternion.copy(still); continue; }
+    const v = interp.evaluate(t);
+    _legQ.set(v[0], v[1], v[2], v[3]).normalize();
+    // amount > 1 extrapolates past the clip pose (slerp handles t > 1)
+    bone.quaternion.copy(still).slerp(_legQ, amount);
+  }
+}
+
+/* --- feet planted while the body sways --------------------------------------- */
+
+/**
+ * Holding the leg bones still isn't quite enough: the thighs hang off
+ * `center`, and sit_log sways `center` a couple of degrees, which still
+ * swings the feet about. This pins each thigh (rotation AND hip position) to
+ * where it sits relative to center's PARENT in the held frame, so the body
+ * keeps breathing but the legs stay planted on the ground.
+ */
+export type HipPin = {
+  center: THREE.Object3D;
+  centerStill: THREE.Quaternion;
+  thighs: { bone: THREE.Object3D; q: THREE.Quaternion; p: THREE.Vector3 }[];
+};
+
+export function makeHipPin(model: THREE.Object3D, clip: THREE.AnimationClip | undefined): HipPin | null {
+  const center = model.getObjectByName("center");
+  if (!center) return null;
+  const sample = (name: string, fallback: THREE.Quaternion) => {
+    const track = clip?.tracks.find((tr) => tr.name === `${name}.quaternion`);
+    if (!track) return fallback.clone();
+    const v = new THREE.QuaternionLinearInterpolant(track.times, track.values, 4, new Float32Array(4))
+      .evaluate(LEG_LOCK_TIME);
+    return new THREE.Quaternion(v[0], v[1], v[2], v[3]).normalize();
+  };
+  const thighs: HipPin["thighs"] = [];
+  for (const name of ["thigh_L", "thigh_R"]) {
+    const bone = model.getObjectByName(name);
+    if (!bone || bone.parent !== center) continue;
+    thighs.push({ bone, q: sample(name, bone.quaternion), p: bone.position.clone() });
+  }
+  return { center, centerStill: sample("center", center.quaternion), thighs };
+}
+
+const _pinQ = new THREE.Quaternion();
+
+/** Run after the legs have been posed (applyLegSampler / applyLegLock). */
+export function applyHipPin(pin: HipPin) {
+  // center_now^-1 * center_still: undoes this frame's sway for the legs only
+  _pinQ.copy(pin.center.quaternion).invert().multiply(pin.centerStill);
+  // (the thigh keeps whatever rotation the leg layer gave it this frame, so
+  // a small idle in the legs still shows - only the hip sway is taken out)
+  for (const t of pin.thighs) {
+    t.bone.quaternion.premultiply(_pinQ);
+    t.bone.position.copy(t.p).applyQuaternion(_pinQ);
+  }
+}

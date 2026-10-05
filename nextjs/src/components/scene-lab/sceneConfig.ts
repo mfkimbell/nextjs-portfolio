@@ -231,7 +231,14 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   /** How soft the cone's edge is, 0 (hard) .. 1 (soft). */
   deskComputerPenumbra: number;
   /** Tip the light's aim up (+) / down (-), units along the screen's facing. */
+  /** @deprecated Superseded by deskComputerAimYawDeg/PitchDeg. Kept so older
+   *  saved configs still parse; no longer read by the scene. */
   deskComputerAimY: number;
+  /** Screen light aim: yaw in degrees. 0 points straight out of the monitor
+   *  face (local +Z), positive swings it toward local +X. */
+  deskComputerAimYawDeg: number;
+  /** Screen light aim: pitch in degrees. 0 is level, negative aims downward. */
+  deskComputerAimPitchDeg: number;
   /** Screen light casts shadows (1) / doesn't (0). */
   deskComputerShadow: number;
   /** Brightness of the desktop picture on the glass itself (1 = as drawn). */
@@ -862,6 +869,16 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   arcadeCabinLampColorG: number;
   arcadeCabinLampColorB: number;
   arcadeCabinLampEmissive: number;
+  /** Cabin lamp: 0 = omnidirectional point light (original), 1 = aimed spot. */
+  arcadeCabinLampDirectional: number;
+  /** Cabin lamp aim, degrees. Yaw turns it about the vertical. */
+  arcadeCabinLampYawDeg: number;
+  /** Cabin lamp aim, degrees. -90 = straight down, 0 = level, +90 = straight up. */
+  arcadeCabinLampPitchDeg: number;
+  /** Cabin lamp cone HALF-angle in degrees (three's spotLight.angle). */
+  arcadeCabinLampConeDeg: number;
+  /** Cabin lamp cone edge softness, 0 = hard rim, 1 = fully feathered. */
+  arcadeCabinLampPenumbra: number;
   /** Bug swarm around the cabin's lantern. Shape comes from the shared
    *  deskBug* knobs. */
   arcadeCabinLampBugs: number;
@@ -904,6 +921,9 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   oldBearBrowShow: number;
   /** Old bear eyebrow size multiplier. */
   oldBearBrowScale: number;
+  /** Old bear beard SHAPE: index into OLD_BEAR_BEARD_STYLES (0-5).
+   *  Six deformations of the one beard mesh - see oldBear.ts. */
+  oldBearBeardStyle: number;
   /** Old bear beard on (1) / off (0). */
   oldBearBeardShow: number;
   /** Old bear beard overall size. */
@@ -940,6 +960,11 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   onlyBearsLook: number;
   /** OnlyBears: chest breathing while he holds the pose (arms stay put). */
   onlyBearsBreath: number;
+  /** OnlyBears gag: cartoon easing strength. 0 = even smoothstep (the old,
+   *  polite version), 1 = full pop / wind-up / slam. */
+  onlyBearsSnap: number;
+  /** OnlyBears gag: wobble after the paw hits the glass. 0 = dead stop. */
+  onlyBearsImpact: number;
   /** Rigid offset applied to the whole arcade set inside scene 2 - CRTs,
    *  cubs, consoles, picnic table, snacks and the arcade fire. Moves them as
    *  one unit without disturbing their relative layout. */
@@ -1254,6 +1279,23 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   /** Seconds until the fish comes back. 0 = gone for the rest of the
    *  visit, which is the point. */
   fishRespawnDelay: number;
+  /** 1 = clicking the tent after the fish was thrown flops a new one out of
+   *  it, back to the original spot. */
+  fishReturnOn: number;
+  /** Seconds for the trip from the tent back to the spot. */
+  fishReturnDuration: number;
+  /** Height of the first flop on the way back (later hops shrink). */
+  fishReturnArc: number;
+  /** Number of flopping hops on the way back. */
+  fishReturnHops: number;
+  /** Whole end-over-end turns on the way back. */
+  fishReturnSpin: number;
+  /** How far in front of the tent's middle (toward the fish spot) it appears. */
+  fishReturnOut: number;
+  /** How high above the ground it appears out of the tent. */
+  fishReturnUp: number;
+  /** 1 = show the spare oars around the boat (pick a favourite position). */
+  boatOarOptions: number;
   /** Embers in the impact burst. */
   fishBurstCount: number;
   /** Initial ember speed. */
@@ -1516,9 +1558,44 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
    /** Per-character trim applied after speechVolume. */
    smokeySpeechVolume: number;
    /** Per-character trim applied after speechVolume. */
-   mapleSpeechVolume: number;
+  mapleSpeechVolume: number;
    fireCracklingVolume: number;
+  /** Cabin ambience: the old bear's rocking chair creaking (scene 3). */
+  rockingChairVolume: number;
   banjoVolume: number;
+  /** Axe flip (click the chopping block, scene 1): how high it goes, world metres. */
+  axeFlipHeight: number;
+  /** Axe flip: seconds from leaving the block to biting back in. */
+  axeFlipDuration: number;
+  /** Axe flip: end-over-end turns (whole turns, so it lands in its slot);
+   *  negative spins it the other way round. */
+  axeFlipSpins: number;
+  /** Axe flip: extra turns about the vertical, whole turns (0 = none). */
+  axeFlipTwist: number;
+  /** Axe flip: fraction of the flight spent RISING. 0.5 is a symmetric lob;
+   *  higher hangs it at the top and drops it back faster (0.58 ~= 1.4x). */
+  axeFlipApex: number;
+  /** Wood pile (click it, scene 1 - one log per click): how far a log rolls
+   *  to the RIGHT of the screen before it curves away, world metres. */
+  woodRollRight: number;
+  /** 1 = if the tent is off to the right, roll straight at it (stopping
+   *  woodRollTentGap short) before curving down; 0 = always woodRollRight. */
+  woodRollToTent: number;
+  /** How close to the tent a log gets before it curves away, metres. */
+  woodRollTentGap: number;
+  /** How wide the curve from rolling right to rolling down the screen is, metres. */
+  woodRollTurnRadius: number;
+  /** How far it rolls DOWN the screen after the curve - long enough to leave
+   *  the shot, then it is gone. Metres. */
+  woodRollAway: number;
+  /** Seconds from leaving the pile to rolling out of shot. */
+  woodRollTime: number;
+  /** Loudness of the knock as each log hits the ground (x click volume). */
+  woodRollSoundVolume: number;
+  /** Seconds the bears keep looking at the block after the axe lands. */
+  axeWatchHold: number;
+  /** Seconds (time constant) for the bears' eyes to catch up with the axe. */
+  axeWatchFollowTime: number;
   /** How fast the banjo fades with distance: 1 = real-world 1/distance,
    *  0 = same loudness everywhere, 2 = drops off hard. Measured from scene 1's
    *  own shot, where it plays at exactly banjoVolume. */
@@ -1620,6 +1697,14 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   bearLookUserYOffset: number;
   /** Delay before turning toward the other bear after their speech begins. */
   bearLookPartnerDelay: number;
+  /** Maple (back-right bear): how much leg idle she keeps (0 = still, 1 = sit_log's full bounce). */
+  bearMapleLegAmount: number;
+  /** Maple's leg idle speed (1 = sit_log's own). */
+  bearMapleLegSpeed: number;
+  /** Smokey (back-left, banjo): speed of his leg bounce (1 = as the clip, 0 = stopped). */
+  bearSmokeyLegSpeed: number;
+  /** Smokey: size of his leg bounce (1 = as the clip, 0 = still, >1 = bigger). */
+  bearSmokeyLegAmount: number;
   bearFishLookTurnTime: number;
   bearFishHeadTurnTime: number;
   bearFishImpactDelay: number;
@@ -1656,6 +1741,34 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   bearFishIdleGazeYOffset: number;
   bearFishIdleLookTime: number;
   bearFishIdleInterval: number;
+  /** Seconds for Maple's gaze to get to her fish. */
+  bearFishIdleTurnTime: number;
+  /** Seconds for her slow, eased look back up from the fish. */
+  bearFishIdleReturnTime: number;
+  /** 1 = Smokey glances down at his fret hand now and then (checking chords). */
+  bearFretLookOn: number;
+  /** Seconds each fret glance lasts (varied +/-30%). */
+  bearFretLookTime: number;
+  /** Average seconds between fret glances (varied). */
+  bearFretLookInterval: number;
+  /** 0..1 chance a glance is followed by a quick second peek. */
+  bearFretDoubleChance: number;
+  /** Seconds for his gaze to get down to the frets. */
+  bearFretTurnTime: number;
+  /** Seconds for the slow, eased look back up from the frets. */
+  bearFretReturnTime: number;
+  /** 0..1 how fully the head aims at the fret hand. */
+  bearFretLookAmount: number;
+  /** Degrees the neck may turn for a fret glance. */
+  bearFretMaxTurn: number;
+  /** World nudge of the look point from his fret fingers. */
+  bearFretLookX: number;
+  bearFretLookY: number;
+  bearFretLookZ: number;
+  /** Extra downward peer (radians, - = up). */
+  bearFretNod: number;
+  /** Head cock while looking (radians, - = other way). */
+  bearFretTilt: number;
 
   objectOverrides: Record<string, ObjectOverride>;
   /**
@@ -1982,6 +2095,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskComputerAngle: 77,
   deskComputerPenumbra: 0.7,
   deskComputerAimY: 0,
+  deskComputerAimYawDeg: 0,
+  deskComputerAimPitchDeg: 0,
   deskComputerShadow: 0,
   deskComputerGlassBrightness: 1,
   // Warm desk fill - hemisphere sky/ground tint, kept low so the lanterns and
@@ -2363,6 +2478,12 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   arcadeCabinLampColorG: 0.87,
   arcadeCabinLampColorB: 0.55,
   arcadeCabinLampEmissive: 3.5,
+  // Off by default, so the cabin looks exactly as it did until you turn it on.
+  arcadeCabinLampDirectional: 0,
+  arcadeCabinLampYawDeg: 0,
+  arcadeCabinLampPitchDeg: -90,
+  arcadeCabinLampConeDeg: 45,
+  arcadeCabinLampPenumbra: 0.5,
   arcadeCabinLampBugs: 1,
   cabinSetX: -7.21,
   cabinSetY: 0,
@@ -2389,6 +2510,7 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   oldBearGlassesFwd: 0,
   oldBearBrowShow: 1,
   oldBearBrowScale: 1,
+  oldBearBeardStyle: 0,
   oldBearBeardShow: 1,
   oldBearBeardScale: 1,
   oldBearBeardLength: 1,
@@ -2401,7 +2523,7 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   oldBearHairB: 0.886,
   oldBearLensCloud: 0,
   onlyBearsSpeed: 1,
-  onlyBearsPawScale: 1.6,
+  onlyBearsPawScale: 1,
   onlyBearsScale: 1,
   onlyBearsX: 0,
   onlyBearsY: 0,
@@ -2409,6 +2531,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   onlyBearsLean: 0,
   onlyBearsLook: 0.85,
   onlyBearsBreath: 0.3,
+  onlyBearsSnap: 0,
+  onlyBearsImpact: 0,
   arcadeCrtGlow: 1,
   arcadeCrtLightR: 0.475,
   arcadeCrtLightG: 0.776,
@@ -2601,6 +2725,14 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   fishLaunchTargetY: 0.5,
   fishLaunchFlail: 2.2,
   fishRespawnDelay: 0,
+  fishReturnOn: 1,
+  fishReturnDuration: 1.5,
+  fishReturnArc: 0.45,
+  fishReturnHops: 3,
+  fishReturnSpin: 1,
+  fishReturnOut: 0.7,
+  fishReturnUp: 0.35,
+  boatOarOptions: 1,
   fishBurstCount: 110,
   fishBurstSpeed: 2.3,
   fishBurstSpread: 0.85,
@@ -2716,7 +2848,22 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   smokeySpeechVolume: 1,
   mapleSpeechVolume: 1,
   fireCracklingVolume: 0.55,
+  rockingChairVolume: 0.3,
   banjoVolume: 0.32,
+  axeFlipHeight: 1.2,
+  axeFlipDuration: 1.4,
+  axeFlipSpins: 2,
+  axeFlipTwist: 0,
+  axeFlipApex: 0.58,
+  axeWatchHold: 0.6,
+  woodRollRight: 3.5,
+  woodRollTurnRadius: 0.8,
+  woodRollToTent: 1,
+  woodRollTentGap: 1.0,
+  woodRollAway: 9,
+  woodRollTime: 3.6,
+  woodRollSoundVolume: 0.5,
+  axeWatchFollowTime: 0.08,
   banjoDistanceRolloff: 1,
   banjoMaxBoost: 1.8,
   banjoPropX: 0,
@@ -2765,6 +2912,10 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   bearLookTurnTime: 0.65,
   bearLookUserYOffset: -0.2,
   bearLookPartnerDelay: 0.08,
+  bearMapleLegAmount: 0.25,
+  bearMapleLegSpeed: 0.6,
+  bearSmokeyLegSpeed: 1,
+  bearSmokeyLegAmount: 1,
   bearFishLookTurnTime: 0.65,
   bearFishHeadTurnTime: 0.8,
   bearFishImpactDelay: 0.3,
@@ -2788,8 +2939,23 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   bearFishFireTurnTime: 0.3,
   bearFishMaxTurn: 80,
   bearFishIdleGazeYOffset: -1.2,
-  bearFishIdleLookTime: 2,
+  bearFishIdleLookTime: 3.5,
   bearFishIdleInterval: 6,
+  bearFishIdleTurnTime: 0.4,
+  bearFishIdleReturnTime: 1.2,
+  bearFretLookOn: 1,
+  bearFretLookTime: 3,
+  bearFretLookInterval: 7,
+  bearFretDoubleChance: 0.35,
+  bearFretTurnTime: 0.25,
+  bearFretReturnTime: 1.2,
+  bearFretLookAmount: 1,
+  bearFretMaxTurn: 75,
+  bearFretLookX: 0,
+  bearFretLookY: 0,
+  bearFretLookZ: 0,
+  bearFretNod: 0.12,
+  bearFretTilt: 0.12,
 
   objectOverrides: {},
   objectDuplicates: {},

@@ -31,6 +31,9 @@ PORTFOLIO_ORIGIN=http://localhost:3000
 BEAR_EVENT_TOKEN=replace-with-a-long-random-secret
 
 SESSION_IDLE_TTL_MS=900000
+# Optional parallel diagnostic mirror. It receives Twilio's inbound and outbound
+# telephone tracks at /media-stream without replacing ConversationRelay.
+TWILIO_MEDIA_STREAMS_MIRROR=false
 ```
 
 `APP_ENV` must be exactly `DEV` or `PROD`. `DEV` selects `DEV_AGENT_BASE_URL`; `PROD` selects `PROD_AGENT_BASE_URL`. The selected URL must use `https://` because `/call` converts it to a `wss://.../conversation-relay` URL for Twilio.
@@ -58,6 +61,7 @@ Endpoints:
 - `GET /events/:callSid` holds a server-sent events connection for an active relay call. It emits `bear.speech.started` just before each text message, with `{ callSid, bear, speaker, text }`; `speaker` is `back_left_log` for `bear1` (Smokey) and `back_right_log` for `bear2` (Maple). It emits `bear.speech.interrupted` when ConversationRelay sends an interrupt for the active line.
 - `POST /call` returns ConversationRelay TwiML. Configure this endpoint as the TwiML App voice URL or return it from your calling flow. When `TWILIO_AUTH_TOKEN` is set, Twilio must sign this webhook request.
 - `WSS /conversation-relay` is Twilio's ConversationRelay endpoint; do not expose it to browsers.
+- `WSS /media-stream` is an optional Twilio Media Streams observer, enabled only when `TWILIO_MEDIA_STREAMS_MIRROR=true`. It receives call audio for transport diagnostics; it does not create separate browser audio tracks.
 
 `POST /call` configures ConversationRelay's native ElevenLabs provider with `ttsProvider="ElevenLabs"`, `ttsLanguage="en-US"`, Smokey's voice, and an `en-US` Language profile. Each bear line is sent as an interruptible ConversationRelay `text` message with `lang: "en-US"` and `last: true`; no audio assets, direct ElevenLabs fetches, or ElevenLabs API key are used. At every confirmed handoff, `bear.speech.queued` assigns frontend animation ownership before the next Twilio text token is sent; the retrospective `tokensPlayed` event then confirms `bear.speech.started`. On setup, Smokey's preemptible introduction waits until `tokensPlayed` confirms `Mitchell Kimbell` before Maple corrects the title. Smokey's next complete utterance begins with the deterministic uptake `Right, staff engineer.` Final caller prompts use sequential OpenAI completions: Smokey leads, Maple receives the caller prompt and Smokey's lead, and every Maple interruption includes a compact handoff context that the application inserts into Smokey's acknowledgement before his generated continuation. Each bear keeps a separate bounded history. Without `OPENAI_API_KEY`, the service remains available and returns a clear two-bear configuration fallback.
 

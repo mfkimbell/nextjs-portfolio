@@ -1,2 +1,3 @@
 allowBuilds:
+  '@livekit/local-inference': set this to true or false
   esbuild: false

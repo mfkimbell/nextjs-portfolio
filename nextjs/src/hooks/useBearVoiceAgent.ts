@@ -85,10 +85,14 @@ export function useBearVoiceAgent({
   speechVolume = 1,
   smokeySpeechVolume = 1,
   mapleSpeechVolume = 1,
+  smokeyVoiceId,
+  mapleVoiceId,
 }: {
   speechVolume?: number;
   smokeySpeechVolume?: number;
   mapleSpeechVolume?: number;
+  smokeyVoiceId?: string;
+  mapleVoiceId?: string;
 } = {}): BearVoiceAgent {
   const callRef = useRef<VoiceCall | null>(null);
   const deviceRef = useRef<VoiceDevice | null>(null);
@@ -378,7 +382,11 @@ export function useBearVoiceAgent({
       await device.register();
 
       const call = await device.connect({
-        params: { To: process.env.NEXT_PUBLIC_BEAR_AGENT_TO || DEFAULT_DESTINATION },
+        params: {
+          To: process.env.NEXT_PUBLIC_BEAR_AGENT_TO || DEFAULT_DESTINATION,
+          ...(smokeyVoiceId ? { SmokeyVoice: smokeyVoiceId } : {}),
+          ...(mapleVoiceId ? { MapleVoice: mapleVoiceId } : {}),
+        },
       });
       callRef.current = call;
       call.on("accept", (acceptedCall?: unknown) => {
@@ -413,7 +421,7 @@ export function useBearVoiceAgent({
       setError(startError instanceof Error ? startError.message : "Unable to start a voice session.");
       setStatus("error");
     }
-  }, [cleanup, monitorRemoteAudio, subscribeToAgentEvents]);
+  }, [cleanup, mapleVoiceId, monitorRemoteAudio, smokeyVoiceId, subscribeToAgentEvents]);
 
   const toggleMute = useCallback(() => {
     const call = callRef.current;

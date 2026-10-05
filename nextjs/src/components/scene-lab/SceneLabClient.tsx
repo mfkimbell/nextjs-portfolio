@@ -489,12 +489,17 @@ const LIGHT_CONTROLS: Record<string, readonly LightKnob[]> = {
   ],
   arcade_wooden_cabin: [
     { key: "arcadeCabinLampIntensity", label: "Lamp intensity", min: 0, max: 20, step: 0.05 },
-    { key: "arcadeCabinLampDistance", label: "Lamp reach (world)", min: 0, max: 15, step: 0.05 },
+    { key: "arcadeCabinLampDistance", label: "Lamp reach (world)", min: 0, max: 60, step: 0.05 },
     { key: "arcadeCabinLampDecay", label: "Lamp decay", min: 0, max: 4, step: 0.05 },
     { key: "arcadeCabinLampColorR", label: "Lamp R", min: 0, max: 1, step: 0.01 },
     { key: "arcadeCabinLampColorG", label: "Lamp G", min: 0, max: 1, step: 0.01 },
     { key: "arcadeCabinLampColorB", label: "Lamp B", min: 0, max: 1, step: 0.01 },
     { key: "arcadeCabinLampEmissive", label: "Lantern glass brightness", min: 0, max: 12, step: 0.1 },
+    { key: "arcadeCabinLampDirectional", label: "Aimed spot instead of bare bulb (0/1)", min: 0, max: 1, step: 1 },
+    { key: "arcadeCabinLampYawDeg", label: "Aim: yaw (deg)", min: -180, max: 180, step: 1 },
+    { key: "arcadeCabinLampPitchDeg", label: "Aim: pitch (-90 down, +90 up)", min: -90, max: 90, step: 1 },
+    { key: "arcadeCabinLampConeDeg", label: "Cone half-angle (deg)", min: 5, max: 89, step: 1 },
+    { key: "arcadeCabinLampPenumbra", label: "Cone edge softness", min: 0, max: 1, step: 0.01 },
     { key: "arcadeCabinLampBugs", label: "Bug swarm (0/1)", min: 0, max: 1, step: 1 },
   ],
   old_bear_lantern: [
@@ -1071,11 +1076,64 @@ export default function SceneLabClient() {
     void saveToProject();
   };
 
+  /*
+   * Read campfireScene.json back off disk before anything is allowed to write
+   * to it.
+   *
+   * The lab used to seed purely from the BUNDLED import of that JSON and never
+   * GET it, while auto-saving the WHOLE config every 2.5s. Writing the file
+   * makes Next's dev server re-evaluate the module graph (JSON is not
+   * Fast-Refreshable), and if that remounts this component the state resets to
+   * whatever the import held when it was evaluated. A stale seed then got
+   * posted straight back over the file on the next edit - so deletes and moves
+   * appeared not to save, and whole batches of `hide` flags reverted at once.
+   *
+   * Fetching makes the FILE authoritative rather than the bundle, and the
+   * `configLoaded` gate below means no write can ever happen from a pre-load
+   * state. `initialLoadRef` only ever skipped a single render, which is not
+   * the same guarantee.
+   */
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const skipNextSaveRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/dev/scene-config", { cache: "no-store" });
+        if (res.ok) {
+          const file = (await res.json()) as Partial<CampfireSceneConfig> & Record<string, unknown>;
+          if (!cancelled && file && typeof file === "object" && Object.keys(file).length) {
+            // locationViews are deliberately left alone: DEFAULT_CAMPFIRE_CONFIG
+            // has already run them through overlayCameraDefaults, and the save
+            // route owns them separately.
+            const { locationViews: _ignored, ...rest } = file;
+            void _ignored;
+            skipNextSaveRef.current = true;
+            setCampfireConfig((prev) => ({ ...prev, ...(rest as Partial<CampfireSceneConfig>) }));
+          }
+        }
+      } catch {
+        // dev server unreachable - fall back to the bundled defaults
+      } finally {
+        if (!cancelled) setConfigLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialLoadRef = useRef(false);
   useEffect(() => {
     if (!initialLoadRef.current) {
       initialLoadRef.current = true;
+      return;
+    }
+    // Never write before the file has been read, or the bundled defaults would
+    // overwrite whatever is actually on disk.
+    if (!configLoaded) return;
+    // ...and don't immediately write back the state the load itself just set.
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
       return;
     }
     if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
@@ -1105,7 +1163,7 @@ export default function SceneLabClient() {
     return () => {
       if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
     };
-  }, [campfireConfig, oceanConfig, activeScene]);
+  }, [campfireConfig, oceanConfig, activeScene, configLoaded]);
 
   const clearSavedConfig = () => {
     // Always remove any lingering localStorage entry too, so the browser can't
@@ -1928,10 +1986,11 @@ export default function SceneLabClient() {
                     <SliderRow label="Light B" value={campfireConfig.deskComputerColorB} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerColorB", value)} />
                     <SliderRow label="Casts shadows (0/1)" value={campfireConfig.deskComputerShadow} min={0} max={1} step={1} onChange={(value) => updateCampfire("deskComputerShadow", value)} />
                     <div className="mt-1 text-[0.6rem] text-white/40">Place it on the monitor face and aim it:</div>
-                    <SliderRow label="Light X" value={campfireConfig.deskComputerLightX} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerLightX", value)} />
-                    <SliderRow label="Light Y" value={campfireConfig.deskComputerLightY} min={-1} max={2} step={0.01} onChange={(value) => updateCampfire("deskComputerLightY", value)} />
-                    <SliderRow label="Light Z" value={campfireConfig.deskComputerLightZ} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("deskComputerLightZ", value)} />
-                    <SliderRow label="Aim up / down" value={campfireConfig.deskComputerAimY} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("deskComputerAimY", value)} />
+                    <SliderRow label="Light X" value={campfireConfig.deskComputerLightX} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskComputerLightX", value)} />
+                    <SliderRow label="Light Y" value={campfireConfig.deskComputerLightY} min={-4} max={8} step={0.01} onChange={(value) => updateCampfire("deskComputerLightY", value)} />
+                    <SliderRow label="Light Z" value={campfireConfig.deskComputerLightZ} min={-8} max={8} step={0.01} onChange={(value) => updateCampfire("deskComputerLightZ", value)} />
+                    <SliderRow label="Aim left / right (deg)" value={campfireConfig.deskComputerAimYawDeg} min={-180} max={180} step={1} onChange={(value) => updateCampfire("deskComputerAimYawDeg", value)} />
+                    <SliderRow label="Aim up / down (deg)" value={campfireConfig.deskComputerAimPitchDeg} min={-90} max={90} step={1} onChange={(value) => updateCampfire("deskComputerAimPitchDeg", value)} />
                     <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">The screen itself</div>
                     <SliderRow label="Desktop brightness" value={campfireConfig.deskComputerGlassBrightness} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("deskComputerGlassBrightness", value)} />
                     <div className="mt-1 text-[0.6rem] text-white/40">The monitor model&apos;s own screen panel (behind the desktop picture):</div>
@@ -1949,9 +2008,13 @@ export default function SceneLabClient() {
                       0.1 base scale), so they move in big steps; reach and
                       decay are in world units.
                     </p>
-                    <SliderRow label="Lamp X (model space)" value={campfireConfig.arcadeCabinLampX} min={-140} max={140} step={0.25} onChange={(value) => updateCampfire("arcadeCabinLampX", value)} />
-                    <SliderRow label="Lamp Y (model space)" value={campfireConfig.arcadeCabinLampY} min={-140} max={140} step={0.25} onChange={(value) => updateCampfire("arcadeCabinLampY", value)} />
-                    <SliderRow label="Lamp Z (model space)" value={campfireConfig.arcadeCabinLampZ} min={-140} max={140} step={0.25} onChange={(value) => updateCampfire("arcadeCabinLampZ", value)} />
+                    {/* Model space, so these are tiny in world terms: the cabin
+                        sits under baseScale 0.1 times its override (~0.307), so
+                        1 unit here is ~0.03 world units and the old +/-140 only
+                        reached +/-4.3 world - about the width of the cabin. */}
+                    <SliderRow label="Lamp X (model space)" value={campfireConfig.arcadeCabinLampX} min={-600} max={600} step={0.25} onChange={(value) => updateCampfire("arcadeCabinLampX", value)} />
+                    <SliderRow label="Lamp Y (model space)" value={campfireConfig.arcadeCabinLampY} min={-600} max={600} step={0.25} onChange={(value) => updateCampfire("arcadeCabinLampY", value)} />
+                    <SliderRow label="Lamp Z (model space)" value={campfireConfig.arcadeCabinLampZ} min={-600} max={600} step={0.25} onChange={(value) => updateCampfire("arcadeCabinLampZ", value)} />
                     <SliderRow label="Lamp intensity" value={campfireConfig.arcadeCabinLampIntensity} min={0} max={20} step={0.05} onChange={(value) => updateCampfire("arcadeCabinLampIntensity", value)} />
                     <SliderRow label="Lamp reach (world)" value={campfireConfig.arcadeCabinLampDistance} min={0} max={15} step={0.05} onChange={(value) => updateCampfire("arcadeCabinLampDistance", value)} />
                     <SliderRow label="Lamp decay" value={campfireConfig.arcadeCabinLampDecay} min={0} max={4} step={0.05} onChange={(value) => updateCampfire("arcadeCabinLampDecay", value)} />
@@ -2486,6 +2549,9 @@ export default function SceneLabClient() {
                       "Camp items",
                       "Animals",
                       "Flopping fish",
+                      "Axe flip",
+                      "Wood pile roll",
+                      "Boat oars",
                       "Truck tailgate offset (arcade)",
                       "Truck bed wall extension (arcade)",
                       "Banjo (held by back-left bear)",
@@ -3232,6 +3298,49 @@ export default function SceneLabClient() {
                     <SliderRow label="Animal Z" value={campfireConfig.animalZ} min={-10} max={10} step={0.05} onChange={(value) => updateCampfire("animalZ", value)} />
                   </ControlGroup>
 
+                  <ControlGroup title="Axe flip" scope="1">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      On the site, click the chopping block: the axe pops out, spins end
+                      over end and drops back into its slot, and every log bear watches
+                      it. Here in config mode a click just selects the block so you can
+                      move it; changing any of these flips it again to preview.
+                    </p>
+                    <SliderRow label="Height (m)" value={campfireConfig.axeFlipHeight} min={0.2} max={4} step={0.05} onChange={(value) => updateCampfire("axeFlipHeight", value)} />
+                    <SliderRow label="Time in the air (s)" value={campfireConfig.axeFlipDuration} min={0.4} max={4} step={0.05} onChange={(value) => updateCampfire("axeFlipDuration", value)} />
+                    <SliderRow label="End-over-end turns (- = other way)" value={campfireConfig.axeFlipSpins} min={-8} max={8} step={1} onChange={(value) => updateCampfire("axeFlipSpins", value)} />
+                    <SliderRow label="Twirl turns (around vertical)" value={campfireConfig.axeFlipTwist} min={-4} max={4} step={1} onChange={(value) => updateCampfire("axeFlipTwist", value)} />
+                    <SliderRow label="Rise share (higher = falls back faster)" value={campfireConfig.axeFlipApex} min={0.3} max={0.8} step={0.01} onChange={(value) => updateCampfire("axeFlipApex", value)} />
+                    <SliderRow label="Bears: keep looking after it lands (s)" value={campfireConfig.axeWatchHold} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("axeWatchHold", value)} />
+                    <SliderRow label="Bears: eyes catch up (s)" value={campfireConfig.axeWatchFollowTime} min={0.02} max={0.6} step={0.01} onChange={(value) => updateCampfire("axeWatchFollowTime", value)} />
+                  </ControlGroup>
+
+                  <ControlGroup title="Wood pile roll" scope="1">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      On the site, each click on the wood pile sends a log off - the top
+                      row first, starting from its outer right end, then the next row: it
+                      drops off the stack, rolls right (up to the tent, if the tent is
+                      that way), curves round and rolls down out of shot. Here in
+                      config mode a click just selects the pile so you can move it;
+                      changing any of these restacks it and sends one log to preview.
+                    </p>
+                    <SliderRow label="Roll right first (m, if not heading for the tent)" value={campfireConfig.woodRollRight} min={0} max={12} step={0.05} onChange={(value) => updateCampfire("woodRollRight", value)} />
+                    <SliderRow label="Roll up to the tent first (0/1)" value={campfireConfig.woodRollToTent} min={0} max={1} step={1} onChange={(value) => updateCampfire("woodRollToTent", value)} />
+                    <SliderRow label="How close to the tent (m)" value={campfireConfig.woodRollTentGap} min={0} max={5} step={0.05} onChange={(value) => updateCampfire("woodRollTentGap", value)} />
+                    <SliderRow label="Curve width (m)" value={campfireConfig.woodRollTurnRadius} min={0.05} max={3} step={0.05} onChange={(value) => updateCampfire("woodRollTurnRadius", value)} />
+                    <SliderRow label="Then roll down the screen (m)" value={campfireConfig.woodRollAway} min={1} max={30} step={0.5} onChange={(value) => updateCampfire("woodRollAway", value)} />
+                    <SliderRow label="Time to leave the shot (s)" value={campfireConfig.woodRollTime} min={0.5} max={8} step={0.05} onChange={(value) => updateCampfire("woodRollTime", value)} />
+                    <SliderRow label="Knock sound volume" value={campfireConfig.woodRollSoundVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("woodRollSoundVolume", value)} />
+                  </ControlGroup>
+
+                  <ControlGroup title="Boat oars" scope="1">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      Spare oars leaning on / lying by the boat, each its own object
+                      (campfire_oar, campfire_oar_2 … campfire_oar_8): click one to
+                      move it, then tell Claude which pose to keep.
+                    </p>
+                    <SliderRow label="Show the spare oars (0/1)" value={campfireConfig.boatOarOptions} min={0} max={1} step={1} onChange={(value) => updateCampfire("boatOarOptions", value)} />
+                  </ControlGroup>
+
                   <ControlGroup title="Flopping fish" scope="1">
                     <SliderRow label="Fish X" value={campfireConfig.fishX} min={-10} max={10} step={0.02} onChange={(value) => updateCampfire("fishX", value)} />
                     <SliderRow label="Fish Y" value={campfireConfig.fishY} min={-2} max={5} step={0.01} onChange={(value) => updateCampfire("fishY", value)} />
@@ -3248,6 +3357,18 @@ export default function SceneLabClient() {
                     <SliderRow label="Fish: Launch target y" value={campfireConfig.fishLaunchTargetY} min={-1} max={2} step={0.05} onChange={(value) => updateCampfire("fishLaunchTargetY", value)} />
                     <SliderRow label="Fish: Launch flail" value={campfireConfig.fishLaunchFlail} min={0} max={6} step={0.1} onChange={(value) => updateCampfire("fishLaunchFlail", value)} />
                     <SliderRow label="Fish: Respawn delay" value={campfireConfig.fishRespawnDelay} min={0} max={30} step={0.5} onChange={(value) => updateCampfire("fishRespawnDelay", value)} />
+                    <p className="mt-2 mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      Fish back from the tent: on the site, once the fish is in the
+                      fire, clicking the tent flops a new one out and back to the
+                      fish&apos;s spot. Changing these replays it here.
+                    </p>
+                    <SliderRow label="Tent sends a fish back (0/1)" value={campfireConfig.fishReturnOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("fishReturnOn", value)} />
+                    <SliderRow label="Return: time (s)" value={campfireConfig.fishReturnDuration} min={0.3} max={5} step={0.05} onChange={(value) => updateCampfire("fishReturnDuration", value)} />
+                    <SliderRow label="Return: hop height" value={campfireConfig.fishReturnArc} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("fishReturnArc", value)} />
+                    <SliderRow label="Return: hops" value={campfireConfig.fishReturnHops} min={1} max={8} step={1} onChange={(value) => updateCampfire("fishReturnHops", value)} />
+                    <SliderRow label="Return: flips (- = other way)" value={campfireConfig.fishReturnSpin} min={-4} max={4} step={1} onChange={(value) => updateCampfire("fishReturnSpin", value)} />
+                    <SliderRow label="Return: starts in front of tent (m)" value={campfireConfig.fishReturnOut} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("fishReturnOut", value)} />
+                    <SliderRow label="Return: starts this high (m)" value={campfireConfig.fishReturnUp} min={0} max={2} step={0.05} onChange={(value) => updateCampfire("fishReturnUp", value)} />
                     <SliderRow label="Fish: Burst count" value={campfireConfig.fishBurstCount} min={0} max={600} step={10} onChange={(value) => updateCampfire("fishBurstCount", value)} />
                     <SliderRow label="Fish: Burst speed" value={campfireConfig.fishBurstSpeed} min={0} max={8} step={0.1} onChange={(value) => updateCampfire("fishBurstSpeed", value)} />
                     <SliderRow label="Fish: Burst spread" value={campfireConfig.fishBurstSpread} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("fishBurstSpread", value)} />
@@ -3438,6 +3559,8 @@ export default function SceneLabClient() {
                     <SliderRow label="Extra lean (deg)" value={campfireConfig.onlyBearsLean} min={-25} max={25} step={0.5} onChange={(value) => updateCampfire("onlyBearsLean", value)} />
                     <SliderRow label="Looks at you" value={campfireConfig.onlyBearsLook} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("onlyBearsLook", value)} />
                     <SliderRow label="Breathing" value={campfireConfig.onlyBearsBreath} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("onlyBearsBreath", value)} />
+                    <SliderRow label="Cartoon snap (0 = polite, 1 = slam)" value={campfireConfig.onlyBearsSnap} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("onlyBearsSnap", value)} />
+                    <SliderRow label="Impact wobble" value={campfireConfig.onlyBearsImpact} min={0} max={2} step={0.01} onChange={(value) => updateCampfire("onlyBearsImpact", value)} />
                   </ControlGroup>
 
                   <ControlGroup title="Bear talking">
@@ -3510,6 +3633,11 @@ export default function SceneLabClient() {
                     <SliderRow label="Ear flicks" value={campfireConfig.bearTalkEars} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearTalkEars", value)} />
                     <SliderRow label="Listener nods" value={campfireConfig.bearTalkListener} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearTalkListener", value)} />
                     <SliderRow label="Blink rate" value={campfireConfig.bearBlinkRate} min={0} max={3} step={0.01} onChange={(value) => updateCampfire("bearBlinkRate", value)} />
+                    <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Legs</div>
+                    <SliderRow label="Maple: leg idle size (0 = still)" value={campfireConfig.bearMapleLegAmount} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("bearMapleLegAmount", value)} />
+                    <SliderRow label="Maple: leg idle speed" value={campfireConfig.bearMapleLegSpeed} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("bearMapleLegSpeed", value)} />
+                    <SliderRow label="Smokey: leg bounce speed" value={campfireConfig.bearSmokeyLegSpeed} min={0} max={4} step={0.05} onChange={(value) => updateCampfire("bearSmokeyLegSpeed", value)} />
+                    <SliderRow label="Smokey: leg bounce size" value={campfireConfig.bearSmokeyLegAmount} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("bearSmokeyLegAmount", value)} />
                     <div className="mt-2 text-[0.62rem] uppercase tracking-[0.18em] text-white/40">Gaze</div>
                     <p className="mb-1 text-[0.6rem] leading-relaxed text-white/40">
                       Smokey faces you and looks at Maple while Maple talks.
@@ -3552,6 +3680,22 @@ export default function SceneLabClient() {
                     <SliderRow label="Idle fish gaze height" value={campfireConfig.bearFishIdleGazeYOffset} min={-3} max={1} step={0.01} onChange={(value) => updateCampfire("bearFishIdleGazeYOffset", value)} />
                     <SliderRow label="Idle fish look hold (s)" value={campfireConfig.bearFishIdleLookTime} min={0.2} max={8} step={0.05} onChange={(value) => updateCampfire("bearFishIdleLookTime", value)} />
                     <SliderRow label="Idle fish look interval (s)" value={campfireConfig.bearFishIdleInterval} min={1} max={30} step={0.1} onChange={(value) => updateCampfire("bearFishIdleInterval", value)} />
+                    <SliderRow label="Idle fish: look down time (s)" value={campfireConfig.bearFishIdleTurnTime} min={0.05} max={1.5} step={0.01} onChange={(value) => updateCampfire("bearFishIdleTurnTime", value)} />
+                    <SliderRow label="Idle fish: look back up time (s)" value={campfireConfig.bearFishIdleReturnTime} min={0.1} max={4} step={0.05} onChange={(value) => updateCampfire("bearFishIdleReturnTime", value)} />
+                    <div className="mt-1 text-[0.6rem] uppercase tracking-[0.16em] text-white/35">Smokey checking his chords</div>
+                    <SliderRow label="Smokey checks his frets (0/1)" value={campfireConfig.bearFretLookOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("bearFretLookOn", value)} />
+                    <SliderRow label="Fret glance: hold (s)" value={campfireConfig.bearFretLookTime} min={0.2} max={10} step={0.05} onChange={(value) => updateCampfire("bearFretLookTime", value)} />
+                    <SliderRow label="Fret glance: every ~ (s)" value={campfireConfig.bearFretLookInterval} min={0.5} max={30} step={0.1} onChange={(value) => updateCampfire("bearFretLookInterval", value)} />
+                    <SliderRow label="Fret glance: double-check chance" value={campfireConfig.bearFretDoubleChance} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("bearFretDoubleChance", value)} />
+                    <SliderRow label="Fret glance: look down time (s)" value={campfireConfig.bearFretTurnTime} min={0.05} max={1.5} step={0.01} onChange={(value) => updateCampfire("bearFretTurnTime", value)} />
+                    <SliderRow label="Fret glance: look back up time (s)" value={campfireConfig.bearFretReturnTime} min={0.1} max={4} step={0.05} onChange={(value) => updateCampfire("bearFretReturnTime", value)} />
+                    <SliderRow label="Fret glance: how fully he looks" value={campfireConfig.bearFretLookAmount} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("bearFretLookAmount", value)} />
+                    <SliderRow label="Fret glance: neck limit (deg)" value={campfireConfig.bearFretMaxTurn} min={20} max={120} step={1} onChange={(value) => updateCampfire("bearFretMaxTurn", value)} />
+                    <SliderRow label="Fret glance: aim X" value={campfireConfig.bearFretLookX} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("bearFretLookX", value)} />
+                    <SliderRow label="Fret glance: aim Y" value={campfireConfig.bearFretLookY} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("bearFretLookY", value)} />
+                    <SliderRow label="Fret glance: aim Z" value={campfireConfig.bearFretLookZ} min={-1} max={1} step={0.01} onChange={(value) => updateCampfire("bearFretLookZ", value)} />
+                    <SliderRow label="Fret glance: extra peer down" value={campfireConfig.bearFretNod} min={-0.6} max={0.6} step={0.01} onChange={(value) => updateCampfire("bearFretNod", value)} />
+                    <SliderRow label="Fret glance: head cock" value={campfireConfig.bearFretTilt} min={-0.6} max={0.6} step={0.01} onChange={(value) => updateCampfire("bearFretTilt", value)} />
                   </ControlGroup>
 
                   <button

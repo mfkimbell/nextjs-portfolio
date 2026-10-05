@@ -9,9 +9,11 @@
     "lint": "next lint",
     "twilio:setup": "node scripts/setup-twilio.mjs",
     "validate:bear-assets": "python3 scripts/validate_bear_assets.py",
+    "validate:onlybears": "node scripts/onlybears/validate-onlybears-runtime.mjs",
     "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@livekit/protocol": "^1.52.1",
     "@prisma/client": "^6.7.0",
     "@radix-ui/react-slot": "^1.2.2",
     "@react-three/drei": "^10.2.0",
@@ -23,6 +25,8 @@
     "clsx": "^2.1.1",
     "framer-motion": "^12.14.0",
     "gifler": "^0.1.0",
+    "livekit-client": "^2.22.3",
+    "livekit-server-sdk": "^2.19.1",
     "lucide-react": "^0.508.0",
     "next": "^15.5.15",
     "react": "^19.0.0",

@@ -103,6 +103,7 @@ const smokeyLanguage = process.env.SMOKEY_TTS_LANGUAGE?.trim() || "en-US";
 const mapleVoiceId = process.env.MAPLE_ELEVENLABS_VOICE_ID?.trim() || "u0REnIJvUgcGQYW2Ux8K";
 const mapleLanguage = process.env.MAPLE_TTS_LANGUAGE?.trim() || "en-GB";
 const dialogueProtocol = "speech-id-v3";
+const mediaStreamsMirrorEnabled = process.env.TWILIO_MEDIA_STREAMS_MIRROR === "true";
 const sessions = new Map<string, Session>();
 const { app } = expressWs(express());
 
@@ -126,6 +127,10 @@ function redactId(value: string): string {
   return value.length > 8 ? `${value.slice(0, 4)}...${value.slice(-4)}` : "[configured]";
 }
 
+function requestedVoice(value: unknown, fallback: string): string {
+  return typeof value === "string" && /^[a-zA-Z0-9]{8,64}$/.test(value) ? value : fallback;
+}
+
 function asRelayMessage(raw: unknown): RelayMessage | undefined {
   try {
     const text = Buffer.isBuffer(raw)
@@ -136,6 +141,20 @@ function asRelayMessage(raw: unknown): RelayMessage | undefined {
     const value: unknown = JSON.parse(text);
     if (!value || typeof value !== "object" || !("type" in value) || typeof value.type !== "string") return undefined;
     return value as RelayMessage;
+  } catch {
+    return undefined;
+  }
+}
+
+function asJsonMessage(raw: unknown): Record<string, unknown> | undefined {
+  try {
+    const text = Buffer.isBuffer(raw)
+      ? raw.toString()
+      : Array.isArray(raw)
+        ? Buffer.concat(raw.map((part) => Buffer.from(part))).toString()
+        : String(raw);
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
   } catch {
     return undefined;
   }
@@ -315,25 +334,16 @@ async function sendBearReply(
 
 function sendGreeting(ws: RelaySocket, session: Session): void {
   const generation = ++session.generation;
-  const smokey = {
-    bear: "bear1" as const,
-    text: "Oh, hey there, partner. We weren't expecting company. We were just talking about our favorite senior engineer, Mitchell Kimbell. Earlier he led several projects that...",
-  };
+    const smokey = {
+      bear: "bear1" as const,
+      text: "Well howdy there, partner. I'm Smokey.",
+    };
   void (async () => {
-    sendTalkCycle(ws, session, smokey, true, () => session.generation === generation);
-    const heardTarget = await waitForPlayedText(session, "Mitchell Kimbell", playbackTimeoutMs("Mitchell Kimbell"));
+    sendTalkCycle(ws, session, smokey, false, () => session.generation === generation);
+    const smokeyPlayed = await waitForPlayedText(session, smokey.text, playbackTimeoutMs(smokey.text));
     if (session.generation !== generation) return;
-    if (!heardTarget) {
-      console.warn("Greeting playback prefix timed out; interrupting conservatively", {
-        callSid: session.callSid,
-        target: "Mitchell Kimbell",
-      });
-      return;
-    }
-    if (session.activeSpeech?.bear === "bear1") {
-      publishSpeechEvent(session, "bear.speech.interrupted", session.activeSpeech);
-    }
-    const maple = { bear: "bear2" as const, text: "Actually, Smokey, Mitchell is a staff engineer." };
+    if (!smokeyPlayed) return;
+    const maple = { bear: "bear2" as const, text: "And I'm Maple." };
     sendTalkCycle(ws, session, maple, false, () => session.generation === generation);
     const maplePlayed = await waitForPlayedText(session, maple.text, playbackTimeoutMs(maple.text));
     if (session.generation !== generation) return;
@@ -344,20 +354,25 @@ function sendGreeting(ws: RelaySocket, session: Session): void {
     if (session.activeSpeech?.bear === "bear2") publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
     const apology = {
       bear: "bear1" as const,
-      text: contextAwareResume(maple.text, "So what would you like to know about Mitchell?", "staff engineer"),
+      text: "And we were just talking about Mitch, our favorite senior engineer.",
     };
-    sendTalkCycle(ws, session, apology, false, () => session.generation === generation);
-    const apologyPlayed = await waitForPlayedText(session, apology.text, playbackTimeoutMs(apology.text));
+    sendTalkCycle(ws, session, apology, true, () => session.generation === generation);
+    const seniorPlayed = await waitForPlayedText(session, "favorite senior engineer", playbackTimeoutMs(apology.text));
     if (session.generation !== generation) return;
-    if (!apologyPlayed) {
-      console.warn("Greeting Smokey response playback timed out", { callSid: session.callSid });
+    if (!seniorPlayed) {
+      console.warn("Greeting Smokey title playback timed out", { callSid: session.callSid });
       return;
     }
     if (session.activeSpeech?.bear === "bear1") {
-      publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
-      session.activeSpeech = undefined;
-      session.activeSpeechStarted = false;
+      publishSpeechEvent(session, "bear.speech.interrupted", session.activeSpeech);
     }
+    const correction = { bear: "bear2" as const, text: "Actually, staff engineer, Smokey." };
+    sendTalkCycle(ws, session, correction, false, () => session.generation === generation);
+    const correctionPlayed = await waitForPlayedText(session, correction.text, playbackTimeoutMs(correction.text));
+    if (session.generation !== generation || !correctionPlayed) return;
+    if (session.activeSpeech?.bear === "bear2") publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
+    const recovery = { bear: "bear1" as const, text: "Right, staff engineer. What would you like to know about Mitch?" };
+    sendTalkCycle(ws, session, recovery, false, () => session.generation === generation);
   })().catch((error: unknown) => {
     console.error("Greeting sequencing failed", error instanceof Error ? error.message : "unknown error");
   });
@@ -399,7 +414,7 @@ async function generateReply(session: Session, prompt: string): Promise<BearRepl
   }
   const smokey = cleanSpokenLine(await completePersona(
     session.smokeyHistory,
-    "You are Smokey, a friendly but slightly stubborn portfolio bear. Give one concise, helpful spoken answer to the user's question. Speak naturally, safely, and without markdown. You are mildly annoyed by Maple's pedantic corrections, so when he corrects you, acknowledge it with dry, lightly irritated phrasing rather than sounding submissive or apologetic. Never write your name, Maple's name, speaker labels, stage directions, or dialogue for another character.",
+    "You are Smokey, a warm but stubborn Southern portfolio bear. Give one concise, helpful spoken answer to the user's question. Speak naturally, safely, and without markdown. Maple is your sassy, affectionate spouse who may cut in with a correction, playful objection, joke, aside, or agreement; when Maple interrupts, sound genuinely exasperated but fond, acknowledge the actual point, and continue. Never write your name, Maple's name, speaker labels, stage directions, or dialogue for another character.",
     prompt,
   ), "I can tell you about Mitchell's work.");
   const mapleCompletion = await openai.chat.completions.create({
@@ -425,7 +440,7 @@ async function generateReply(session: Session, prompt: string): Promise<BearRepl
     },
     messages: [{
       role: "system",
-      content: "You are Maple, a concise, dry portfolio bear. Return exactly one spoken line for Maple only. Never write Smokey's line, your name, his name, speaker labels, stage directions, or a multi-character script. Add useful detail or gently correct Smokey. Choose interrupt only when a factual correction or genuinely good joke is worth cutting him off; do not interrupt for minor wording. For interruptAfter, copy an exact phrase of at least four words from Smokey that ends before his response ends. For handoffContext, provide the short fact or idea Smokey must explicitly repeat to show he heard you, such as 'staff engineer'; use null for a non-interrupting follow-up. Start interruption text with a short direct reaction. Otherwise choose follow and null for both interruption fields.",
+      content: "You are Maple, a sassy, sharp, confident Southern portfolio bear and Smokey's affectionate spouse. Return exactly one spoken line for Maple only. Never write Smokey's line, your name, his name, speaker labels, stage directions, or a multi-character script. Vary your short beat between a useful correction, playful objection, joke, aside, and agreement. Do not repeat the senior/staff engineer correction unless the topic is Mitchell's title. For interruptAfter, copy an exact phrase of at least four words from Smokey that ends before his response ends. For handoffContext, provide the short idea Smokey must explicitly acknowledge. Start with a direct, natural reaction. Never invent a factual error just to interrupt.",
     }, ...session.mapleHistory, {
       role: "user",
       content: `Visitor: ${prompt}\n\nSmokey: ${smokey}`,
@@ -460,7 +475,7 @@ async function generateReply(session: Session, prompt: string): Promise<BearRepl
   const smokeyContinuation = interruptAfter
     ? cleanSpokenLine(await completePersona(
       session.smokeyHistory,
-      "You are Smokey, a friendly but slightly stubborn portfolio bear. Maple just interrupted you. Write only the short continuation after your acknowledgement; the application will prepend the exact context you must acknowledge. Continue your point or return to the visitor's question. Sound dry and mildly annoyed, never apologetic. Do not begin with right, yes, fine, or noted. Never write names, speaker labels, stage directions, markdown, or dialogue for another character.",
+      "You are Smokey, a warm but stubborn Southern portfolio bear. Your spouse Maple just interrupted with a correction, joke, objection, aside, or agreement. Write only the short continuation after your acknowledgement; the application will prepend the exact context you must acknowledge. Sound genuinely exasperated, dry, and fond, then continue your point or return to the visitor's question. Do not begin with right, yes, fine, or noted. Never write names, speaker labels, stage directions, markdown, or dialogue for another character.",
       `Visitor: ${prompt}\n\nYour lead: ${smokey}\n\nMaple's correction: ${mapleText}`,
     ), "What else would you like to know?")
     : undefined;
@@ -508,6 +523,7 @@ app.get("/health", (_request, response) => response.status(200).json({
   ok: true,
   environment: appEnv,
   dialogueProtocol,
+  mediaStreamsMirrorEnabled,
 }));
 app.options("/events/:callSid", (request, response) => {
   if (!allowPortfolioOrigin(request, response)) return response.sendStatus(403);
@@ -555,30 +571,66 @@ app.post("/fish-reaction/:callSid", (request, response) => {
 });
 app.post("/call", (request, response) => {
   if (!validTwilioRequest(request, "https")) return response.sendStatus(403);
+  const params = request.body as Record<string, unknown> | undefined;
+  const requestedSmokeyVoice = requestedVoice(params?.SmokeyVoice, smokeyVoiceId);
+  const requestedMapleVoice = requestedVoice(params?.MapleVoice, mapleVoiceId);
   const callReference = randomUUID();
   const relayUrl = `${agentBaseUrl.replace(/^https:/, "wss:")}/conversation-relay`;
   const voiceResponse = new twilio.twiml.VoiceResponse();
+  if (mediaStreamsMirrorEnabled) {
+    const stream = voiceResponse.start().stream({
+      name: "bear-audio-observer",
+      url: `${agentBaseUrl.replace(/^https:/, "wss:")}/media-stream`,
+      track: "both_tracks",
+    });
+    stream.parameter({ name: "callReference", value: callReference });
+  }
   const connect = voiceResponse.connect();
   const relayOptions: Parameters<typeof connect.conversationRelay>[0] & { events: string } = {
     url: relayUrl,
     ttsLanguage: smokeyLanguage,
     ttsProvider: "ElevenLabs",
-    voice: smokeyVoiceId,
+    voice: requestedSmokeyVoice,
     transcriptionLanguage: "en-US",
     interruptible: "speech",
     reportInputDuringAgentSpeech: "speech" as unknown as boolean,
     events: "speaker-events tokens-played",
   };
   const relay = connect.conversationRelay(relayOptions);
-  relay.language({ code: smokeyLanguage, ttsProvider: "ElevenLabs", voice: smokeyVoiceId });
-  relay.language({ code: mapleLanguage, ttsProvider: "ElevenLabs", voice: mapleVoiceId });
+  relay.language({ code: smokeyLanguage, ttsProvider: "ElevenLabs", voice: requestedSmokeyVoice });
+  relay.language({ code: mapleLanguage, ttsProvider: "ElevenLabs", voice: requestedMapleVoice });
   relay.parameter({ name: "callReference", value: callReference });
   console.log("Created per-bear ConversationRelay TwiML", {
-    smokey: { language: smokeyLanguage, voice: redactId(smokeyVoiceId) },
-    maple: { language: mapleLanguage, voice: redactId(mapleVoiceId) },
+    smokey: { language: smokeyLanguage, voice: redactId(requestedSmokeyVoice) },
+    maple: { language: mapleLanguage, voice: redactId(requestedMapleVoice) },
   });
   sessions.set(callReference, createSession(callReference));
   response.type("text/xml").send(voiceResponse.toString());
+});
+
+app.ws("/media-stream", (ws, request) => {
+  if (!validTwilioRequest(request, "wss")) return ws.close(1008, "Unauthorized");
+  ws.on("message", (raw) => {
+    const message = asJsonMessage(raw) as {
+      event?: unknown;
+      start?: { streamSid?: unknown; callSid?: unknown; tracks?: unknown };
+      media?: { track?: unknown; payload?: unknown };
+    } | undefined;
+    if (!message || typeof message.event !== "string") return;
+    if (message.event === "start") {
+      console.log("Media Streams mirror started", {
+        callSid: message.start?.callSid,
+        streamSid: message.start?.streamSid,
+        tracks: message.start?.tracks,
+      });
+    }
+    if (message.event === "media" && typeof message.media?.payload === "string") {
+      // This mirror intentionally observes Twilio's mixed call tracks only.
+      // It does not alter ConversationRelay playback or browser audio.
+      return;
+    }
+    if (message.event === "stop") ws.close();
+  });
 });
 
 app.ws("/conversation-relay", (ws, request) => {

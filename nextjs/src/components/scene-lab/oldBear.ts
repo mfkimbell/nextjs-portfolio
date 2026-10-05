@@ -54,7 +54,41 @@ export type OldBearLook = {
   /** Glasses: 0 = clear lenses, 1 = thick milky old-man lenses, 2 = solid
    *  bright white "can't see his eyes at all" cartoon lenses. */
   lensCloud: number;
+  /** Which entry of OLD_BEAR_BEARD_STYLES to use. See that list. */
+  beardStyle: number;
 };
+
+/**
+ * Beard shapes.
+ *
+ * The GLB ships ONE beard mesh (1572 verts, hanging from y=0 down to y=-0.37),
+ * so these are not six models - they are six deformations of that one mesh,
+ * applied to its vertices. That keeps it all in config with no new art, and the
+ * existing beardScale/Length/Width sliders still layer on top as multipliers.
+ *
+ *   taper  how much it narrows toward the chin. 0 = slab-sided, 1 = a point.
+ *   fork   splits the bottom into two tufts. 0 = none.
+ *   puff   front-to-back bulge, so it reads round rather than flat.
+ *   drop   extra length, applied before the beardLength slider.
+ *   jowl   widens the TOP, where it meets the jaw, for a mutton-chop spread.
+ */
+export type BeardStyle = {
+  label: string;
+  taper: number;
+  fork: number;
+  puff: number;
+  drop: number;
+  jowl: number;
+};
+
+export const OLD_BEAR_BEARD_STYLES: BeardStyle[] = [
+  { label: "0 - Original (mesh as modelled)", taper: 0.00, fork: 0.00, puff: 1.00, drop: 1.00, jowl: 1.00 },
+  { label: "1 - Trimmed, square",             taper: 0.15, fork: 0.00, puff: 0.85, drop: 0.70, jowl: 1.00 },
+  { label: "2 - Long wizard point",           taper: 0.80, fork: 0.00, puff: 0.95, drop: 1.70, jowl: 0.95 },
+  { label: "3 - Big bushy",                   taper: 0.10, fork: 0.00, puff: 1.45, drop: 1.15, jowl: 1.25 },
+  { label: "4 - Forked twin-tail",            taper: 0.55, fork: 0.55, puff: 1.00, drop: 1.45, jowl: 1.00 },
+  { label: "5 - Goatee (narrow)",             taper: 0.45, fork: 0.00, puff: 0.90, drop: 1.05, jowl: 0.45 },
+];
 
 export const OLD_BEAR_LOOK_DEFAULTS: OldBearLook = {
   grey: 0.55,
@@ -80,6 +114,7 @@ export const OLD_BEAR_LOOK_DEFAULTS: OldBearLook = {
   hairG: 0.901,
   hairB: 0.886,
   lensCloud: 0,
+  beardStyle: 0,
 };
 
 /** Every number in the look, for building slider UIs from one list (the main
@@ -97,6 +132,7 @@ export const OLD_BEAR_SLIDERS: { key: keyof OldBearLook; label: string; min: num
   { key: "glassesFwd", label: "Glasses along snout", min: -0.3, max: 0.3, step: 0.005 },
   { key: "browShow", label: "Eyebrows on", min: 0, max: 1, step: 1 },
   { key: "browScale", label: "Eyebrow size", min: 0.3, max: 2, step: 0.01 },
+  { key: "beardStyle", label: "Beard SHAPE (0-5, see OLD_BEAR_BEARD_STYLES)", min: 0, max: 5, step: 1 },
   { key: "beardShow", label: "Beard on", min: 0, max: 1, step: 1 },
   { key: "beardScale", label: "Beard size", min: 0.3, max: 2, step: 0.01 },
   { key: "beardLength", label: "Beard length", min: 0.3, max: 2.5, step: 0.01 },
@@ -247,6 +283,69 @@ function rest(o: THREE.Object3D): Rest {
   return u.oldBearRest;
 }
 
+/**
+ * Reshape the beard mesh into one of OLD_BEAR_BEARD_STYLES.
+ *
+ * The beard hangs from its pivot: y = 0 at the jaw, down to y = -0.37 at the
+ * tip. So `t` below is 0 at the jawline and 1 at the tip, and every style is
+ * expressed as "how wide/deep/long is it at depth t".
+ *
+ * The geometry is cloned on first touch and the untouched positions kept in
+ * userData, so each rebuild starts from the original mesh rather than
+ * compounding on the last deformation. Cloning also stops the two old bears
+ * (rocking chair and the OnlyBears gag) sharing one buffer - three's
+ * clone(true) shares geometry between instances, so deforming in place would
+ * have one bear's style silently rewrite the other's.
+ *
+ * Only runs when the style index actually changes, not every frame.
+ */
+function applyBeardStyle(mesh: THREE.Mesh, styleIndex: number) {
+  const i = Math.max(0, Math.min(OLD_BEAR_BEARD_STYLES.length - 1, Math.round(styleIndex)));
+  const ud = mesh.userData as { beardBase?: Float32Array; beardStyleApplied?: number };
+  if (ud.beardStyleApplied === i) return;
+
+  if (!ud.beardBase) {
+    mesh.geometry = mesh.geometry.clone();
+    const src = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+    ud.beardBase = new Float32Array(src.array as ArrayLike<number>);
+  }
+  const base = ud.beardBase;
+  const attr = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+  const arr = attr.array as Float32Array;
+  const s = OLD_BEAR_BEARD_STYLES[i];
+
+  // depth of the mesh below the pivot, read off the base so it is exact
+  let minY = 0;
+  for (let k = 1; k < base.length; k += 3) if (base[k] < minY) minY = base[k];
+  const depth = Math.max(1e-4, -minY);
+
+  for (let k = 0; k < base.length; k += 3) {
+    const x0 = base[k], y0 = base[k + 1], z0 = base[k + 2];
+    const t = Math.max(0, Math.min(1, -y0 / depth));       // 0 jaw -> 1 tip
+    // narrow toward the tip, widen at the jaw
+    const w = (1 - s.taper * t) * (1 + (s.jowl - 1) * (1 - t));
+    let x = x0 * w;
+    const z = z0 * w * s.puff;
+    const y = y0 * s.drop;
+    // fork: pull the two halves apart low down, and lift the centre between
+    // them so the split reads as a notch rather than a straight cut
+    if (s.fork > 0) {
+      const f = s.fork * t * t;
+      x += Math.sign(x0) * f * depth * 0.45;
+      const centre = 1 - Math.min(1, Math.abs(x0) / (depth * 0.35));
+      arr[k + 1] = y + centre * f * depth * 0.5;
+    } else {
+      arr[k + 1] = y;
+    }
+    arr[k] = x;
+    arr[k + 2] = z;
+  }
+  attr.needsUpdate = true;
+  mesh.geometry.computeVertexNormals();
+  mesh.geometry.computeBoundingSphere();
+  ud.beardStyleApplied = i;
+}
+
 const tmpV = new THREE.Vector3();
 const tmpC = new THREE.Color();
 const LENS_CLEAR = new THREE.Color(0.78, 0.9, 0.97);
@@ -308,6 +407,9 @@ export function applyOldBearLook(model: THREE.Object3D, look: OldBearLook) {
       case "OldBeard": {
         const r = rest(o);
         o.visible = look.beardShow >= 0.5;
+        // Shape first (vertex-level), then the scale sliders on top of it.
+        const bm = o as THREE.Mesh;
+        if (bm.isMesh) applyBeardStyle(bm, look.beardStyle ?? 0);
         const k = Math.max(0.05, look.beardScale);
         o.scale.set(r.s.x * k * look.beardWidth, r.s.y * k * look.beardLength, r.s.z * k);
         const m = propMaterial(o);

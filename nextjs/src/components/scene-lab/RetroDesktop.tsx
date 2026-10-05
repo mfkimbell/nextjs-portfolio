@@ -33,7 +33,9 @@ export const PC_EMAIL_TO = "mfkimbell@gmail.com";
 /* --- state ---------------------------------------------------------------- */
 
 export type PcApp = "github" | "linkedin" | "email" | "onlybears";
-export type PcWindow = "email" | "onlybears" | null;
+/** `onlybearsframe` is the full-bleed still that slams up the instant
+ *  OnlyBears is clicked, for the bear to then cover with his paws. */
+export type PcWindow = "email" | "onlybears" | "onlybearsframe" | null;
 export type PcField = "from" | "subject" | "body";
 export type PcSend = "idle" | "sending" | "sent" | "error";
 
@@ -105,10 +107,16 @@ function iconCell(i: number) {
 
 const EMAIL_WIN = { x: 74, y: 12, w: 236, h: 216 };
 const BEARS_WIN = { x: 86, y: 34, w: 206, h: 158 };
+/** The OnlyBears page window. Wider than BEARS_WIN so the still has room,
+ *  and sat high enough that the taskbar clock stays readable under it. */
+const BEARS_FRAME_WIN = { x: 26, y: 16, w: 268, h: 196 };
 const TITLE_H = 14;
 
 function winRect(w: PcWindow) {
-  return w === "email" ? EMAIL_WIN : w === "onlybears" ? BEARS_WIN : null;
+  return w === "email" ? EMAIL_WIN
+    : w === "onlybears" ? BEARS_WIN
+    : w === "onlybearsframe" ? BEARS_FRAME_WIN
+    : null;
 }
 function closeRect(r: { x: number; y: number; w: number }) {
   return { x: r.x + r.w - 15, y: r.y + 3, w: 12, h: 10 };
@@ -312,6 +320,7 @@ type IconImages = {
   github: HTMLImageElement | null;
   linkedin: HTMLImageElement | null;
   onlybears: HTMLImageElement | null;
+  onlybearsFrame: HTMLImageElement | null;
   wallpaper: HTMLImageElement | null;
   startLogo: HTMLImageElement | null;
 };
@@ -323,6 +332,8 @@ export const PC_WALLPAPER = "/desktop.png";
  *  down to 192px wide (the original is 1462px and 800KB - a lot to fetch for
  *  a 32px desktop icon). */
 export const PC_ONLYBEARS_LOGO = "/onlybears_icon.png";
+/** The OnlyBears "page" itself - shown full-screen on the monitor. */
+export const PC_ONLYBEARS_FRAME = "/only-bears-frame.jpg";
 
 function plainImage(src: string) {
   const img = new Image();
@@ -541,6 +552,39 @@ function drawEmail(c: Ctx, s: PcState, t: number) {
   c.fillText(fitText(c, note + dots, st.w - 8), st.x + 4, st.y + st.h / 2 + 0.5);
 }
 
+/**
+ * The OnlyBears page, filling the whole screen - no window chrome, no taskbar.
+ *
+ * Drawn cover-style (scaled to fill, centre-cropped) rather than stretched, so
+ * the still keeps its aspect whatever the monitor's 320x256 works out to. If
+ * the image has not decoded yet it paints its backdrop colour instead of
+ * leaving the desktop showing through, so the cut is instant either way.
+ */
+function drawOnlyBearsFrame(c: Ctx, s: PcState, img: IconImages) {
+  const r = BEARS_FRAME_WIN;
+  drawWindowFrame(c, r, "OnlyBears", true, s.hover?.kind === "close");
+  const body = { x: r.x + 4, y: r.y + TITLE_H + 3, w: r.w - 8, h: r.h - TITLE_H - 7 };
+  // backdrop first, so a frame that has not decoded yet still reads as a window
+  // with something in it rather than a hole onto the desktop
+  c.fillStyle = "#0a0a0f";
+  c.fillRect(body.x, body.y, body.w, body.h);
+  const im = img.onlybearsFrame;
+  if (im && im.complete && im.naturalWidth) {
+    // cover-fit, centre-cropped and clipped to the body, so the still keeps its
+    // aspect instead of being stretched to the window
+    const scale = Math.max(body.w / im.naturalWidth, body.h / im.naturalHeight);
+    const w = im.naturalWidth * scale;
+    const h = im.naturalHeight * scale;
+    c.save();
+    c.beginPath();
+    c.rect(body.x, body.y, body.w, body.h);
+    c.clip();
+    c.drawImage(im, body.x + (body.w - w) / 2, body.y + (body.h - h) / 2, w, h);
+    c.restore();
+  }
+  bevel(c, body, true);
+}
+
 function drawOnlyBears(c: Ctx, s: PcState, t: number, img: IconImages) {
   const r = BEARS_WIN;
   drawWindowFrame(c, r, "OnlyBears", true, s.hover?.kind === "close");
@@ -690,6 +734,7 @@ function drawDesktop(c: Ctx, s: PcState, t: number, img: IconImages) {
   // windows
   if (s.window === "email") drawEmail(c, s, t);
   if (s.window === "onlybears") drawOnlyBears(c, s, t, img);
+  if (s.window === "onlybearsframe") drawOnlyBearsFrame(c, s, img);
 
   // taskbar
   c.fillStyle = FACE;
@@ -817,6 +862,7 @@ export function useRetroDesktopTexture(stateRef: React.MutableRefObject<PcState>
     github: plainImage(PC_GITHUB_LOGO),
     linkedin: plainImage(PC_LINKEDIN_LOGO),
     onlybears: plainImage(PC_ONLYBEARS_LOGO),
+    onlybearsFrame: plainImage(PC_ONLYBEARS_FRAME),
     wallpaper: plainImage(PC_WALLPAPER),
     startLogo: plainImage("/start_logo.png"),
   }), []);
@@ -996,7 +1042,10 @@ export function useRetroDesktop(opts: {
     if (app === "onlybears") {
       blurFields();
       if (cb.current.onOnlyBears) {
-        patch({ window: null, hover: null });
+        // The page lands FIRST, then the bear reaches in to cover it - that is
+        // the joke. Blanking the screen here (what it used to do) meant there
+        // was nothing for him to be hiding.
+        patch({ window: "onlybearsframe", hover: null, startOpen: false });
         cb.current.onOnlyBears();
       } else {
         patch({ window: "onlybears" });
