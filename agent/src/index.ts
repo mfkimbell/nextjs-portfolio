@@ -354,10 +354,10 @@ function sendGreeting(ws: RelaySocket, session: Session): void {
     if (session.activeSpeech?.bear === "bear2") publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
     const apology = {
       bear: "bear1" as const,
-      text: "And we were just talking about Mitch, our favorite senior engineer.",
+      text: "And we were just talking about Mitch, our favorite senior engineer. So what would you like to know about him?",
     };
     sendTalkCycle(ws, session, apology, true, () => session.generation === generation);
-    const seniorPlayed = await waitForPlayedText(session, "favorite senior engineer", playbackTimeoutMs(apology.text));
+    const seniorPlayed = await waitForPlayedText(session, "So", playbackTimeoutMs(apology.text));
     if (session.generation !== generation) return;
     if (!seniorPlayed) {
       console.warn("Greeting Smokey title playback timed out", { callSid: session.callSid });
@@ -366,12 +366,12 @@ function sendGreeting(ws: RelaySocket, session: Session): void {
     if (session.activeSpeech?.bear === "bear1") {
       publishSpeechEvent(session, "bear.speech.interrupted", session.activeSpeech);
     }
-    const correction = { bear: "bear2" as const, text: "Actually, staff engineer, Smokey." };
+    const correction = { bear: "bear2" as const, text: "Actually, Smokey, Mitchell is a staff engineer." };
     sendTalkCycle(ws, session, correction, false, () => session.generation === generation);
     const correctionPlayed = await waitForPlayedText(session, correction.text, playbackTimeoutMs(correction.text));
     if (session.generation !== generation || !correctionPlayed) return;
     if (session.activeSpeech?.bear === "bear2") publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
-    const recovery = { bear: "bear1" as const, text: "Right, staff engineer. What would you like to know about Mitch?" };
+    const recovery = { bear: "bear1" as const, text: "Right, our favorite staff engineer. So what would you like to know about him?" };
     sendTalkCycle(ws, session, recovery, false, () => session.generation === generation);
   })().catch((error: unknown) => {
     console.error("Greeting sequencing failed", error instanceof Error ? error.message : "unknown error");

@@ -7,7 +7,8 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSpeechCommands, removeRepeatedSentences, type PlannedExchange, type SpeechCommand } from "./livekit-orchestrator/index.js";
+import { correctionFactById, correctionFacts } from "./correction-facts/index.js";
+import { applyFactCorrection, buildSpeechCommands, removeRepeatedSentences, type PlannedExchange, type SpeechCommand } from "./livekit-orchestrator/index.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(sourceDirectory, "../../nextjs/.env") });
@@ -23,7 +24,7 @@ const publish = async (ctx: JobContext, event: object) => {
 
 const planExchange = async (prompt: string): Promise<PlannedExchange> => {
   const completion = await client.chat.completions.create({
-    model: process.env.OPENAI_MODEL?.trim() || "gpt-4.1-mini",
+    model: process.env.OPENAI_BEAR_DIALOGUE_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || "gpt-4.1",
     temperature: 0.65,
     response_format: {
       type: "json_schema",
@@ -38,21 +39,22 @@ const planExchange = async (prompt: string): Promise<PlannedExchange> => {
             mapleInterruption: { type: "string" },
             interruptAfter: { type: "string" },
             smokeyRecovery: { type: "string" },
+            correctionFactId: { type: "string" },
             interruptionStyle: { type: "string", enum: ["correction", "playful-objection", "joke", "aside", "agreement"] },
           },
-          required: ["smokeyLead", "mapleInterruption", "interruptAfter", "smokeyRecovery", "interruptionStyle"],
+          required: ["smokeyLead", "mapleInterruption", "interruptAfter", "smokeyRecovery", "correctionFactId", "interruptionStyle"],
         },
       },
     },
     messages: [{
       role: "system",
-      content: `You orchestrate Smokey and Maple, a married Southern bear couple with years of affectionate familiarity. Smokey is warm, sturdy, stubborn, and easily exasperated when his wife Maple cuts in. Maple is sharp, sassy, confident, witty, and enjoys teasing Smokey's overconfidence. They should sound like people who love each other and have had this argument before, never like unrelated assistants. Every exchange has one short Maple beat. Maple only INTERRUPTS for a genuine factual correction. Otherwise Maple follows after Smokey with a joke, aside, agreement, or playful objection and interruptAfter must be an empty string. For a correction, Smokey must finish the incorrect sentence and begin the next sentence for 2–5 words before Maple cuts him off. interruptAfter must copy the exact text through those opening words. Example shape only: '...wrong claim. And he was also—' then Maple says 'Actually, Smokey...' and corrects the previous sentence. Do not reuse the senior/staff engineer title gag in generated conversation unless the visitor explicitly asks about Mitchell's title; that gag belongs to the authored greeting. Do not invent factual errors just to create an interruption. Answer only the newest visitor turn and never repeat earlier sentences. Smokey's recovery must sound exasperated but affectionate while acknowledging Maple's actual point. Use relaxed Southern phrasing naturally, without caricature. Return spoken text only, no labels inside lines.\n\nRECENT OBSERVATIONS:\n${recentTurns.slice(-4).map((turn) => `- Visitor: ${turn.visitor}; Observation: ${turn.observation}`).join("\n") || "None"}\n\nPORTFOLIO CONTEXT:\n${portfolioContext}`,
+      content: `You orchestrate Smokey and Maple, a married Southern bear couple with years of affectionate familiarity. Smokey is warm, sturdy, stubborn, and easily exasperated when his wife Maple cuts in. Maple is sharp, sassy, confident, witty, and enjoys teasing Smokey's overconfidence. They should sound like people who love each other and have had this argument before, never like unrelated assistants. Every individual bear beat must be one or two short sentences. A natural interruption sequence is allowed: Smokey speaks one or two sentences, Maple cuts in for one or two sentences, then Smokey may respond with another one or two sentences. Every exchange has one short Maple beat. Maple may INTERRUPT only by selecting a catalog fact below whose incorrect claim is genuinely relevant to the visitor's question. If selected, Smokey must use that exact incorrect claim, finish its sentence, then only begin the next sentence for 1-3 words. Set correctionFactId to its id. Otherwise correctionFactId and interruptAfter must both be empty strings and Maple follows normally. Never invent an incorrect fact. The application supplies Maple's correction, so write a normal short Maple beat even when selecting a fact.\n\nCORRECTION CATALOG:\n${correctionFacts.map((fact) => `- ${fact.id}: wrong claim "${fact.incorrectClaim}"; correction "${fact.mapleCorrection}"`).join("\n")}\n\nRECENT OBSERVATIONS:\n${recentTurns.slice(-4).map((turn) => `- Visitor: ${turn.visitor}; Observation: ${turn.observation}`).join("\n") || "None"}\n\nPORTFOLIO CONTEXT:\n${portfolioContext}`,
     }, { role: "user", content: prompt }],
   });
   const parsed = JSON.parse(completion.choices[0]?.message.content || "{}") as {
-    smokeyLead?: unknown; mapleInterruption?: unknown; interruptAfter?: unknown; smokeyRecovery?: unknown;
+    smokeyLead?: unknown; mapleInterruption?: unknown; interruptAfter?: unknown; smokeyRecovery?: unknown; correctionFactId?: unknown;
   };
-  const plan: PlannedExchange = {
+  const draft: PlannedExchange = {
     smokeyLead: removeRepeatedSentences(
       typeof parsed.smokeyLead === "string" ? parsed.smokeyLead : "What would you like to know about Mitchell?",
       recentSpoken,
@@ -67,6 +69,8 @@ const planExchange = async (prompt: string): Promise<PlannedExchange> => {
       recentSpoken,
     ) || "Yes, Maple. Point taken.",
   };
+  const correctionFact = correctionFactById(typeof parsed.correctionFactId === "string" ? parsed.correctionFactId : undefined);
+  const plan = applyFactCorrection(draft, correctionFact);
   recentTurns.push({
     visitor: prompt.slice(0, 180),
     observation: `Smokey answered the newest request; Maple interrupted; Smokey acknowledged Maple.`,
@@ -80,6 +84,7 @@ const planExchange = async (prompt: string): Promise<PlannedExchange> => {
 export default defineAgent({
   entry: async (ctx: JobContext) => {
     let generation = 0;
+    let visitorReady = false;
     let mapleTimer: NodeJS.Timeout | undefined;
     let activeTurn: {
       turnId: string;
@@ -100,11 +105,11 @@ export default defineAgent({
 
     const prepareCommand = (command: SpeechCommand) => publish(ctx, { type: "bear.prepare", ...command });
     const playCommand = (command: SpeechCommand | undefined) => command
-      ? publish(ctx, { type: "bear.play", bear: command.bear, turnId: command.turnId, sequence: command.sequence })
+      ? publish(ctx, { type: "bear.play", bear: command.bear, text: command.text, exchangeId: command.turnId, lineId: `${command.turnId}:${command.sequence}`, turnId: command.turnId, sequence: command.sequence })
       : Promise.resolve();
     const startPreparedTurn = async () => {
       const turn = activeTurn;
-      if (!turn || turn.started) return;
+      if (!turn || turn.started || (turn.greeting && !visitorReady)) return;
       const smokey = turn.commands[0];
       if (!smokey || !turn.ready.has(smokey.sequence)) return;
       turn.started = true;
@@ -118,7 +123,7 @@ export default defineAgent({
       const maple = turn.commands.find((command) => command.bear === "maple");
       if (!smokey || !maple || !turn.ready.has(maple.sequence)) return;
       turn.mapleScheduled = true;
-      const overlapMs = Number(process.env.LIVEKIT_MAPLE_OVERLAP_MS ?? 850);
+      const overlapMs = Math.min(500, Math.max(250, Number(process.env.LIVEKIT_MAPLE_OVERLAP_MS ?? 350)));
       const dueAt = (turn.smokeyStartedAt ?? performance.now())
         + (turn.ready.get(smokey.sequence) ?? 0)
         - (maple.interrupt ? Math.max(0, overlapMs) : 0);
@@ -131,41 +136,51 @@ export default defineAgent({
     const greetingCommands: SpeechCommand[] = [
       { turnId: greetingTurnId, sequence: 0, bear: "smokey", text: "Well howdy there, partner. I'm Smokey." },
       { turnId: greetingTurnId, sequence: 1, bear: "maple", text: "And I'm Maple.", interrupt: false },
-      { turnId: greetingTurnId, sequence: 2, bear: "smokey", text: "And we were just talking about Mitch, our favorite senior engineer." },
-      { turnId: greetingTurnId, sequence: 3, bear: "maple", text: "Actually, staff engineer, Smokey.", interrupt: true },
-      { turnId: greetingTurnId, sequence: 4, bear: "smokey", text: "Right, staff engineer. What would you like to know about Mitch?" },
+      { turnId: greetingTurnId, sequence: 2, bear: "smokey", text: "And we were just talking about Mitch, our favorite senior engineer. So—", interrupt: true },
+      { turnId: greetingTurnId, sequence: 3, bear: "maple", text: "Actually, Smokey, Mitchell is a staff engineer.", interrupt: true },
+      { turnId: greetingTurnId, sequence: 4, bear: "smokey", text: "Right, our favorite staff engineer. So what would you like to know about him?" },
     ];
     activeTurn = { turnId: greetingTurnId, commands: greetingCommands, ready: new Map(), started: false, mapleScheduled: false, greeting: true };
     await Promise.all(greetingCommands.map(prepareCommand));
+    const beginTurn = async (input: string) => {
+      const myGeneration = ++generation;
+      if (mapleTimer) clearTimeout(mapleTimer);
+      mapleTimer = undefined;
+      if (activeTurn) {
+        const cancelledTurnId = activeTurn.turnId;
+        activeTurn = undefined;
+        await publish(ctx, { type: "bear.cancel", bear: "smokey", turnId: cancelledTurnId });
+        await publish(ctx, { type: "bear.cancel", bear: "maple", turnId: cancelledTurnId });
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+      const turnId = randomUUID();
+      const commands = buildSpeechCommands(turnId, await planExchange(input));
+      if (generation !== myGeneration) return;
+      activeTurn = { turnId, commands, ready: new Map(), started: false, mapleScheduled: false, greeting: false };
+      await Promise.all(commands.map(prepareCommand));
+    };
     session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (event) => {
       if (!event.isFinal || !event.transcript.trim()) return;
       const normalizedTranscript = event.transcript.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       const now = Date.now();
       if (normalizedTranscript === lastFinalTranscript.text && now - lastFinalTranscript.at < 3000) return;
       lastFinalTranscript = { text: normalizedTranscript, at: now };
-      void (async () => {
-        const myGeneration = ++generation;
-        if (mapleTimer) clearTimeout(mapleTimer);
-        mapleTimer = undefined;
-        if (activeTurn) {
-          const cancelledTurnId = activeTurn.turnId;
-          activeTurn = undefined;
-          await publish(ctx, { type: "bear.cancel", bear: "smokey", turnId: cancelledTurnId });
-          await publish(ctx, { type: "bear.cancel", bear: "maple", turnId: cancelledTurnId });
-          await new Promise((resolve) => setTimeout(resolve, 120));
-        }
-        const turnId = randomUUID();
-        const commands = buildSpeechCommands(turnId, await planExchange(event.transcript.trim()));
-        if (generation !== myGeneration) return;
-        activeTurn = { turnId, commands, ready: new Map(), started: false, mapleScheduled: false, greeting: false };
-        await Promise.all(commands.map(prepareCommand));
-      })();
+      void beginTurn(event.transcript.trim());
     });
     ctx.room.on(RoomEvent.DataReceived, (payload) => {
       try {
         const event = JSON.parse(new TextDecoder().decode(payload)) as {
-          type?: unknown; turnId?: unknown; sequence?: unknown; durationMs?: unknown;
+          type?: unknown; text?: unknown; turnId?: unknown; sequence?: unknown; durationMs?: unknown;
         };
+        if (event.type === "visitor.ready") {
+          visitorReady = true;
+          void startPreparedTurn();
+          return;
+        }
+        if (event.type === "visitor.message" && typeof event.text === "string" && event.text.trim()) {
+          void beginTurn(event.text.trim());
+          return;
+        }
         if (typeof event.turnId !== "string" || typeof event.sequence !== "number" || activeTurn?.turnId !== event.turnId) return;
         if (event.type === "bear.ready" && typeof event.durationMs === "number") {
           activeTurn.ready.set(event.sequence, event.durationMs);
@@ -179,7 +194,7 @@ export default defineAgent({
             const mapleCorrection = activeTurn.commands.find((command) => command.sequence === 3);
             if (seniorLine && mapleCorrection) {
               void playCommand(seniorLine);
-              const overlapMs = Number(process.env.LIVEKIT_MAPLE_OVERLAP_MS ?? 850);
+              const overlapMs = Math.min(500, Math.max(250, Number(process.env.LIVEKIT_MAPLE_OVERLAP_MS ?? 350)));
               mapleTimer = setTimeout(() => {
                 if (activeTurn?.turnId === event.turnId) void playCommand(mapleCorrection);
               }, Math.max(120, (activeTurn.ready.get(seniorLine.sequence) ?? 0) - overlapMs));
@@ -188,6 +203,9 @@ export default defineAgent({
           }
           const recovery = activeTurn.commands.find((command) => command.sequence === 2);
           void playCommand(recovery);
+        }
+        if (event.type === "bear.completed" && activeTurn && event.sequence === activeTurn.commands.at(-1)?.sequence) {
+          void publish(ctx, { type: "turn.completed", exchangeId: activeTurn.turnId });
         }
         if (event.type === "bear.completed" && activeTurn.greeting && event.sequence === 0) {
           void playCommand(activeTurn.commands.find((command) => command.sequence === 1));

@@ -5,6 +5,22 @@ import { promises as fs } from "fs";
 import path from "path";
 
 const CONFIG_PATH = path.join(process.cwd(), "src", "config", "banjoBearPose.json");
+const CAMPFIRE_CONFIG_PATH = path.join(process.cwd(), "src", "config", "campfireScene.json");
+const HAT_CONFIG_KEYS = {
+  hatX: "smokeyHatX",
+  hatY: "smokeyHatY",
+  hatZ: "smokeyHatZ",
+  hatRotX: "smokeyHatRotX",
+  hatRotY: "smokeyHatRotY",
+  hatRotZ: "smokeyHatRotZ",
+  hatScale: "smokeyHatScale",
+  hatColorR: "smokeyHatColorR",
+  hatColorG: "smokeyHatColorG",
+  hatColorB: "smokeyHatColorB",
+  hatBandColorR: "smokeyHatBandColorR",
+  hatBandColorG: "smokeyHatBandColorG",
+  hatBandColorB: "smokeyHatBandColorB",
+} as const;
 
 const isPlainObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -45,7 +61,17 @@ export async function POST(req: NextRequest) {
   await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
   await fs.writeFile(CONFIG_PATH, `${JSON.stringify(out, null, 2)}\n`, "utf8");
 
-  return NextResponse.json({ ok: true, path: CONFIG_PATH });
+  try {
+    const campfire = JSON.parse(await fs.readFile(CAMPFIRE_CONFIG_PATH, "utf8")) as Record<string, unknown>;
+    for (const [sourceKey, targetKey] of Object.entries(HAT_CONFIG_KEYS)) {
+      if (typeof out[sourceKey] === "number") campfire[targetKey] = out[sourceKey];
+    }
+    await fs.writeFile(CAMPFIRE_CONFIG_PATH, `${JSON.stringify(campfire, null, 2)}\n`, "utf8");
+  } catch {
+    // The pose save remains valid even if the optional campfire mirror is unavailable.
+  }
+
+  return NextResponse.json({ ok: true, path: CONFIG_PATH, mirroredPath: CAMPFIRE_CONFIG_PATH });
 }
 
 export async function GET() {

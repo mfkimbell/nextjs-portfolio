@@ -10,8 +10,10 @@ import { getBanjoFingerPhase } from "@/lib/banjo-performance";
 import Matte from "@/components/Matte";
 const BEAR_URL = "/wildpoly/bear_sit_fixed.glb";
 const BANJO_URL = "/bear/1/banjo_clean.glb";
+const HAT_URL = "/bear/1/smokey_hat_fitted.glb?v=split-fit-3";
 useGLTF.preload(BEAR_URL);
 useGLTF.preload(BANJO_URL);
+useGLTF.preload(HAT_URL);
 
 const API_URL = "/api/dev/banjo-bear-pose";
 
@@ -29,6 +31,15 @@ type ArmBoneName = (typeof ARM_BONES)[number];
 /** Which animation to use as body pose baseline (arms are overridden). */
 const BASE_CLIP = "sit_log";
 
+function makeBrimGeometry(outer: number, hole: number, thickness: number) {
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, outer, 0, Math.PI * 2, false);
+  const inner = new THREE.Path();
+  inner.absarc(0, 0, outer * hole, 0, Math.PI * 2, true);
+  shape.holes.push(inner);
+  return new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, curveSegments: 64 }).rotateX(-Math.PI / 2);
+}
+
 type ArmRot = { x: number; y: number; z: number };
 
 type State = {
@@ -41,6 +52,18 @@ type State = {
   speed: number;
   pickingAmount: number;
   fretAmount: number;
+  hatX: number; hatY: number; hatZ: number;
+  hatRotX: number; hatRotY: number; hatRotZ: number;
+  hatScale: number;
+  hatBrimWidth: number; hatBrimDiameter: number; hatBrimRoundness: number;
+  hatDiscWidth: number; hatDiscDiameter: number; hatDiscRoundness: number;
+  hatDiscSize: number;
+  hatBrimHole: number;
+  hatBrimThickness: number;
+  hatBrimPitch: number; hatBrimYaw: number; hatBrimRoll: number;
+  hatBandWidth: number; hatBandHeight: number; hatBandDiameter: number;
+  hatColorR: number; hatColorG: number; hatColorB: number;
+  hatBandColorR: number; hatBandColorG: number; hatBandColorB: number;
 };
 
 const zeroArms: Record<ArmBoneName, ArmRot> = ARM_BONES.reduce((acc, n) => {
@@ -58,6 +81,18 @@ const DEFAULT_STATE: State = {
   speed: 1.0,
   pickingAmount: 0,
   fretAmount: 0,
+  hatX: 0, hatY: 0, hatZ: 0,
+  hatRotX: 0, hatRotY: 0, hatRotZ: 0,
+  hatScale: 1,
+  hatBrimWidth: 1, hatBrimDiameter: 1, hatBrimRoundness: 1,
+  hatDiscWidth: 1, hatDiscDiameter: 1, hatDiscRoundness: 1,
+  hatDiscSize: 1,
+  hatBrimHole: 0.58,
+  hatBrimThickness: 0.035,
+  hatBrimPitch: 0, hatBrimYaw: 0, hatBrimRoll: 0,
+  hatBandWidth: 1, hatBandHeight: 1, hatBandDiameter: 1,
+  hatColorR: 0.85, hatColorG: 0.64, hatColorB: 0.25,
+  hatBandColorR: 0.12, hatBandColorG: 0.12, hatBandColorB: 0.12,
 };
 
 function BanjoBear({
@@ -69,9 +104,79 @@ function BanjoBear({
 }) {
   const bearGltf = useGLTF(BEAR_URL) as unknown as { scene: THREE.Object3D; animations: THREE.AnimationClip[] };
   const banjoGltf = useGLTF(BANJO_URL) as unknown as { scene: THREE.Object3D };
+  const hatGltf = useGLTF(HAT_URL) as unknown as { scene: THREE.Object3D };
 
   const bearScene = useMemo(() => skeletonClone(bearGltf.scene) as THREE.Object3D, [bearGltf.scene]);
+  const head = useMemo(() => bearScene.getObjectByName("head"), [bearScene]);
   const banjoScene = useMemo(() => banjoGltf.scene.clone(true) as THREE.Object3D, [banjoGltf.scene]);
+  const hatScene = useMemo(() => {
+    const source = hatGltf.scene.clone(true) as THREE.Object3D;
+    source.updateMatrixWorld(true);
+    const clone = new THREE.Group();
+    const materials: THREE.MeshStandardMaterial[] = [];
+    const bandMaterials: THREE.MeshStandardMaterial[] = [];
+    const bandMeshes: THREE.Mesh[] = [];
+    const brimBounds: THREE.Box3[] = [];
+    const brimMeshes: THREE.Mesh[] = [];
+    source.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      if (mesh.name.includes("Fitted_Brim")) {
+        const geometry = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
+        geometry.computeBoundingBox();
+        if (geometry.boundingBox) brimBounds.push(geometry.boundingBox);
+        return;
+      }
+      const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const meshMaterials = sourceMaterials.map(() => {
+        const copy = new THREE.MeshStandardMaterial({
+          color: "#d9a441",
+          emissive: "#3a2108",
+          emissiveIntensity: 0.35,
+          roughness: 0.72,
+          metalness: 0,
+          side: THREE.DoubleSide,
+        });
+        if (mesh.name.includes("Fitted_Band")) bandMaterials.push(copy);
+        else materials.push(copy);
+        return copy;
+      });
+      const flattened = new THREE.Mesh(
+        mesh.geometry.clone().applyMatrix4(mesh.matrixWorld),
+        meshMaterials.length === 1 ? meshMaterials[0] : meshMaterials,
+      );
+      flattened.castShadow = true;
+      flattened.receiveShadow = false;
+      flattened.frustumCulled = false;
+      clone.add(flattened);
+      if (mesh.name.includes("Fitted_Band")) bandMeshes.push(flattened);
+    });
+    const brimBox = brimBounds[0];
+    if (brimBox) {
+      const center = brimBox.getCenter(new THREE.Vector3());
+      const size = brimBox.getSize(new THREE.Vector3());
+      const radius = Math.max(size.x, size.z) / 2;
+      const material = new THREE.MeshStandardMaterial({ color: "#d9a441", emissive: "#3a2108", emissiveIntensity: 0.35, roughness: 0.72, metalness: 0, side: THREE.DoubleSide });
+      const ring = new THREE.Mesh(makeBrimGeometry(radius, 0.58, 0.035), material);
+      ring.position.copy(center);
+      ring.userData.baseRadius = radius;
+      clone.add(ring);
+      brimMeshes.push(ring);
+      materials.push(material);
+    }
+    clone.userData.hatMaterials = materials;
+    clone.userData.hatBandMaterials = bandMaterials;
+    clone.userData.hatBandMeshes = bandMeshes;
+    clone.userData.hatBrimMeshes = brimMeshes;
+    clone.matrixAutoUpdate = false;
+    return clone;
+  }, [hatGltf.scene]);
+  const hatTransform = useRef({
+    local: new THREE.Matrix4(),
+    position: new THREE.Vector3(),
+    rotation: new THREE.Quaternion(),
+    scale: new THREE.Vector3(),
+  });
 
   const banjoRef = useRef<THREE.Object3D | null>(null);
   const foodRef = useRef<THREE.Object3D | null>(null);
@@ -124,7 +229,7 @@ function BanjoBear({
       clip?.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actions, bearScene, banjoScene]);
+  }, [actions, bearScene, banjoScene, hatScene]);
 
   useFrame((_state, delta) => {
     const clip = actions[BASE_CLIP];
@@ -145,6 +250,42 @@ function BanjoBear({
       banjo.position.set(state.bpx, state.bpy, state.bpz);
       banjo.rotation.set(state.brx, state.bry, state.brz);
       banjo.scale.setScalar(state.bsc);
+    }
+
+    if (head) {
+      bearScene.updateMatrixWorld(true);
+      const transform = hatTransform.current;
+      transform.position.set(state.hatX, state.hatY, state.hatZ);
+      transform.rotation.setFromEuler(new THREE.Euler(state.hatRotX, state.hatRotY, state.hatRotZ));
+      transform.scale.setScalar(state.hatScale);
+      transform.local.compose(transform.position, transform.rotation, transform.scale);
+      hatScene.matrix.multiplyMatrices(head.matrixWorld, transform.local);
+      hatScene.matrixWorldNeedsUpdate = true;
+      for (const mesh of (hatScene.userData.hatBrimMeshes as THREE.Mesh[] | undefined) ?? []) {
+        mesh.scale.set(state.hatBrimWidth, state.hatBrimRoundness, state.hatBrimDiameter);
+        mesh.rotation.set(state.hatBrimPitch, state.hatBrimYaw, state.hatBrimRoll);
+        const radius = mesh.userData.baseRadius as number | undefined;
+        if (radius) {
+          mesh.geometry.dispose();
+          mesh.geometry = makeBrimGeometry(radius, state.hatBrimHole, state.hatBrimThickness);
+        }
+      }
+      for (const mesh of (hatScene.userData.hatBandMeshes as THREE.Mesh[] | undefined) ?? []) {
+        mesh.scale.set(state.hatBandWidth, state.hatBandHeight, state.hatBandDiameter);
+      }
+      for (const mesh of (hatScene.userData.hatBrimMeshes as THREE.Mesh[] | undefined) ?? []) {
+        mesh.scale.set(state.hatDiscWidth * state.hatDiscSize, state.hatDiscRoundness, state.hatDiscDiameter * state.hatDiscSize);
+      }
+      for (const material of (hatScene.userData.hatMaterials as THREE.MeshStandardMaterial[] | undefined) ?? []) {
+        material.color.setRGB(state.hatColorR, state.hatColorG, state.hatColorB);
+        material.emissive?.setRGB(state.hatColorR * 0.2, state.hatColorG * 0.2, state.hatColorB * 0.2);
+        material.emissiveIntensity = 0.7;
+      }
+      for (const material of (hatScene.userData.hatBandMaterials as THREE.MeshStandardMaterial[] | undefined) ?? []) {
+        material.color.setRGB(state.hatBandColorR, state.hatBandColorG, state.hatBandColorB);
+        material.emissive?.setRGB(state.hatBandColorR * 0.2, state.hatBandColorG * 0.2, state.hatBandColorB * 0.2);
+        material.emissiveIntensity = 0.7;
+      }
     }
 
     // Arm bones: hard-override to rest + user Euler. This wipes out whatever the
@@ -181,7 +322,12 @@ function BanjoBear({
     }
   });
 
-  return <primitive object={bearScene} />;
+  return (
+    <>
+      <primitive object={bearScene} />
+      {head ? <primitive object={hatScene} /> : null}
+    </>
+  );
 }
 
 function Slider({
@@ -222,6 +368,8 @@ function Slider({
 }
 
 const deg = (v: number) => `${((v * 180) / Math.PI).toFixed(1)}°`;
+const rgbHex = (r: number, g: number, b: number) =>
+  `#${[r, g, b].map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0")).join("")}`;
 
 function ArmGroup({
   title,
@@ -328,7 +476,7 @@ export default function BanjoBearLab() {
         setSaveMsg(`error ${res.status}: ${text.slice(0, 60)}`);
         return;
       }
-      setSaveMsg(`saved → src/config/banjoBearPose.json ✓`);
+       setSaveMsg(`saved pose + campfire hat config ✓`);
       setTimeout(() => setSaveMsg(""), 4000);
     } catch (e) {
       setSaveMsg(`error: ${e instanceof Error ? e.message : String(e)}`);
@@ -371,6 +519,51 @@ ${lines}
     brx: DEFAULT_STATE.brx, bry: DEFAULT_STATE.bry, brz: DEFAULT_STATE.brz,
     bsc: DEFAULT_STATE.bsc,
   }));
+  const resetHat = () => {
+    dirty.current = true;
+    setS((p) => ({
+      ...p,
+    hatX: DEFAULT_STATE.hatX,
+    hatY: DEFAULT_STATE.hatY,
+    hatZ: DEFAULT_STATE.hatZ,
+    hatRotX: DEFAULT_STATE.hatRotX,
+    hatRotY: DEFAULT_STATE.hatRotY,
+    hatRotZ: DEFAULT_STATE.hatRotZ,
+    hatScale: DEFAULT_STATE.hatScale,
+    hatBrimWidth: DEFAULT_STATE.hatBrimWidth,
+    hatBrimDiameter: DEFAULT_STATE.hatBrimDiameter,
+    hatBrimRoundness: DEFAULT_STATE.hatBrimRoundness,
+    hatDiscWidth: DEFAULT_STATE.hatDiscWidth,
+    hatDiscDiameter: DEFAULT_STATE.hatDiscDiameter,
+    hatDiscRoundness: DEFAULT_STATE.hatDiscRoundness,
+    hatDiscSize: DEFAULT_STATE.hatDiscSize,
+    hatBrimHole: DEFAULT_STATE.hatBrimHole,
+    hatBrimThickness: DEFAULT_STATE.hatBrimThickness,
+    hatBrimPitch: DEFAULT_STATE.hatBrimPitch,
+    hatBrimYaw: DEFAULT_STATE.hatBrimYaw,
+    hatBrimRoll: DEFAULT_STATE.hatBrimRoll,
+    hatBandWidth: DEFAULT_STATE.hatBandWidth,
+    hatBandHeight: DEFAULT_STATE.hatBandHeight,
+    hatBandDiameter: DEFAULT_STATE.hatBandDiameter,
+    hatColorR: DEFAULT_STATE.hatColorR,
+    hatColorG: DEFAULT_STATE.hatColorG,
+    hatColorB: DEFAULT_STATE.hatColorB,
+    hatBandColorR: DEFAULT_STATE.hatBandColorR,
+    hatBandColorG: DEFAULT_STATE.hatBandColorG,
+    hatBandColorB: DEFAULT_STATE.hatBandColorB,
+    }));
+  };
+  const setHatColor = (hex: string) => {
+    const value = hex.replace("#", "");
+    if (value.length !== 6) return;
+    setS((p) => ({
+      ...p,
+      hatColorR: parseInt(value.slice(0, 2), 16) / 255,
+      hatColorG: parseInt(value.slice(2, 4), 16) / 255,
+      hatColorB: parseInt(value.slice(4, 6), 16) / 255,
+    }));
+    dirty.current = true;
+  };
   const resetAllArms = () => setS((p) => ({ ...p, arms: JSON.parse(JSON.stringify(zeroArms)) }));
   const resetAll = () => setS(DEFAULT_STATE);
 
@@ -379,7 +572,7 @@ ${lines}
   return (
     <div style={{ display: "flex", height: "100vh", background: "#111", color: "#eee", fontFamily: "monospace" }}>
       <div style={{ flex: 1, position: "relative" }}>
-        <Canvas camera={{ position: [1.8, 1.1, 2.0], fov: 40 }}>
+        <Canvas gl={{ localClippingEnabled: true }} camera={{ position: [1.8, 1.1, 2.0], fov: 40 }}>
           <Matte />
           <ambientLight intensity={0.7} />
           <directionalLight position={[3, 5, 3]} intensity={1.2} />
@@ -433,6 +626,58 @@ ${lines}
             <button onClick={resetBanjo} style={btnStyle}>Reset banjo</button>
             <button onClick={copyBanjo} style={btnStyleGreen}>Copy banjo</button>
           </div>
+        </details>
+
+        <details open style={{ marginTop: 10 }}>
+          <summary style={{ cursor: "pointer", padding: "6px 0", fontWeight: 600 }}>Smokey hat (head-local)</summary>
+          <div style={{ fontSize: 10, opacity: 0.65, margin: "2px 0 4px" }}>Position follows Smokey&apos;s animated head bone.</div>
+          <Slider label="hat X" min={-1} max={1} value={s.hatX} setValue={setScalar("hatX")} />
+          <Slider label="hat Y" min={-4.5} max={4.5} value={s.hatY} setValue={setScalar("hatY")} />
+          <Slider label="hat Z" min={-4.5} max={4.5} value={s.hatZ} setValue={setScalar("hatZ")} />
+          <Slider label="hat pitch" min={-Math.PI} max={Math.PI} step={0.01} value={s.hatRotX} setValue={setScalar("hatRotX")} fmt={deg} />
+          <Slider label="hat yaw" min={-Math.PI} max={Math.PI} step={0.01} value={s.hatRotY} setValue={setScalar("hatRotY")} fmt={deg} />
+          <Slider label="hat roll" min={-Math.PI} max={Math.PI} step={0.01} value={s.hatRotZ} setValue={setScalar("hatRotZ")} fmt={deg} />
+          <Slider label="hat scale" min={0.02} max={4.5} step={0.005} value={s.hatScale} setValue={setScalar("hatScale")} />
+          <Slider label="brim width" min={0.5} max={2.5} step={0.01} value={s.hatBrimWidth} setValue={setScalar("hatBrimWidth")} />
+          <Slider label="brim diameter" min={0.5} max={2.5} step={0.01} value={s.hatBrimDiameter} setValue={setScalar("hatBrimDiameter")} />
+          <Slider label="brim roundedness" min={0.5} max={2} step={0.01} value={s.hatBrimRoundness} setValue={setScalar("hatBrimRoundness")} />
+          <div style={{ fontSize: 10, opacity: 0.65, marginTop: 8 }}>Outer disc only</div>
+          <Slider label="disc uniform size" min={0.5} max={2.5} step={0.01} value={s.hatDiscSize} setValue={setScalar("hatDiscSize")} />
+          <Slider label="disc width" min={0.5} max={2.5} step={0.01} value={s.hatDiscWidth} setValue={setScalar("hatDiscWidth")} />
+          <Slider label="disc diameter" min={0.5} max={2.5} step={0.01} value={s.hatDiscDiameter} setValue={setScalar("hatDiscDiameter")} />
+          <Slider label="disc roundedness" min={0.5} max={2} step={0.01} value={s.hatDiscRoundness} setValue={setScalar("hatDiscRoundness")} />
+          <Slider label="brim hole" min={0.1} max={0.9} step={0.01} value={s.hatBrimHole} setValue={setScalar("hatBrimHole")} />
+          <Slider label="brim thickness" min={0.005} max={0.2} step={0.005} value={s.hatBrimThickness} setValue={setScalar("hatBrimThickness")} />
+          <Slider label="brim pitch" min={-Math.PI} max={Math.PI} step={0.01} value={s.hatBrimPitch} setValue={setScalar("hatBrimPitch")} fmt={deg} />
+          <Slider label="brim yaw" min={-Math.PI} max={Math.PI} step={0.01} value={s.hatBrimYaw} setValue={setScalar("hatBrimYaw")} fmt={deg} />
+          <Slider label="brim roll" min={-Math.PI} max={Math.PI} step={0.01} value={s.hatBrimRoll} setValue={setScalar("hatBrimRoll")} fmt={deg} />
+          <div style={{ fontSize: 10, opacity: 0.65, marginTop: 8 }}>Hat band only</div>
+          <Slider label="band width" min={0.5} max={2.5} step={0.01} value={s.hatBandWidth} setValue={setScalar("hatBandWidth")} />
+          <Slider label="band height" min={0.5} max={2} step={0.01} value={s.hatBandHeight} setValue={setScalar("hatBandHeight")} />
+          <Slider label="band diameter" min={0.5} max={2.5} step={0.01} value={s.hatBandDiameter} setValue={setScalar("hatBandDiameter")} />
+          <Slider label="hat color R" min={0} max={1} step={0.01} value={s.hatColorR} setValue={setScalar("hatColorR")} />
+          <Slider label="hat color G" min={0} max={1} step={0.01} value={s.hatColorG} setValue={setScalar("hatColorG")} />
+          <Slider label="hat color B" min={0} max={1} step={0.01} value={s.hatColorB} setValue={setScalar("hatColorB")} />
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 11 }}>
+            hat body color
+            <input type="color" value={rgbHex(s.hatColorR, s.hatColorG, s.hatColorB)} onChange={(e) => setHatColor(e.target.value)} />
+            <code>{rgbHex(s.hatColorR, s.hatColorG, s.hatColorB)}</code>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 11 }}>
+            hat band color
+            <input
+              type="color"
+              value={rgbHex(s.hatBandColorR, s.hatBandColorG, s.hatBandColorB)}
+              onChange={(e) => {
+                const value = e.target.value.replace("#", "");
+                if (value.length !== 6) return;
+                dirty.current = true;
+                setS((p) => ({ ...p, hatBandColorR: parseInt(value.slice(0, 2), 16) / 255, hatBandColorG: parseInt(value.slice(2, 4), 16) / 255, hatBandColorB: parseInt(value.slice(4, 6), 16) / 255 }));
+              }}
+            />
+            <code>{rgbHex(s.hatBandColorR, s.hatBandColorG, s.hatBandColorB)}</code>
+          </label>
+          <button onClick={resetHat} style={{ ...btnStyle, marginTop: 8 }}>Reset hat</button>
         </details>
 
         <details open style={{ marginTop: 10 }}>

@@ -27,10 +27,16 @@ export default function BearVoiceControls({
   onSmokeyPitchChange: (value: number) => void;
   onMaplePitchChange: (value: number) => void;
 }) {
-  const { activeSpeakerName, error, isMuted, isRemoteSpeaking, start, status, stop, toggleMute } = agent;
+  const { activeSpeakerName, error, isMuted, isRemoteSpeaking, microphonePermission, requestMicrophone, start, status, stop, toggleMute } = agent;
   const isConnecting = status === "connecting";
   const isActive = status === "active";
-  const statusText = error || (isActive ? (activeSpeakerName ? `${activeSpeakerName} speaking` : isRemoteSpeaking ? "Bear is speaking" : "Listening") : status);
+  const needsMicrophone = microphonePermission !== "granted" && microphonePermission !== "unsupported";
+  const statusText = error || (needsMicrophone
+    ? microphonePermission === "denied" ? "Microphone blocked" : "Microphone access needed"
+    : isActive ? (activeSpeakerName ? `${activeSpeakerName} speaking` : isRemoteSpeaking ? "Bear is speaking" : "Listening") : status);
+  const handleRequestMicrophone = () => {
+    void requestMicrophone();
+  };
 
   return (
     <section
@@ -66,7 +72,15 @@ export default function BearVoiceControls({
           ) : null}
         </div>
       ) : null}
-      {!isActive ? (
+      {needsMicrophone ? (
+        <button
+          type="button"
+          onClick={handleRequestMicrophone}
+          className="rounded-full bg-amber-200 px-3 py-1.5 font-semibold text-stone-950 transition hover:bg-amber-100"
+        >
+          {microphonePermission === "denied" ? "Retry mic" : "Allow mic"}
+        </button>
+      ) : !isActive ? (
         <button
           type="button"
           onClick={start}

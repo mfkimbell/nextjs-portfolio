@@ -7,6 +7,8 @@ export type PlannedExchange = {
   smokeyRecovery?: string;
 };
 
+export type CorrectionFact = { incorrectClaim: string; mapleCorrection: string };
+
 export type SpeechCommand = {
   turnId: string;
   sequence: number;
@@ -19,10 +21,29 @@ const normalize = (value: string): string => value.toLowerCase().replace(/[^a-z0
 
 const sentences = (value: string): string[] => value.match(/[^.!?]+[.!?]?/g)?.map((sentence) => sentence.trim()).filter(Boolean) ?? [];
 
+const endsWithNextSentenceLead = (value: string): boolean => {
+  const parts = sentences(value);
+  const finalWords = parts.at(-1)?.replace(/[.!?]+$/, "").trim().split(/\s+/).filter(Boolean) ?? [];
+  return parts.length >= 2 && finalWords.length >= 1 && finalWords.length <= 3;
+};
+
 export const removeRepeatedSentences = (value: string, recentSpoken: string[]): string => {
   const recent = new Set(recentSpoken.flatMap(sentences).map(normalize).filter(Boolean));
   const filtered = sentences(value).filter((sentence) => !recent.has(normalize(sentence)));
   return filtered.join(" ").trim();
+};
+
+export const applyFactCorrection = (
+  plan: PlannedExchange,
+  fact: CorrectionFact | undefined,
+): PlannedExchange => {
+  if (!fact || !normalize(plan.smokeyLead).includes(normalize(fact.incorrectClaim))) {
+    return { ...plan, interruptAfter: undefined, smokeyRecovery: undefined };
+  }
+  return {
+    ...plan,
+    mapleInterruption: fact.mapleCorrection,
+  };
 };
 
 export const buildSpeechCommands = (turnId: string, plan: PlannedExchange): SpeechCommand[] => {
@@ -34,7 +55,8 @@ export const buildSpeechCommands = (turnId: string, plan: PlannedExchange): Spee
   const requestedIsValid = requestedTarget
     && requestedNormalized.length >= 8
     && normalizedLead.includes(requestedNormalized)
-    && !normalizedLead.endsWith(requestedNormalized);
+    && !normalizedLead.endsWith(requestedNormalized)
+    && endsWithNextSentenceLead(requestedTarget);
   const target = requestedIsValid ? requestedTarget : undefined;
   const normalizedTarget = target ? normalize(target) : "";
   const shouldInterrupt = Boolean(

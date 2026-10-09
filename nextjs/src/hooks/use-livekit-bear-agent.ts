@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
-import type { BearVoiceAgent } from "@/hooks/useBearVoiceAgent";
+import type { BearVoiceAgent, MicrophonePermission } from "@/hooks/useBearVoiceAgent";
 import type { BearVoiceState, BearVoiceStateRef } from "@/lib/bearVoiceState";
 import { applyLipSyncFrame, createLipSyncAnalyzer } from "@/lib/bearLipSync";
 
-const DEFAULT_SMOKEY_PITCH_RATE = 0.95;
-const DEFAULT_MAPLE_PITCH_RATE = 1.05;
+const DEFAULT_SMOKEY_PITCH_RATE = 0.9;
+const DEFAULT_MAPLE_PITCH_RATE = 1.12;
 
 type VoiceStatus = "idle" | "connecting" | "active" | "disconnected" | "error";
 type BearAmbienceGraph = { filter: BiquadFilterNode; panner: StereoPannerNode; dry: GainNode; wet: GainNode };
@@ -17,6 +17,11 @@ const MAPLE_PAN = 1;
 const BEAR_DISTANCE_FILTER_HZ = 4_800;
 const BEAR_DRY_GAIN = 0.72;
 const BEAR_REVERB_GAIN = 0.18;
+
+const publishVisitorReady = async (room: Room) => {
+  const payload = new Uint8Array(new TextEncoder().encode(JSON.stringify({ type: "visitor.ready" })));
+  await room.localParticipant.publishData(payload, { reliable: true });
+};
 
 export const useLiveKitBearAgent = (
   voice = "marin",
@@ -30,6 +35,7 @@ export const useLiveKitBearAgent = (
   const audioFramesRef = useRef(new Map<string, number>());
   const trackStatesRef = useRef(new Map<string, { state: BearVoiceState; rms: number; lastAudibleAt: number }>());
   const subscriptionTimerRef = useRef<number | null>(null);
+  const readyRequestedRef = useRef(false);
 
   const voiceRef = useRef<BearVoiceState>({
     activeBearId: "back_left_log",
@@ -45,6 +51,23 @@ export const useLiveKitBearAgent = (
   const [isMuted, setIsMuted] = useState(false);
   const [isRemoteSpeaking, setIsRemoteSpeaking] = useState(false);
   const [activeSpeakerName, setActiveSpeakerName] = useState<string | null>(null);
+  const [spokenText, setSpokenText] = useState<string | null>(null);
+  const [dialoguePhase, setDialoguePhase] = useState<"idle" | "playing" | "your-turn">("idle");
+  const [microphonePermission, setMicrophonePermission] = useState<MicrophonePermission>("prompt");
+
+  const requestMicrophone = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicrophonePermission("unsupported");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      setMicrophonePermission("granted");
+    } catch (requestError) {
+      setMicrophonePermission(requestError instanceof DOMException && requestError.name === "NotAllowedError" ? "denied" : "prompt");
+    }
+  }, []);
 
   const cleanup = useCallback(() => {
     for (const frame of audioFramesRef.current.values()) cancelAnimationFrame(frame);
@@ -63,6 +86,8 @@ export const useLiveKitBearAgent = (
     voiceRef.current.phase = "idle";
     setIsRemoteSpeaking(false);
     setActiveSpeakerName(null);
+    setSpokenText(null);
+    setDialoguePhase("idle");
     setIsMuted(false);
   }, [voiceRef]);
 
@@ -229,7 +254,12 @@ export const useLiveKitBearAgent = (
       room.on(RoomEvent.DataReceived, (payload, participant) => {
         if (!participant) return;
         try {
-          const event = JSON.parse(new TextDecoder().decode(payload)) as { type?: unknown; bear?: unknown };
+          const event = JSON.parse(new TextDecoder().decode(payload)) as { type?: unknown; bear?: unknown; text?: unknown };
+          if (event.type === "bear.play" && typeof event.text === "string") {
+            setSpokenText(event.text);
+            setDialoguePhase("playing");
+          }
+          if (event.type === "turn.completed") setDialoguePhase("your-turn");
           if (event.type !== "bear.identity" || (event.bear !== "smokey" && event.bear !== "maple")) return;
           const bear = event.bear === "maple" ? "back_right_log" : "back_left_log";
           participantBearsRef.current.set(participant.identity, bear);
@@ -255,9 +285,11 @@ export const useLiveKitBearAgent = (
       };
       subscribeToAgentAudio();
       subscriptionTimerRef.current = window.setInterval(subscribeToAgentAudio, 500);
-      await room.startAudio();
-      await room.localParticipant.setMicrophoneEnabled(true);
       setStatus("active");
+      if (readyRequestedRef.current) {
+        await publishVisitorReady(room);
+        readyRequestedRef.current = false;
+      }
     } catch (startError) {
       cleanup();
       setError(startError instanceof Error ? startError.message : "Unable to connect to LiveKit.");
@@ -278,15 +310,53 @@ export const useLiveKitBearAgent = (
     setIsMuted(nextMuted);
   }, [isMuted]);
 
+  const sendTextMessage = useCallback(async (text: string) => {
+    const room = roomRef.current;
+    if (!room || !text.trim()) return false;
+    const payload = new Uint8Array(new TextEncoder().encode(JSON.stringify({ type: "visitor.message", text: text.trim() })));
+    await room.localParticipant.publishData(
+      payload,
+      { reliable: true },
+    );
+    return true;
+  }, []);
+
+  const beginConversation = useCallback(async () => {
+    const room = roomRef.current;
+    if (!room) return false;
+    readyRequestedRef.current = true;
+    try {
+      await room.startAudio();
+      await room.localParticipant.setMicrophoneEnabled(true);
+      setMicrophonePermission("granted");
+    } catch (activationError) {
+      setError(activationError instanceof Error ? activationError.message : "Microphone or audio activation was blocked.");
+      return false;
+    }
+    if ((room as unknown as { state?: string }).state !== "connected") return true;
+    await publishVisitorReady(room);
+    readyRequestedRef.current = false;
+    return true;
+  }, []);
+
   useEffect(() => () => cleanup(), [cleanup]);
+  useEffect(() => {
+    void requestMicrophone();
+  }, [requestMicrophone]);
 
   return {
     activeSpeakerName,
     error,
     isMuted,
+    microphonePermission,
     isRemoteSpeaking,
     remoteAudioLevel: 0,
+    spokenText,
+    dialoguePhase,
     reactToFishFire: () => {},
+    requestMicrophone,
+    beginConversation,
+    sendTextMessage,
     start,
     status,
     stop,

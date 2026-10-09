@@ -98,6 +98,18 @@ const BANJO_BEAR_POSE = banjoBearPoseRaw as {
   bpx: number; bpy: number; bpz: number;
   brx: number; bry: number; brz: number;
   bsc: number;
+  hatX?: number; hatY?: number; hatZ?: number;
+  hatRotX?: number; hatRotY?: number; hatRotZ?: number;
+  hatScale?: number;
+  hatBrimWidth?: number; hatBrimDiameter?: number; hatBrimRoundness?: number;
+  hatDiscWidth?: number; hatDiscDiameter?: number; hatDiscRoundness?: number;
+  hatDiscSize?: number;
+  hatBrimHole?: number; hatBrimThickness?: number;
+  hatBrimPitch?: number; hatBrimYaw?: number; hatBrimRoll?: number;
+  hatBandWidth?: number; hatBandHeight?: number; hatBandDiameter?: number;
+  hatColorR?: number; hatColorG?: number; hatColorB?: number;
+  hatBandColorR?: number; hatBandColorG?: number; hatBandColorB?: number;
+  bearFlatCutY?: number;
   arms: Record<BanjoBearArmName, ArmRot>;
   paused?: boolean;
   frame?: number;
@@ -106,6 +118,15 @@ const BANJO_BEAR_POSE = banjoBearPoseRaw as {
 /** Frames-per-second the banjo bear lab uses to convert its `frame` slider
  *  into clip time. Must match BanjoBearLab (`clip.time = frame / 24`). */
 const BANJO_BEAR_FPS = 24;
+
+function makeHatBrimGeometry(outer: number, hole: number, thickness: number) {
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, outer, 0, Math.PI * 2, false);
+  const inner = new THREE.Path();
+  inner.absarc(0, 0, outer * hole, 0, Math.PI * 2, true);
+  shape.holes.push(inner);
+  return new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, curveSegments: 64 }).rotateX(-Math.PI / 2);
+}
 
 // Rocking-chair bear's full-body pose, authored in /scene-lab/rocking-chair-bear
 // (rockingChairBearPose.json) - every posable bone in the rig (torso, both
@@ -238,6 +259,7 @@ const TOUCAN_URL = "/models/toucan_wing_fly_land_v2.glb";
 const DEER_URL = "/models/deer.glb";
 const DOE_URL = "/models/doe.glb";
 const BEAR_URL = "/wildpoly/bear_sit_fixed.glb";
+const SMOKEY_BODY_FIT_URL = "/wildpoly/bear_sit_smokey_body_fit.glb?v=body-fit-3";
 /*
  * The OLD grey bear: the rocking-chair bear and the OnlyBears bear are the
  * same fellow and share this model. It is bear_sit_fixed.glb (same rig,
@@ -430,6 +452,7 @@ const CUB_URL = "/bear/2/cub.glb";
 const WOODEN_CABIN_URL = "/bear/2/wooden_cabin.glb";
 // Spaces in the filename, so percent-encoded.
 const GLASSES_URL = "/bear/Glasses%20by%20jeremy%20-%209i5mmOwt7cu.glb";
+const SMOKEY_HAT_URL = "/bear/1/smokey_hat_fitted.glb?v=split-fit-3";
 const TENT_URL = "/bear/low-poly_tent.glb";
 
 // New per-scene props. Spaces in filenames are percent-encoded.
@@ -1274,7 +1297,7 @@ interface AnimalPlacement {
    *  from the rear grip sits in both paws and inherits the roasting roll. */
   prop?: PropAttachment;
   /** bolted to bones so they ride the animation - glasses on the head, tie on the chest */
-  accessories?: Array<"glasses" | "tie">;
+  accessories?: Array<"glasses" | "hat" | "tie">;
   /** held between two bones, for rigs with no socket to hang a prop from */
   handheld?: HandheldAttachment;
   /** euler radians applied INSIDE the placement, to correct a model authored in a
@@ -1328,7 +1351,7 @@ const ANIMALS: AnimalPlacement[] = [
     accessories: ["glasses"],
   },
   {
-    url: BEAR_URL, position: [-2.078, 0, -1.2], bench: 1, rotationY: Math.PI / 3, scale: 0.5,
+    url: SMOKEY_BODY_FIT_URL, position: [-2.078, 0, -1.2], bench: 1, rotationY: Math.PI / 3, scale: 0.5,
     label: "bear on back-left log", animation: "sit_log", sitOnBench: true,
     animationOffset: 2.1, animationSpeed: 0.94, bearId: "back_left_log",
     // Body pose from sit_log; the arms are hard-overridden every frame by the
@@ -1344,7 +1367,7 @@ const ANIMALS: AnimalPlacement[] = [
       rotation: [BANJO_BEAR_POSE.brx, BANJO_BEAR_POSE.bry, BANJO_BEAR_POSE.brz],
       configKey: "banjoProp",
     },
-    accessories: ["glasses"],
+    accessories: ["hat"],
   },
   {
     url: BEAR_URL_BACK_RIGHT_LOG, position: [2.078, 0, -1.2], bench: 2, rotationY: -Math.PI / 3, scale: 0.5,
@@ -1366,7 +1389,7 @@ const ANIMALS: AnimalPlacement[] = [
       stickLength: 2.0,
       stickRadius: 0.02,
     },
-    accessories: ["tie"],
+    accessories: ["glasses"],
   },
 ];
 
@@ -8109,7 +8132,7 @@ function BearAccessory({
   bearId,
 }: {
   root: RefObject<THREE.Group | null>;
-  kind: "glasses" | "tie";
+  kind: "glasses" | "hat" | "tie";
   ready: unknown;
   config: CampfireSceneConfig;
   /** Which bear this accessory is on. Some bears (e.g. the banjo bear on
@@ -8118,10 +8141,19 @@ function BearAccessory({
   bearId?: "front_log" | "back_left_log" | "back_right_log" | "table";
 }) {
   const attached = useRef<THREE.Object3D | null>(null);
+  const [hatPortal, setHatPortal] = useState<{ object: THREE.Object3D; parent: THREE.Object3D } | null>(null);
+  const hatTransform = useRef({
+    local: new THREE.Matrix4(),
+    parentInverse: new THREE.Matrix4(),
+    position: new THREE.Vector3(),
+    rotation: new THREE.Quaternion(),
+    scale: new THREE.Vector3(),
+  });
   const cfgRef = useRef(config);
   cfgRef.current = config;
   // Glasses come from a file; the tie is built here, since there wasn't one.
   const glassesGltf = useGLTF(GLASSES_URL) as unknown as { scene: THREE.Group };
+  const hatGltf = useGLTF(SMOKEY_HAT_URL) as unknown as { scene: THREE.Group };
 
   const tie = useMemo(() => {
     if (kind !== "tie") return null;
@@ -8154,7 +8186,7 @@ function BearAccessory({
 
   useEffect(() => {
     if (!root.current) return;
-    const boneName = kind === "glasses" ? "head" : "chest";
+    const boneName = kind === "glasses" || kind === "hat" ? "head" : "chest";
     let bone: THREE.Object3D | null = null;
     root.current.traverse((o) => { if (!bone && o.name === boneName) bone = o; });
     if (!bone) return;
@@ -8176,6 +8208,67 @@ function BearAccessory({
       });
       // placement is applied per-frame below so the lab sliders are live
       obj = inner;
+    } else if (kind === "hat") {
+      const source = hatGltf.scene.clone(true);
+      source.updateMatrixWorld(true);
+      const inner = new THREE.Group();
+      const hatMaterials: THREE.MeshStandardMaterial[] = [];
+      const hatBandMaterials: THREE.MeshStandardMaterial[] = [];
+      const hatBandMeshes: THREE.Mesh[] = [];
+      const hatBrimMeshes: THREE.Mesh[] = [];
+      const brimBounds: THREE.Box3[] = [];
+      source.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        if (m.name.includes("Fitted_Brim")) {
+          const geometry = m.geometry.clone().applyMatrix4(m.matrixWorld);
+          geometry.computeBoundingBox();
+          if (geometry.boundingBox) brimBounds.push(geometry.boundingBox);
+          return;
+        }
+        const materials = Array.isArray(m.material) ? m.material : [m.material];
+        const clonedMaterials = materials.map(() => {
+          const cloned = new THREE.MeshStandardMaterial({
+            color: "#d9a441",
+            emissive: "#3a2108",
+            emissiveIntensity: 0.35,
+            roughness: 0.72,
+            metalness: 0,
+            side: THREE.DoubleSide,
+          });
+        if (m.name.includes("Fitted_Band")) hatBandMaterials.push(cloned);
+          else hatMaterials.push(cloned);
+          return cloned;
+        });
+        const flattened = new THREE.Mesh(
+          m.geometry.clone().applyMatrix4(m.matrixWorld),
+          clonedMaterials.length === 1 ? clonedMaterials[0] : clonedMaterials,
+        );
+        flattened.castShadow = true;
+        flattened.receiveShadow = false;
+        flattened.frustumCulled = false;
+        inner.add(flattened);
+        if (m.name.includes("Fitted_Band")) hatBandMeshes.push(flattened);
+      });
+      const brimBox = brimBounds[0];
+      if (brimBox) {
+        const center = brimBox.getCenter(new THREE.Vector3());
+        const size = brimBox.getSize(new THREE.Vector3());
+        const radius = Math.max(size.x, size.z) / 2;
+        const material = new THREE.MeshStandardMaterial({ color: "#d9a441", emissive: "#3a2108", emissiveIntensity: 0.35, roughness: 0.72, metalness: 0, side: THREE.DoubleSide });
+        const ring = new THREE.Mesh(makeHatBrimGeometry(radius, 0.58, 0.035), material);
+        ring.position.copy(center);
+        ring.userData.baseRadius = radius;
+        inner.add(ring);
+        hatBrimMeshes.push(ring);
+        hatMaterials.push(material);
+      }
+      inner.userData.hatMaterials = hatMaterials;
+      inner.userData.hatBandMaterials = hatBandMaterials;
+      inner.userData.hatBandMeshes = hatBandMeshes;
+      inner.userData.hatBrimMeshes = hatBrimMeshes;
+      inner.matrixAutoUpdate = false;
+      obj = inner;
     } else {
       if (!tie) return;
       obj = tie;
@@ -8184,25 +8277,81 @@ function BearAccessory({
       obj.quaternion.copy(boneBasis(CHEST_FWD_LOCAL, CHEST_UP_LOCAL));
     }
 
-    parent.add(obj);
     attached.current = obj;
+    if (kind === "hat") {
+      setHatPortal({ object: obj, parent });
+      return () => {
+        setHatPortal(null);
+        attached.current = null;
+      };
+    }
+    parent.add(obj);
     return () => { parent.remove(obj); attached.current = null; };
-  }, [root, kind, ready, glassesGltf.scene, tie]);
+  }, [root, kind, ready, glassesGltf.scene, hatGltf.scene, tie]);
 
   // Height and nose-ride are deliberately separate axes: the bears have a long muzzle,
   // so how high the lenses sit and how far down the nose they perch are independent.
   useFrame(() => {
     const obj = attached.current;
-    if (!obj || kind !== "glasses") return;
+    if (!obj || (kind !== "glasses" && kind !== "hat")) return;
     const c = cfgRef.current;
+    if (kind === "hat") {
+      const savedHat = BANJO_BEAR_POSE;
+      const rootObject = root.current;
+      const head = hatPortal?.parent;
+      if (!rootObject || !head) return;
+      rootObject.updateWorldMatrix(true, true);
+      const transform = hatTransform.current;
+      transform.position.set(savedHat.hatX ?? c.smokeyHatX, savedHat.hatY ?? c.smokeyHatY, savedHat.hatZ ?? c.smokeyHatZ);
+      transform.rotation.setFromEuler(new THREE.Euler(savedHat.hatRotX ?? c.smokeyHatRotX, savedHat.hatRotY ?? c.smokeyHatRotY, savedHat.hatRotZ ?? c.smokeyHatRotZ));
+      transform.scale.setScalar(savedHat.hatScale ?? c.smokeyHatScale);
+      transform.local.compose(transform.position, transform.rotation, transform.scale);
+      transform.parentInverse.copy(rootObject.matrixWorld).invert();
+      obj.matrix
+        .multiplyMatrices(transform.parentInverse, head.matrixWorld)
+        .multiply(transform.local);
+      obj.matrixWorldNeedsUpdate = true;
+      for (const mesh of (obj.userData.hatBrimMeshes as THREE.Mesh[] | undefined) ?? []) {
+        mesh.scale.set((savedHat.hatBrimWidth ?? 1) * (savedHat.hatDiscWidth ?? 1) * (savedHat.hatDiscSize ?? 1), (savedHat.hatBrimRoundness ?? 1) * (savedHat.hatDiscRoundness ?? 1), (savedHat.hatBrimDiameter ?? 1) * (savedHat.hatDiscDiameter ?? 1) * (savedHat.hatDiscSize ?? 1));
+        mesh.rotation.set(savedHat.hatBrimPitch ?? 0, savedHat.hatBrimYaw ?? 0, savedHat.hatBrimRoll ?? 0);
+        const radius = mesh.userData.baseRadius as number | undefined;
+        if (radius) {
+          mesh.geometry.dispose();
+          mesh.geometry = makeHatBrimGeometry(radius, savedHat.hatBrimHole ?? 0.58, savedHat.hatBrimThickness ?? 0.035);
+        }
+      }
+      for (const mesh of (obj.userData.hatBandMeshes as THREE.Mesh[] | undefined) ?? []) {
+        mesh.scale.set(savedHat.hatBandWidth ?? 1, savedHat.hatBandHeight ?? 1, savedHat.hatBandDiameter ?? 1);
+      }
+      const materials = obj.userData.hatMaterials as THREE.MeshStandardMaterial[] | undefined;
+      for (const material of materials ?? []) {
+        const r = savedHat.hatColorR ?? c.smokeyHatColorR;
+        const g = savedHat.hatColorG ?? c.smokeyHatColorG;
+        const b = savedHat.hatColorB ?? c.smokeyHatColorB;
+        material.color.setRGB(r, g, b);
+        material.emissive?.setRGB(r * 0.2, g * 0.2, b * 0.2);
+        material.emissiveIntensity = 0.7;
+      }
+      const bandMaterials = obj.userData.hatBandMaterials as THREE.MeshStandardMaterial[] | undefined;
+      for (const material of bandMaterials ?? []) {
+        const r = savedHat.hatBandColorR ?? c.smokeyHatBandColorR;
+        const g = savedHat.hatBandColorG ?? c.smokeyHatBandColorG;
+        const b = savedHat.hatBandColorB ?? c.smokeyHatBandColorB;
+        material.color.setRGB(r, g, b);
+        material.emissive?.setRGB(r * 0.2, g * 0.2, b * 0.2);
+        material.emissiveIntensity = 0.7;
+      }
+      return;
+    }
     // Additive per-bear offset. Banjo bear (back_left_log) has its own quartet
     // so its glasses can be nudged without dragging the other bears' fits
     // along. Anything else falls through with all zeros.
     const isBanjo = bearId === "back_left_log";
-    const heightOffset = isBanjo ? c.banjoBearGlassesHeight : 0;
-    const noseOffset = isBanjo ? c.banjoBearGlassesNoseRide : 0;
-    const tiltOffset = isBanjo ? c.banjoBearGlassesTilt : 0;
-    const scaleMul = isBanjo ? c.banjoBearGlassesScale : 1;
+    const isMaple = bearId === "back_right_log";
+    const heightOffset = isBanjo ? c.banjoBearGlassesHeight : isMaple ? c.mapleGlassesHeight : 0;
+    const noseOffset = isBanjo ? c.banjoBearGlassesNoseRide : isMaple ? c.mapleGlassesNoseRide : 0;
+    const tiltOffset = isBanjo ? c.banjoBearGlassesTilt : isMaple ? c.mapleGlassesTilt : 0;
+    const scaleMul = isBanjo ? c.banjoBearGlassesScale : isMaple ? c.mapleGlassesScale : 1;
     obj.position
       .set(0, 0.3615, 0.0943)
       .addScaledVector(FACE_UP_LOCAL, c.glassesHeight + heightOffset)
@@ -8223,7 +8372,7 @@ function BearAccessory({
     });
   }, [tie]);
 
-  return null;
+  return hatPortal ? <primitive object={hatPortal.object} /> : null;
 }
 
 function Animal({
@@ -8264,6 +8413,35 @@ function Animal({
   // skeleton, so three bears sharing one GLB would share one set of bones and
   // their three mixers would fight over it.
   const model = useMemo(() => skeletonClone(gltf.scene) as THREE.Group, [gltf.scene]);
+  const bakedHatMaterials = useRef<{ body: THREE.MeshStandardMaterial[]; brim: THREE.MeshStandardMaterial[] }>({ body: [], brim: [] });
+  useEffect(() => {
+    if (placement.bearId !== "back_left_log") return;
+    const body: THREE.MeshStandardMaterial[] = [];
+    const brim: THREE.MeshStandardMaterial[] = [];
+    model.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.name.includes("mountie_hat")) return;
+      const source = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const materials = source.map((material) => (material as THREE.MeshStandardMaterial).clone());
+      mesh.material = materials.length === 1 ? materials[0] : materials;
+      (mesh.name.toLowerCase().includes("border") ? brim : body).push(...materials);
+    });
+    bakedHatMaterials.current = { body, brim };
+  }, [model, placement.bearId]);
+  useFrame(() => {
+    if (placement.bearId !== "back_left_log") return;
+    const c = configRef.current;
+    for (const material of bakedHatMaterials.current.body) {
+      material.color.setRGB(c.smokeyHatColorR, c.smokeyHatColorG, c.smokeyHatColorB);
+      material.emissive?.setRGB(c.smokeyHatColorR * 0.2, c.smokeyHatColorG * 0.2, c.smokeyHatColorB * 0.2);
+      material.emissiveIntensity = 0.7;
+    }
+    for (const material of bakedHatMaterials.current.brim) {
+      material.color.setRGB(c.smokeyHatBandColorR, c.smokeyHatBandColorG, c.smokeyHatBandColorB);
+      material.emissive?.setRGB(c.smokeyHatBandColorR * 0.2, c.smokeyHatBandColorG * 0.2, c.smokeyHatBandColorB * 0.2);
+      material.emissiveIntensity = 0.7;
+    }
+  });
   // The old grey bear (rocking chair): coat, glasses, brows and beard from
   // the lab's "Old bear" knobs - see oldBear.ts.
   useOldBearLook(
@@ -9454,14 +9632,11 @@ function Animal({
     } else if (isVoiceBear) {
       // Scripted conversational gaze for the two voice bears (replaces their
       // random social glances):
-      //   Smokey (back_left_log): faces the user; looks over at Maple while
-      //     Maple is talking.
-      //   Maple (back_right_log): looks at Smokey while Smokey talks AND while
-      //     replying; faces the user the rest of the time.
-      // A conversational look is held ~1.2s through the short gaps between
-      // sentences so heads don't ping-pong on every pause, and the target
-      // point itself glides (bearLookTurnTime) so the head turns rather than
-      // snaps.
+      //   Smokey (back_left_log): faces the user unless Maple is actively
+      //     speaking, then looks to Maple.
+      //   Maple (back_right_log): faces the user as soon as her line ends.
+      // The target point glides (bearLookTurnTime) so the handoff turns read
+      // naturally without preserving a stale partner look through a pause.
       g.phase = "wait"; g.t = 0; g.w = 0; g.target = "";
       const kc0 = configRef.current;
       const kn0v = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
@@ -9473,7 +9648,7 @@ function Animal({
       let wantOther: boolean;
       let wantFish = false;
       if (speakerId) {
-        const wantsOther = speakerId === other || (speakerId === me && me === "back_right_log");
+        const wantsOther = me === "back_left_log" && speakerId === other;
         if (wantsOther && !look.partnerRequested) {
           look.partnerRequested = true;
           look.otherDelay = partnerDelay;
@@ -9488,13 +9663,9 @@ function Animal({
         } else {
           wantOther = wantsOther;
         }
-        look.hold = wantOther ? 1.2 : 0;
+        look.hold = 0;
         look.fishHold = 0;
         look.fretHold = 0;
-      } else if (look.hold > 0) {
-        look.hold -= dt;
-        wantOther = look.wantOther;
-        wantFish = look.wantFish;
       } else {
         look.partnerRequested = false;
         look.otherDelay = 0;
@@ -14069,6 +14240,7 @@ useGLTF.preload(TOUCAN_URL);
 useGLTF.preload(DEER_URL);
 useGLTF.preload(DOE_URL);
 useGLTF.preload(BEAR_URL);
+useGLTF.preload(SMOKEY_BODY_FIT_URL);
 useGLTF.preload(BEAR_OLD_URL);
 useGLTF.preload(BEAR_URL_FRONT_LOG);
 useGLTF.preload(BEAR_URL_BACK_RIGHT_LOG);
@@ -14084,6 +14256,7 @@ useGLTF.preload(XBOX360_URL);
 useGLTF.preload(GAMECUBE_CONSOLE_URL);
 useGLTF.preload(CONTROLLER_URL);
 useGLTF.preload(GLASSES_URL);
+useGLTF.preload(SMOKEY_HAT_URL);
 useGLTF.preload(TENT_URL);
 useGLTF.preload(HONEY_WAND_URL);
 useGLTF.preload(WOOD_PILE_URL);

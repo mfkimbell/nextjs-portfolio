@@ -5,6 +5,7 @@ import type { BearVoiceState, BearVoiceStateRef } from "@/lib/bearVoiceState";
 import { applyLipSyncFrame, createLipSyncAnalyzer } from "@/lib/bearLipSync";
 
 type VoiceStatus = "idle" | "connecting" | "active" | "disconnected" | "error";
+export type MicrophonePermission = "prompt" | "granted" | "denied" | "unsupported";
 
 type VoiceCall = {
   disconnect(): void;
@@ -26,10 +27,16 @@ export type BearVoiceAgent = {
   activeSpeakerName: string | null;
   error: string | null;
   isMuted: boolean;
+  microphonePermission: MicrophonePermission;
   isRemoteSpeaking: boolean;
   remoteAudioLevel: number;
+  spokenText: string | null;
+  dialoguePhase: "idle" | "playing" | "your-turn";
   start: () => Promise<void>;
   reactToFishFire: () => void;
+  requestMicrophone: () => Promise<void>;
+  beginConversation?: () => Promise<boolean>;
+  sendTextMessage?: (message: string) => Promise<boolean>;
   status: VoiceStatus;
   stop: () => void;
   toggleMute: () => void;
@@ -68,12 +75,14 @@ const parseEventData = (event: MessageEvent<string>) => {
       bearId?: unknown;
       speechId?: unknown;
       data?: { bearId?: unknown; speechId?: unknown };
+      text?: unknown;
       type?: unknown;
     };
     const speechId = payload.speechId ?? payload.data?.speechId;
     return {
       bearId: payload.bearId ?? payload.data?.bearId,
       speechId: typeof speechId === "string" ? speechId : undefined,
+      text: typeof payload.text === "string" ? payload.text : undefined,
       type: payload.type,
     };
   } catch {
@@ -121,6 +130,27 @@ export function useBearVoiceAgent({
   const [isRemoteSpeaking, setIsRemoteSpeaking] = useState(false);
   const [remoteAudioLevel, setRemoteAudioLevel] = useState(0);
   const [status, setStatus] = useState<VoiceStatus>("idle");
+  const [spokenText, setSpokenText] = useState<string | null>(null);
+  const [dialoguePhase, setDialoguePhase] = useState<"idle" | "playing" | "your-turn">("idle");
+  const [microphonePermission, setMicrophonePermission] = useState<MicrophonePermission>("prompt");
+
+  const requestMicrophone = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicrophonePermission("unsupported");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      setMicrophonePermission("granted");
+    } catch (requestError) {
+      setMicrophonePermission(requestError instanceof DOMException && requestError.name === "NotAllowedError" ? "denied" : "prompt");
+    }
+  }, []);
+
+  useEffect(() => {
+    void requestMicrophone();
+  }, [requestMicrophone]);
 
   useEffect(() => {
     speechVolumeRef.current = {
@@ -168,6 +198,7 @@ export function useBearVoiceAgent({
     eventSourceRef.current = null;
     callSidRef.current = null;
     setActiveSpeakerName(null);
+    setSpokenText(null);
   }, []);
 
   const cleanup = useCallback(() => {
@@ -218,6 +249,8 @@ export function useBearVoiceAgent({
         : speechVolumeRef.current.maple;
       applyRemoteVolume(callRef.current, speechVolumeRef.current.master * trim);
       setActiveSpeakerName(bearNameForId(data.bearId));
+      setSpokenText(data.text ?? null);
+      setDialoguePhase("playing");
     };
 
     const handleQueued = (event: Event) => {
@@ -233,6 +266,8 @@ export function useBearVoiceAgent({
         : speechVolumeRef.current.maple;
       applyRemoteVolume(callRef.current, speechVolumeRef.current.master * trim);
       setActiveSpeakerName(bearNameForId(data.bearId));
+      setSpokenText(data.text ?? null);
+      setDialoguePhase("playing");
     };
 
     const handleInterrupted = (event: Event) => {
@@ -241,7 +276,10 @@ export function useBearVoiceAgent({
       voiceRef.current.phase = "interrupted";
       voiceRef.current.isInterrupted = true;
       voiceRef.current.activeSpeechId = undefined;
-      setActiveSpeakerName(null);
+      // Keep the current bubble visible while a handoff is in flight. The next
+      // queued/started event replaces its speaker in place instead of flashing
+      // the bubble off and back on between bear segments.
+      setDialoguePhase("playing");
     };
 
     const handleEnded = (event: Event) => {
@@ -251,6 +289,8 @@ export function useBearVoiceAgent({
       voiceRef.current.isInterrupted = false;
       voiceRef.current.activeSpeechId = undefined;
       setActiveSpeakerName(null);
+      setSpokenText(null);
+      setDialoguePhase("your-turn");
     };
 
     eventSource.addEventListener("bear.speech.queued", handleQueued);
@@ -440,10 +480,14 @@ export function useBearVoiceAgent({
     activeSpeakerName,
     error,
     isMuted,
+    microphonePermission,
     isRemoteSpeaking,
     remoteAudioLevel,
+    spokenText,
+    dialoguePhase,
     start,
     reactToFishFire,
+    requestMicrophone,
     status,
     stop,
     toggleMute,

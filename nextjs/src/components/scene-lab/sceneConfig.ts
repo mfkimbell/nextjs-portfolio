@@ -1537,6 +1537,114 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
    *   >π   = chaotic (adjacent letters nearly opposite)
    */
   titleLetterWaviness: number;
+  bearDialogueOpacity: number;
+  bearDialogueBlurPx: number;
+  bearDialogueScale: number;
+  bearDialogueBottomRem: number;
+  bearDialoguePreviewOn: number;
+  bearDialogueFont: number;
+  bearDialogueMotionOn: number;
+  bearDialoguePopStiffness: number;
+  bearDialoguePopDamping: number;
+  bearDialogueLeftTiltDeg: number;
+  bearDialogueRightTiltDeg: number;
+  bearDialoguePreviewSide: number;
+  bearDialoguePreviewTextLength: number;
+  bearDialogueWidthRem: number;
+  bearDialogueMinHeightRem: number;
+  bearDialogueCloudFlow: number;
+  bearDialogueCloudCycleSec: number;
+  bearDialogueRoundness: number;
+  bearDialogueWaveDirection: number;
+  bearDialogueRippleScale: number;
+  bearDialogueWaveAmplitude: number;
+  bearDialogueWaveSpeed: number;
+  bearDialogueWaveSpacing: number;
+  bearDialogueTextSizeRem: number;
+  bearDialogueTextPaddingXRem: number;
+  bearDialogueTextPaddingYRem: number;
+  bearDialogueTextColorR: number;
+  bearDialogueTextColorG: number;
+  bearDialogueTextColorB: number;
+  bearDialogueBorderOn: number;
+  bearDialogueBorderWidthPx: number;
+  bearDialogueBorderColorR: number;
+  bearDialogueBorderColorG: number;
+  bearDialogueBorderColorB: number;
+  bearDialogueNameTagXRem: number;
+  bearDialogueNameTagYRem: number;
+  bearDialogueNameTagScale: number;
+  bearDialogueNameTagAnchor: number;
+  bearDialogueNameTagInsetXRem: number;
+  bearDialogueNameTagInsetYRem: number;
+  bearDialogueNameTagWaveAmplitude: number;
+  bearDialogueNameTagWaveSpeed: number;
+  bearDialogueNameTagWaveSpacing: number;
+  bearDialogueNameTagRoundness: number;
+  bearDialogueNameTagOutlineOn: number;
+  bearDialogueNameTagOutlineWidthPx: number;
+  bearDialogueNameTagOutlineOpacity: number;
+  bearDialogueNameTagOutlineColorR: number;
+  bearDialogueNameTagOutlineColorG: number;
+  bearDialogueNameTagOutlineColorB: number;
+  bearDialogueNameTagShadowDarken: number;
+  bearDialogueSmokeyTagColorR: number;
+  bearDialogueSmokeyTagColorG: number;
+  bearDialogueSmokeyTagColorB: number;
+  bearDialogueMapleTagColorR: number;
+  bearDialogueMapleTagColorG: number;
+  bearDialogueMapleTagColorB: number;
+  bearDialogueYouTagColorR: number;
+  bearDialogueYouTagColorG: number;
+  bearDialogueYouTagColorB: number;
+  bearDialogueSmokeyNameTiltDeg: number;
+  bearDialogueMapleNameTiltDeg: number;
+  bearDialogueSmokeyIconSizeRem: number;
+  bearDialogueSmokeyIconAnchor: number;
+  bearDialogueSmokeyIconInsetXRem: number;
+  bearDialogueSmokeyIconInsetYRem: number;
+  bearDialogueSmokeyIconKeepInside: number;
+  bearDialogueSmokeyIconXRem: number;
+  bearDialogueSmokeyIconYRem: number;
+  bearDialogueSmokeyIconTiltDeg: number;
+  bearDialogueSmokeyIconTextClearanceRem: number;
+  bearDialogueSmokeyIconOpacity: number;
+  bearDialogueSmokeyIconBorderOn: number;
+  bearDialogueSmokeyIconBorderWidthPx: number;
+  bearDialogueSmokeyIconBorderColorR: number;
+  bearDialogueSmokeyIconBorderColorG: number;
+  bearDialogueSmokeyIconBorderColorB: number;
+  bearDialogueSmokeyIconBorderOpacity: number;
+  bearDialogueSmokeyIconShadowXRem: number;
+  bearDialogueSmokeyIconShadowYRem: number;
+  bearDialogueSmokeyIconShadowBlurPx: number;
+  bearDialogueSmokeyIconShadowLayers: number;
+  bearDialogueSmokeyIconShadowOpacity: number;
+  bearDialogueSmokeyIconShadowColorR: number;
+  bearDialogueSmokeyIconShadowColorG: number;
+  bearDialogueSmokeyIconShadowColorB: number;
+  bearDialogueSmokeyIconGlowPx: number;
+  bearDialogueSmokeyIconGlowPasses: number;
+  bearDialogueSmokeyIconGlowOpacity: number;
+  bearDialogueSmokeyIconGlowColorR: number;
+  bearDialogueSmokeyIconGlowColorG: number;
+  bearDialogueSmokeyIconGlowColorB: number;
+  bearDialogueSmokeyIconAutoClearanceOn: number;
+  bearDialogueTextFloatAmount: number;
+  bearDialogueTextFloatCycleSec: number;
+  smokeyHatX: number;
+  smokeyHatY: number;
+  smokeyHatZ: number;
+  smokeyHatRotX: number;
+  smokeyHatRotY: number;
+  smokeyHatRotZ: number;
+  smokeyHatScale: number;
+  smokeyHatColorR: number;
+  smokeyHatColorG: number;
+  smokeyHatColorB: number;
+  smokeyHatBandColorR: number;
+  smokeyHatBandColorG: number;
+  smokeyHatBandColorB: number;
 
   /**
    * Framing for each location, one entry per location.
@@ -1633,6 +1741,10 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   banjoBearGlassesNoseRide: number;
   banjoBearGlassesTilt: number;
   banjoBearGlassesScale: number;
+  mapleGlassesHeight: number;
+  mapleGlassesNoseRide: number;
+  mapleGlassesTilt: number;
+  mapleGlassesScale: number;
   swooshVolume: number;
   /** How long to wait, in ms, after the panel actually changes before
    *  playing the swoosh - lets it be pushed later so it doesn't land right
@@ -2827,6 +2939,114 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   titleExitZDistance: 0,
   titleLetterIdleAmount: 2.2,
   titleLetterWaviness: 0.32,
+  bearDialogueOpacity: 0.98,
+  bearDialogueBlurPx: 6,
+  bearDialogueScale: 1,
+  bearDialogueBottomRem: 1.25,
+  bearDialoguePreviewOn: 1,
+  bearDialogueFont: 0,
+  bearDialogueMotionOn: 1,
+  bearDialoguePopStiffness: 340,
+  bearDialoguePopDamping: 22,
+  bearDialogueLeftTiltDeg: -1.5,
+  bearDialogueRightTiltDeg: 1.5,
+  bearDialoguePreviewSide: 0,
+  bearDialoguePreviewTextLength: 2,
+  bearDialogueWidthRem: 34,
+  bearDialogueMinHeightRem: 14,
+  bearDialogueCloudFlow: 0.4,
+  bearDialogueCloudCycleSec: 8.5,
+  bearDialogueRoundness: 0.65,
+  bearDialogueWaveDirection: 0,
+  bearDialogueRippleScale: 0.015,
+  bearDialogueWaveAmplitude: 2.5,
+  bearDialogueWaveSpeed: 0.12,
+  bearDialogueWaveSpacing: 3,
+  bearDialogueTextSizeRem: 1.5,
+  bearDialogueTextPaddingXRem: 2.5,
+  bearDialogueTextPaddingYRem: 2.5,
+  bearDialogueTextColorR: 0.43,
+  bearDialogueTextColorG: 0.42,
+  bearDialogueTextColorB: 0.36,
+  bearDialogueBorderOn: 1,
+  bearDialogueBorderWidthPx: 5,
+  bearDialogueBorderColorR: 0.32,
+  bearDialogueBorderColorG: 0.29,
+  bearDialogueBorderColorB: 0.23,
+  bearDialogueNameTagXRem: 0,
+  bearDialogueNameTagYRem: 0,
+  bearDialogueNameTagScale: 1,
+  bearDialogueNameTagAnchor: 1,
+  bearDialogueNameTagInsetXRem: 1.75,
+  bearDialogueNameTagInsetYRem: -0.25,
+  bearDialogueNameTagWaveAmplitude: 1.6,
+  bearDialogueNameTagWaveSpeed: 0.21,
+  bearDialogueNameTagWaveSpacing: 3,
+  bearDialogueNameTagRoundness: 0.8,
+  bearDialogueNameTagOutlineOn: 1,
+  bearDialogueNameTagOutlineWidthPx: 2,
+  bearDialogueNameTagOutlineOpacity: 1,
+  bearDialogueNameTagOutlineColorR: 0.32,
+  bearDialogueNameTagOutlineColorG: 0.29,
+  bearDialogueNameTagOutlineColorB: 0.23,
+  bearDialogueNameTagShadowDarken: 0.65,
+  bearDialogueSmokeyTagColorR: 0.851,
+  bearDialogueSmokeyTagColorG: 0.561,
+  bearDialogueSmokeyTagColorB: 0.278,
+  bearDialogueMapleTagColorR: 0.486,
+  bearDialogueMapleTagColorG: 0.655,
+  bearDialogueMapleTagColorB: 0.933,
+  bearDialogueYouTagColorR: 0.533,
+  bearDialogueYouTagColorG: 0.71,
+  bearDialogueYouTagColorB: 0.42,
+  bearDialogueSmokeyNameTiltDeg: -3,
+  bearDialogueMapleNameTiltDeg: 3,
+  bearDialogueSmokeyIconSizeRem: 1.75,
+  bearDialogueSmokeyIconAnchor: 1,
+  bearDialogueSmokeyIconInsetXRem: 5.3,
+  bearDialogueSmokeyIconInsetYRem: 5.3,
+  bearDialogueSmokeyIconKeepInside: 1,
+  bearDialogueSmokeyIconXRem: 0,
+  bearDialogueSmokeyIconYRem: 0,
+  bearDialogueSmokeyIconTiltDeg: 0,
+  bearDialogueSmokeyIconTextClearanceRem: 0.4,
+  bearDialogueSmokeyIconOpacity: 1,
+  bearDialogueSmokeyIconBorderOn: 1,
+  bearDialogueSmokeyIconBorderWidthPx: 1,
+  bearDialogueSmokeyIconBorderColorR: 0.32,
+  bearDialogueSmokeyIconBorderColorG: 0.29,
+  bearDialogueSmokeyIconBorderColorB: 0.23,
+  bearDialogueSmokeyIconBorderOpacity: 1,
+  bearDialogueSmokeyIconShadowXRem: 0,
+  bearDialogueSmokeyIconShadowYRem: 0.15,
+  bearDialogueSmokeyIconShadowBlurPx: 10,
+  bearDialogueSmokeyIconShadowLayers: 1,
+  bearDialogueSmokeyIconShadowOpacity: 0.35,
+  bearDialogueSmokeyIconShadowColorR: 0.12,
+  bearDialogueSmokeyIconShadowColorG: 0.09,
+  bearDialogueSmokeyIconShadowColorB: 0.06,
+  bearDialogueSmokeyIconGlowPx: 0,
+  bearDialogueSmokeyIconGlowPasses: 2,
+  bearDialogueSmokeyIconGlowOpacity: 0.6,
+  bearDialogueSmokeyIconGlowColorR: 0.95,
+  bearDialogueSmokeyIconGlowColorG: 0.72,
+  bearDialogueSmokeyIconGlowColorB: 0.35,
+  bearDialogueSmokeyIconAutoClearanceOn: 1,
+  bearDialogueTextFloatAmount: 1,
+  bearDialogueTextFloatCycleSec: 7,
+  smokeyHatX: 0,
+  smokeyHatY: 0.72673,
+  smokeyHatZ: 0,
+  smokeyHatRotX: 0,
+  smokeyHatRotY: 0,
+  smokeyHatRotZ: 0,
+  smokeyHatScale: 0.22,
+  smokeyHatColorR: 1,
+  smokeyHatColorG: 1,
+  smokeyHatColorB: 1,
+  smokeyHatBandColorR: 0.12,
+  smokeyHatBandColorG: 0.12,
+  smokeyHatBandColorB: 0.12,
 
   /**
    * A standing shot of each location, not a map of it - eye heights of 1.4-1.7 put the
@@ -2882,6 +3102,10 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   banjoBearGlassesNoseRide: 0,
   banjoBearGlassesTilt: 0,
   banjoBearGlassesScale: 1,
+  mapleGlassesHeight: 0,
+  mapleGlassesNoseRide: 0,
+  mapleGlassesTilt: 0,
+  mapleGlassesScale: 1,
   swooshVolume: 0.6,
   swooshDelayMs: 120,
   swooshRate: 0.8,

@@ -35,7 +35,7 @@ export default defineAgent({
     const metadata = JSON.parse(ctx.job.metadata || "{}") as { pitch?: unknown };
     const pitch = typeof metadata.pitch === "number" && metadata.pitch >= 0.6 && metadata.pitch <= 1.8
       ? metadata.pitch
-      : bear === "maple" ? 1.05 : 0.95;
+      : bear === "maple" ? 1.12 : 0.9;
     const tts = new elevenlabs.TTS({
       voiceId: bear === "maple"
           ? process.env.LIVEKIT_MAPLE_ELEVENLABS_VOICE_ID?.trim() || "oubi7HGxNVjXMnWLgwBT"

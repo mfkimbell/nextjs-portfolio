@@ -7,7 +7,8 @@ import CampsiteTitleIntro from "@/components/scene-lab/CampsiteTitleIntro";
 import ForceLandscape from "@/components/ForceLandscape";
 import ViewportDebug from "@/components/ViewportDebug";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
-import BearVoiceControls from "@/components/BearVoiceControls";
+import BearDialogue from "@/components/bear-dialogue";
+import { darkenedRgb, rgbFromChannels } from "@/components/bear-dialogue/color";
 import { useBearVoiceAgent } from "@/hooks/useBearVoiceAgent";
 import { useLiveKitBearAgent } from "@/hooks/use-livekit-bear-agent";
 import { DEFAULT_CAMPFIRE_CONFIG, type CampfireSceneConfig } from "@/components/scene-lab/sceneConfig";
@@ -52,18 +53,18 @@ const PANELS = [
  * the left to move round the fire.
  */
 export default function CampsiteHome() {
-  const [mode, setMode] = useState<Mode>("config");
+  const [mode, setMode] = useState<Mode>("site");
   const [panel, setPanel] = useState(0);
   // Config is immutable in this component - all live tuning happens in the
   // full scene-lab under /scene-lab, which reads/writes the JSON directly.
   // No setter needed here; keeping it triggers a no-unused-vars error.
   const config: CampfireSceneConfig = DEFAULT_CAMPFIRE_CONFIG;
-  const [voiceTransport, setVoiceTransport] = useState<VoiceTransport>("twilio");
-  const [twilioSmokeyVoice, setTwilioSmokeyVoice] = useState("oubi7HGxNVjXMnWLgwBT");
-  const [twilioMapleVoice, setTwilioMapleVoice] = useState("u0REnIJvUgcGQYW2Ux8K");
-  const [liveKitSmokeyVoice, setLiveKitSmokeyVoice] = useState("ash");
-  const [smokeyPitch, setSmokeyPitch] = useState(0.95);
-  const [maplePitch, setMaplePitch] = useState(1.05);
+  const [voiceTransport, setVoiceTransport] = useState<VoiceTransport>("livekit");
+  const [twilioSmokeyVoice] = useState("oubi7HGxNVjXMnWLgwBT");
+  const [twilioMapleVoice] = useState("u0REnIJvUgcGQYW2Ux8K");
+  const [liveKitSmokeyVoice] = useState("ash");
+  const [smokeyPitch] = useState(0.9);
+  const [maplePitch] = useState(1.12);
   const bearVoiceAgent = useBearVoiceAgent({
     speechVolume: config.speechVolume,
     smokeySpeechVolume: config.smokeySpeechVolume,
@@ -72,7 +73,14 @@ export default function CampsiteHome() {
     mapleVoiceId: twilioMapleVoice,
   });
   const liveKitBearAgent = useLiveKitBearAgent(liveKitSmokeyVoice, { smokey: smokeyPitch, maple: maplePitch });
+  const startLiveKit = liveKitBearAgent.start;
   const activeBearAgent = voiceTransport === "livekit" ? liveKitBearAgent : bearVoiceAgent;
+  const [dialogueStarted, setDialogueStarted] = useState(false);
+  const startBearsDuringFlight = useCallback(async () => {
+    setTitleHeld(false);
+    await activeBearAgent.start();
+    await activeBearAgent.beginConversation?.();
+  }, [activeBearAgent]);
   const selectTwilioTransport = useCallback(() => {
     liveKitBearAgent.stop();
     setVoiceTransport("twilio");
@@ -105,6 +113,15 @@ export default function CampsiteHome() {
       /* defaults are fine */
     }
   }, []);
+
+  useEffect(() => {
+    if (activeBearAgent.isRemoteSpeaking) setDialogueStarted(true);
+  }, [activeBearAgent.isRemoteSpeaking]);
+
+  useEffect(() => {
+    if (mode !== "site" || voiceTransport !== "livekit") return;
+    void startLiveKit();
+  }, [mode, startLiveKit, voiceTransport]);
 
 
   const toggleMode = useCallback(() => {
@@ -206,25 +223,12 @@ export default function CampsiteHome() {
             <button type="button" onClick={selectLiveKitTransport} className={`rounded-full px-2 py-1 ${voiceTransport === "livekit" ? "bg-amber-200 text-stone-950" : "text-white/70"}`}>LiveKit beta</button>
           </div>
         ) : null}
-        {!showTitle && panel === 0 ? (
-          <BearVoiceControls
-            agent={activeBearAgent}
-            transport={voiceTransport}
-            voice={voiceTransport === "livekit" ? liveKitSmokeyVoice : twilioSmokeyVoice}
-            onVoiceChange={voiceTransport === "livekit" ? setLiveKitSmokeyVoice : setTwilioSmokeyVoice}
-            mapleVoice={voiceTransport === "twilio" ? twilioMapleVoice : undefined}
-            onMapleVoiceChange={voiceTransport === "twilio" ? setTwilioMapleVoice : undefined}
-            smokeyPitch={smokeyPitch}
-            maplePitch={maplePitch}
-            onSmokeyPitchChange={setSmokeyPitch}
-            onMaplePitchChange={setMaplePitch}
-          />
-        ) : null}
+        {dialogueStarted && panel === 0 ? <BearDialogue agent={activeBearAgent} opacity={config.bearDialogueOpacity} blurPx={config.bearDialogueBlurPx} scale={config.bearDialogueScale} bottomRem={config.bearDialogueBottomRem} font={config.bearDialogueFont} motionOn={config.bearDialogueMotionOn} popStiffness={config.bearDialoguePopStiffness} popDamping={config.bearDialoguePopDamping} leftTiltDeg={config.bearDialogueLeftTiltDeg} rightTiltDeg={config.bearDialogueRightTiltDeg} widthRem={config.bearDialogueWidthRem} minHeightRem={config.bearDialogueMinHeightRem} cloudFlow={config.bearDialogueCloudFlow} cloudCycleSec={config.bearDialogueCloudCycleSec} roundness={config.bearDialogueRoundness} waveDirection={config.bearDialogueWaveDirection} rippleScale={config.bearDialogueRippleScale} waveAmplitude={config.bearDialogueWaveAmplitude} waveSpeed={config.bearDialogueWaveSpeed} waveSpacing={config.bearDialogueWaveSpacing} textSizeRem={config.bearDialogueTextSizeRem} textPaddingXRem={config.bearDialogueTextPaddingXRem} textPaddingYRem={config.bearDialogueTextPaddingYRem} textColor={`rgb(${config.bearDialogueTextColorR * 255} ${config.bearDialogueTextColorG * 255} ${config.bearDialogueTextColorB * 255})`} borderOn={config.bearDialogueBorderOn} borderWidthPx={config.bearDialogueBorderWidthPx} borderColor={`rgb(${config.bearDialogueBorderColorR * 255} ${config.bearDialogueBorderColorG * 255} ${config.bearDialogueBorderColorB * 255})`} nameTagXRem={config.bearDialogueNameTagXRem} nameTagYRem={config.bearDialogueNameTagYRem} nameTagScale={config.bearDialogueNameTagScale} nameTagAnchor={config.bearDialogueNameTagAnchor} nameTagInsetXRem={config.bearDialogueNameTagInsetXRem} nameTagInsetYRem={config.bearDialogueNameTagInsetYRem} nameTagWaveAmplitude={config.bearDialogueNameTagWaveAmplitude} nameTagWaveSpeed={config.bearDialogueNameTagWaveSpeed} nameTagWaveSpacing={config.bearDialogueNameTagWaveSpacing} nameTagRoundness={config.bearDialogueNameTagRoundness} nameTagOutlineOn={config.bearDialogueNameTagOutlineOn} nameTagOutlineWidthPx={config.bearDialogueNameTagOutlineWidthPx} smokeyTagFill={rgbFromChannels(config.bearDialogueSmokeyTagColorR, config.bearDialogueSmokeyTagColorG, config.bearDialogueSmokeyTagColorB)} smokeyTagShadow={darkenedRgb(config.bearDialogueSmokeyTagColorR, config.bearDialogueSmokeyTagColorG, config.bearDialogueSmokeyTagColorB, config.bearDialogueNameTagShadowDarken)} mapleTagFill={rgbFromChannels(config.bearDialogueMapleTagColorR, config.bearDialogueMapleTagColorG, config.bearDialogueMapleTagColorB)} mapleTagShadow={darkenedRgb(config.bearDialogueMapleTagColorR, config.bearDialogueMapleTagColorG, config.bearDialogueMapleTagColorB, config.bearDialogueNameTagShadowDarken)} youTagFill={rgbFromChannels(config.bearDialogueYouTagColorR, config.bearDialogueYouTagColorG, config.bearDialogueYouTagColorB)} youTagShadow={darkenedRgb(config.bearDialogueYouTagColorR, config.bearDialogueYouTagColorG, config.bearDialogueYouTagColorB, config.bearDialogueNameTagShadowDarken)} nameTagOutlineColor={`rgb(${config.bearDialogueNameTagOutlineColorR * 255} ${config.bearDialogueNameTagOutlineColorG * 255} ${config.bearDialogueNameTagOutlineColorB * 255} / ${config.bearDialogueNameTagOutlineOpacity})`} smokeyNameTiltDeg={config.bearDialogueSmokeyNameTiltDeg} mapleNameTiltDeg={config.bearDialogueMapleNameTiltDeg} smokeyIconSizeRem={config.bearDialogueSmokeyIconSizeRem} smokeyIconAnchor={config.bearDialogueSmokeyIconAnchor} smokeyIconInsetXRem={config.bearDialogueSmokeyIconInsetXRem} smokeyIconInsetYRem={config.bearDialogueSmokeyIconInsetYRem} smokeyIconKeepInside={config.bearDialogueSmokeyIconKeepInside} smokeyIconXRem={config.bearDialogueSmokeyIconXRem} smokeyIconYRem={config.bearDialogueSmokeyIconYRem} smokeyIconTiltDeg={config.bearDialogueSmokeyIconTiltDeg} smokeyIconTextClearanceRem={config.bearDialogueSmokeyIconTextClearanceRem} smokeyIconOpacity={config.bearDialogueSmokeyIconOpacity} smokeyIconBorderOn={config.bearDialogueSmokeyIconBorderOn} smokeyIconBorderWidthPx={config.bearDialogueSmokeyIconBorderWidthPx} smokeyIconBorderColor={`rgb(${config.bearDialogueSmokeyIconBorderColorR * 255} ${config.bearDialogueSmokeyIconBorderColorG * 255} ${config.bearDialogueSmokeyIconBorderColorB * 255} / ${config.bearDialogueSmokeyIconBorderOpacity})`} smokeyIconShadowXRem={config.bearDialogueSmokeyIconShadowXRem} smokeyIconShadowYRem={config.bearDialogueSmokeyIconShadowYRem} smokeyIconShadowBlurPx={config.bearDialogueSmokeyIconShadowBlurPx} smokeyIconShadowLayers={config.bearDialogueSmokeyIconShadowLayers} smokeyIconShadowOpacity={config.bearDialogueSmokeyIconShadowOpacity} smokeyIconShadowColor={`rgb(${config.bearDialogueSmokeyIconShadowColorR * 255} ${config.bearDialogueSmokeyIconShadowColorG * 255} ${config.bearDialogueSmokeyIconShadowColorB * 255} / ${config.bearDialogueSmokeyIconShadowOpacity})`} smokeyIconGlowPx={config.bearDialogueSmokeyIconGlowPx} smokeyIconGlowPasses={config.bearDialogueSmokeyIconGlowPasses} smokeyIconGlowOpacity={config.bearDialogueSmokeyIconGlowOpacity} smokeyIconGlowColor={`rgb(${config.bearDialogueSmokeyIconGlowColorR * 255} ${config.bearDialogueSmokeyIconGlowColorG * 255} ${config.bearDialogueSmokeyIconGlowColorB * 255} / ${config.bearDialogueSmokeyIconGlowOpacity})`} smokeyIconAutoClearanceOn={config.bearDialogueSmokeyIconAutoClearanceOn} /> : null}
 
 
       {showTitle ? (
         <CampsiteTitleIntro
-          onUnmute={() => setTitleHeld(false)}
+          onUnmute={startBearsDuringFlight}
           onEnter={() => {
             setShowTitle(false);
             // Same swoosh the scene-to-scene switches use, hand-fired here
@@ -268,7 +272,7 @@ export default function CampsiteHome() {
           <button
             onClick={prev}
             aria-label={`Previous: ${PANELS[(panel - 1 + PANELS.length) % PANELS.length].title}`}
-            className="scene-arrow-drop group absolute left-2 top-2 z-20 flex h-8 w-8 items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70 sm:left-4 sm:top-4 sm:h-12 sm:w-12"
+            className="scene-arrow-drop group absolute left-[2vmin] top-[2vmin] z-20 flex h-[5vmin] w-[5vmin] items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
           >
             {/* Hover lives on the inner span, not the button: the button owns
                 the drop-in animation, and an animation with fill `both` keeps
@@ -281,7 +285,7 @@ export default function CampsiteHome() {
           <button
             onClick={next}
             aria-label={`Next: ${PANELS[(panel + 1) % PANELS.length].title}`}
-            className="scene-arrow-drop scene-arrow-drop-late group absolute right-2 top-2 z-20 flex h-8 w-8 items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70 sm:right-4 sm:top-4 sm:h-12 sm:w-12"
+            className="scene-arrow-drop scene-arrow-drop-late group absolute right-[2vmin] top-[2vmin] z-20 flex h-[5vmin] w-[5vmin] items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
           >
             <span className="block h-full w-full drop-shadow-[0_2px_7px_rgba(0,0,0,0.7)] transition-transform duration-300 group-hover:translate-x-1 group-hover:scale-110">
               <SceneArrow direction="right" />
