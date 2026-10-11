@@ -32,7 +32,7 @@ import type { BugSwarmScope, BugSwarmTweak } from "@/components/scene-lab/sceneC
 import banjoBearPoseRaw from "@/config/banjoBearPose.json";
 import rockingChairBearPoseRaw from "@/config/rockingChairBearPose.json";
 import bearPosesRaw from "@/config/bearPoses.json";
-import { fadeOutAudio, useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
+import { fadeOutAudio, type PlayingSound, useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
 import { applySoundTuning } from "@/components/scene-lab/soundList";
 import { locationShown } from "@/components/scene-lab/sceneActivity";
 import { perfStats, SCENE_READY_EVENT } from "@/lib/perfStats";
@@ -13578,7 +13578,7 @@ function CampfireWorld({
   // blade back into the block.
   const playAxeSpin = useCampsiteOneShot(AXE_SPIN_URL);
   const playAxeHit = useCampsiteOneShot(AXE_HIT_WOOD_URL);
-  const axeSpinNode = useRef<HTMLAudioElement | null>(null);
+  const axeSpinNode = useRef<PlayingSound | null>(null);
   const handleAxeThrow = useCallback(() => {
     fadeOutAudio(axeSpinNode.current, 60);
     axeSpinNode.current = playAxeSpin(clampUnit(config.masterVolume) * clampUnit(Number.isFinite(config.axeSpinVolume) ? config.axeSpinVolume : 0.6));
@@ -13753,7 +13753,7 @@ function CampfireWorld({
   // Clicking into the computer plays the startup jingle (sound2/scene3computerstart.mp3)
   const pcStartVolRef = useRef(1);
   pcStartVolRef.current = clampUnit(config.masterVolume) * clampUnit(config.pcStartupVolume ?? 0.8);
-  const pcStartAudio = useRef<HTMLAudioElement | null>(null);
+  const pcStartAudio = useRef<PlayingSound | null>(null);
   const playPcStartup = useCampsiteOneShot(PC_STARTUP_URL);
   const playPcStartupRef = useRef(playPcStartup);
   playPcStartupRef.current = playPcStartup;

@@ -399,6 +399,38 @@ export function useCampsiteAudioLoop(
  * Fire-and-forget short cues. Clones the source node so overlapping calls
  * stack. Returns a stable callback so it plays nicely as a useEffect dep.
  */
+/** A sound that is playing (or about to): fade it out and stop it. */
+export type PlayingSound = { fade: (ms?: number) => void };
+
+/*
+ * Short cues are decoded once into memory and played straight from it through
+ * Web Audio. Cloning an <audio> element per play - the old way - has to spin
+ * up a fresh media decoder every time, and on iPhone that is a noticeable lag
+ * (the scene-switch swoosh landed well after the camera had started moving).
+ * A buffer starts on the next audio tick. The <audio> path stays as the
+ * fallback until the buffer is ready or before the audio is unlocked.
+ */
+const bufferCache = new Map<string, Promise<AudioBuffer | null>>();
+const decoded = new Map<string, AudioBuffer>();
+function loadBuffer(url: string) {
+  let p = bufferCache.get(url);
+  if (!p) {
+    p = (async () => {
+      try {
+        const ctx = getAudioContext();
+        if (!ctx) return null;
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const buf = await ctx.decodeAudioData(await res.arrayBuffer());
+        decoded.set(url, buf);
+        return buf;
+      } catch { return null; }
+    })();
+    bufferCache.set(url, p);
+  }
+  return p;
+}
+
 export function useCampsiteOneShot(url: string) {
   const templateRef = useRef<HTMLAudioElement | null>(null);
 
@@ -407,22 +439,51 @@ export function useCampsiteOneShot(url: string) {
     const a = new Audio(url);
     a.preload = "auto";
     templateRef.current = a;
+    void loadBuffer(url);
     return () => { templateRef.current = null; };
   }, [url]);
 
-  // Returns the element (or null) so a caller can cut a long cue short - the
-  // axe's spin stops the moment it bites back into the block. The lab's
-  // per-sound tuning (getSoundTune) is applied here: speed, delay, a start
-  // offset into the file, an end point, boost and pan.
-  return useCallback((volume: number, rate = 1): HTMLAudioElement | null => {
-    const template = templateRef.current;
-    if (!template) { console.warn("[sounds] one-shot not loaded yet", { url }); return null; }
+  // The lab's per-sound tuning (getSoundTune) is applied here: speed, delay,
+  // a start offset into the file, an end point, boost and pan.
+  return useCallback((volume: number, rate = 1): PlayingSound | null => {
     const t = getSoundTune(url);
     const v = perceptualGain(volume);
-    if (v <= 0 || t.vol <= 0) { console.log("[sounds] one-shot skipped: volume is 0", { url, volume, tuneVol: t.vol }); return null; }
+    if (v <= 0 || t.vol <= 0) return null;
+    const r = (Number.isFinite(rate) && rate > 0 ? rate : 1) * Math.max(0.05, t.rate);
+
+    // fast path: decoded buffer on a running context
+    const ctx = sharedAudioContext;
+    const buf = decoded.get(url);
+    if (ctx && buf && ctx.state === "running") {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = r;
+      const gain = ctx.createGain();
+      gain.gain.value = v * Math.max(0, t.vol);
+      const pan = ctx.createStereoPanner();
+      pan.pan.value = Math.max(-1, Math.min(1, t.pan));
+      src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
+      const when = ctx.currentTime + Math.max(0, t.delay);
+      const offset = Math.max(0, Math.min(buf.duration - 0.01, t.start));
+      if (t.end > t.start) src.start(when, offset, Math.max(0.01, t.end - offset));
+      else src.start(when, offset);
+      src.onended = () => { try { src.disconnect(); gain.disconnect(); pan.disconnect(); } catch { /* */ } };
+      return {
+        fade: (ms = 120) => {
+          const now = ctx.currentTime;
+          gain.gain.cancelScheduledValues(now);
+          gain.gain.setValueAtTime(gain.gain.value, now);
+          gain.gain.linearRampToValueAtTime(0, now + ms / 1000);
+          try { src.stop(now + ms / 1000 + 0.02); } catch { /* not started yet */ }
+        },
+      };
+    }
+
+    // fallback: an <audio> clone
+    const template = templateRef.current;
+    if (!template) { console.warn("[sounds] one-shot not loaded yet", { url }); return null; }
     const node = template.cloneNode(true) as HTMLAudioElement;
     node.volume = Math.min(1, v * Math.min(1, t.vol));
-    const r = (Number.isFinite(rate) && rate > 0 ? rate : 1) * Math.max(0.05, t.rate);
     node.playbackRate = r;
     node.preservesPitch = false;
     if (IS_IOS || t.vol > 1 || Math.abs(t.pan) > 0.001) {
@@ -436,28 +497,24 @@ export function useCampsiteOneShot(url: string) {
       if ((node as AudioWithCancel).__cancelled) return;
       const begin = () => {
         if (t.start > 0) { try { node.currentTime = t.start; } catch { /* not seekable yet */ } }
-        void node.play().then(
-          () => console.log("[sounds] one-shot playing", { url, vol: node.volume, rate: node.playbackRate, start: t.start, ctx: sharedAudioContext?.state ?? "none" }),
-          (err: unknown) => console.warn("[sounds] one-shot BLOCKED", { url, error: String(err), gestureUnlocked, ctx: sharedAudioContext?.state ?? "none" }),
-        );
-        if (t.end > t.start) {
-          window.setTimeout(() => node.pause(), ((t.end - Math.max(0, t.start)) / r) * 1000);
-        }
+        void node.play().catch((err: unknown) => console.warn("[sounds] one-shot BLOCKED", { url, error: String(err), gestureUnlocked }));
+        if (t.end > t.start) window.setTimeout(() => node.pause(), ((t.end - Math.max(0, t.start)) / r) * 1000);
       };
       if (t.start > 0 && node.readyState < 1) node.addEventListener("loadedmetadata", begin, { once: true });
       else begin();
     };
     if (t.delay > 0) window.setTimeout(go, t.delay * 1000);
     else go();
-    return node;
+    return { fade: (ms = 120) => fadeOutAudio(node, ms) };
   }, [url]);
 }
 
 type AudioWithCancel = HTMLAudioElement & { __cancelled?: boolean };
 
 /** Fade an <audio> element out over `ms` and pause it. */
-export function fadeOutAudio(a: HTMLAudioElement | null | undefined, ms = 120) {
+export function fadeOutAudio(a: HTMLAudioElement | PlayingSound | null | undefined, ms = 120) {
   if (!a) return;
+  if (!(a instanceof HTMLMediaElement)) { a.fade(ms); return; }
   (a as AudioWithCancel).__cancelled = true;   // a delayed cue that hasn't started yet never will
   const g = elementGraphs.get(a);
   const start = g ? g.gain.gain.value : a.volume;
