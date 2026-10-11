@@ -1,5 +1,7 @@
 "use client";
 
+import { idlePreload } from "@/lib/idlePreload";
+import { locationShown, LOC_ARCADE } from "@/components/scene-lab/sceneActivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
@@ -2129,11 +2131,24 @@ function useScreenTexture(
   }, []);
 
   const lastDraw = useRef(0);
+  const pausedOffscreen = useRef(new Set<HTMLVideoElement>());
 
   useFrame(({ clock }) => {
     // Refresh cap. Everything below - the video blit included - is skipped
     // between ticks, so this gates the canvas work AND the texture upload.
     const now = clock.elapsedTime;
+    // The arcade is off-screen: no repaint, no upload, and its videos pause
+    // (decoding several at once is one of the heaviest things a phone does).
+    if (!locationShown[LOC_ARCADE]) {
+      for (const el of mediaRef.current.values()) {
+        if (el instanceof HTMLVideoElement && !el.paused) { el.pause(); pausedOffscreen.current.add(el); }
+      }
+      return;
+    }
+    if (pausedOffscreen.current.size) {
+      for (const el of pausedOffscreen.current) void el.play().catch(() => {});
+      pausedOffscreen.current.clear();
+    }
     if (now - lastDraw.current < 1 / SCREEN_FPS) return;
     lastDraw.current = now;
 
@@ -2561,4 +2576,4 @@ export function RetroCrtTv({
   );
 }
 
-useGLTF.preload(LITTLE_TV_URL);
+idlePreload(LITTLE_TV_URL);

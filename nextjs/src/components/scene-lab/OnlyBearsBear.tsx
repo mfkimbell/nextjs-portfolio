@@ -34,6 +34,7 @@
  * COMPUTER'S local frame and he follows it wherever the lab moves it.
  */
 
+import { idlePreload } from "@/lib/idlePreload";
 import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
@@ -411,4 +412,4 @@ export default function OnlyBearsBear({
   );
 }
 
-useGLTF.preload(ONLY_BEARS_CLIP_URL);
+idlePreload(ONLY_BEARS_CLIP_URL);

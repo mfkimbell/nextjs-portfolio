@@ -2230,6 +2230,10 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   gramophoneSongVolume: number;
   /** Props falling over: bags, fishing rod, logs off the pile. */
   propSoundVolume: number;
+  /** Graphics: 0 = auto (low on phones / slow machines), 1 = always low, 2 = always high. */
+  gfxQuality: number;
+  /** Site only: skip pines beyond the fog from every site camera (1 = on). */
+  forestFogCull: number;
   leftBagSoundEarly: number;
   rightBagSoundEarly: number;
   rodSoundEarly: number;
@@ -3943,6 +3947,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   rockingChairVolume: 0.3,
   gramophoneSongVolume: 0.35,
   propSoundVolume: 0.85,
+  gfxQuality: 0,
+  forestFogCull: 1,
   leftBagSoundEarly: 0,
   rightBagSoundEarly: 0,
   rodSoundEarly: 0,

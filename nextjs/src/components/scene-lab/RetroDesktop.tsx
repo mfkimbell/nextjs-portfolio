@@ -20,6 +20,7 @@
  * scene once per keystroke, and the texture reads it at 24fps.
  */
 
+import { locationShown, LOC_CABIN } from "@/components/scene-lab/sceneActivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
@@ -871,7 +872,11 @@ export function useRetroDesktopTexture(stateRef: React.MutableRefObject<PcState>
 
   useFrame(({ clock }) => {
     const now = clock.elapsedTime;
-    if (now - last.current < 1 / FPS) return;
+    // nothing to repaint (or re-upload to the GPU) while the cabin is off-screen
+    if (!locationShown[LOC_CABIN]) return;
+    // zoomed out it's a small screen across the room: a third of the rate is plenty
+    const fps = stateRef.current.focused ? FPS : FPS / 3;
+    if (now - last.current < 1 / fps) return;
     last.current = now;
     const s = stateRef.current;
     const ctx = canvas.getContext("2d");

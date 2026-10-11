@@ -1,5 +1,6 @@
 "use client";
 
+import { idlePreload } from "@/lib/idlePreload";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { ComponentRef, MutableRefObject, ReactNode, RefObject } from "react";
 import IntroFlight from "@/components/scene-lab/IntroFlight";
@@ -21,7 +22,7 @@ import { roles } from "@/lib/experience";
 import { projects } from "@/lib/projects";
 import { SKILLS, skillIcon } from "@/lib/skills";
 import { Canvas, createPortal, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Clone, OrbitControls, Stars, useAnimations, useGLTF, useTexture } from "@react-three/drei";
+import { Clone, OrbitControls, PerformanceMonitor, Stars, useAnimations, useGLTF, useProgress, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
@@ -33,6 +34,7 @@ import rockingChairBearPoseRaw from "@/config/rockingChairBearPose.json";
 import bearPosesRaw from "@/config/bearPoses.json";
 import { fadeOutAudio, useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
 import { applySoundTuning } from "@/components/scene-lab/soundList";
+import { locationShown } from "@/components/scene-lab/sceneActivity";
 import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
 import { clampSpring, stepSpring } from "@/lib/bear-animation";
 import { getBanjoFingerPhase } from "@/lib/banjo-performance";
@@ -1147,6 +1149,7 @@ function Location({
      */
     if (!gateRef.current) {
       ref.current.visible = true;
+      locationShown[index] = true;
       return;
     }
     // Where the camera stands around the ring. ringMatrix puts a site at
@@ -1154,6 +1157,7 @@ function Location({
     // angle whatever radius it happens to be orbiting at.
     const camAngle = Math.atan2(camera.position.x, camera.position.z);
     ref.current.visible = Math.abs(shortestTurn(camAngle, a)) < LOCATION_VISIBLE_ARC;
+    locationShown[index] = ref.current.visible;
   });
 
   return (
@@ -2579,7 +2583,12 @@ function LockLayer({ config }: { config: CampfireSceneConfig }) {
   const cfgRef = useRef(config);
   cfgRef.current = config;
 
-  useFrame(() => {
+  const walkAt = useRef(0);
+  useFrame(({ clock }) => {
+    // Each pass looks names up across the whole scene; twice a second is
+    // plenty to catch objects as they load (it used to run every frame).
+    if (clock.elapsedTime - walkAt.current < 0.5) return;
+    walkAt.current = clock.elapsedTime;
     const locked = cfgRef.current.lockedObjects || {};
     // Compute the current set of meshes that should be non-raycasting.
     const shouldBeLocked = new Set<THREE.Mesh>();
@@ -2630,7 +2639,12 @@ function ShadowLayer({ config }: { config: CampfireSceneConfig }) {
   const cfgRef = useRef(config);
   cfgRef.current = config;
 
-  useFrame(() => {
+  const walkAt = useRef(0);
+  useFrame(({ clock }) => {
+    // Each pass looks names up across the whole scene; twice a second is
+    // plenty to catch objects as they load (it used to run every frame).
+    if (clock.elapsedTime - walkAt.current < 0.5) return;
+    walkAt.current = clock.elapsedTime;
     const overrides = cfgRef.current.objectOverrides || {};
     const duplicates = cfgRef.current.objectDuplicates || {};
     const shouldSuppress = new Set<THREE.Mesh>();
@@ -11621,6 +11635,8 @@ function LanternFloorShadow({ target, config }: { target: React.RefObject<THREE.
   useEffect(() => () => mat.dispose(), [mat]);
   const twins = useRef<THREE.Mesh[]>([]);
   const built = useRef<THREE.Object3D | null>(null);
+  const lightsAt = useRef(-1e9);
+  const lightsCache = useRef<THREE.PointLight[]>([]);
   const tmp = useMemo(() => ({ box: new THREE.Box3(), c: new THREE.Vector3(), lp: new THREE.Vector3() }), []);
   useFrame(() => {
     const root = target.current;
@@ -11641,12 +11657,19 @@ function LanternFloorShadow({ target, config }: { target: React.RefObject<THREE.
     }
     if (!root) return;
     for (const t of twins.current) t.visible = on;
+    if (!locationShown[2]) return;
     if (!on) return;
     tmp.box.setFromObject(root, false);
     tmp.box.getCenter(tmp.c);
     // which lantern: the nearest one (or a fixed pick, 1-4)
-    const lights: THREE.PointLight[] = [];
-    scene.traverse((o) => { if ((o as THREE.PointLight).isPointLight && o.userData?.cabinLantern) lights.push(o as THREE.PointLight); });
+    const now = performance.now();
+    if (now - lightsAt.current > 1000) {
+      lightsAt.current = now;
+      const found: THREE.PointLight[] = [];
+      scene.traverse((o) => { if ((o as THREE.PointLight).isPointLight && o.userData?.cabinLantern) found.push(o as THREE.PointLight); });
+      lightsCache.current = found;
+    }
+    const lights = lightsCache.current;
     if (!lights.length) return;
     const pick = Math.round(n(config.tableShadowLantern, 0));
     let light = lights[0];
@@ -11665,6 +11688,70 @@ function LanternFloorShadow({ target, config }: { target: React.RefObject<THREE.
     u.uOpacity.value = n(config.tableShadowStrength, 0.5);
   });
   useEffect(() => () => { twins.current.forEach((t) => t.parent?.remove(t)); twins.current = []; }, []);
+  return null;
+}
+
+/**
+ * Low-graphics mode: re-render the shadow maps every Nth frame instead of every
+ * frame. The lights and most of the scene are still - only the bears breathe
+ * and the fire flickers - so at 2 the shadows update 30 times a second on a
+ * 60 Hz phone and nobody can tell, while every shadow pass costs half.
+ */
+function ShadowThrottle({ every = 2 }: { every?: number }) {
+  const gl = useThree((s) => s.gl);
+  const n = useRef(0);
+  useEffect(() => {
+    gl.shadowMap.autoUpdate = false;
+    gl.shadowMap.needsUpdate = true;
+    return () => { gl.shadowMap.autoUpdate = true; };
+  }, [gl]);
+  useFrame(() => {
+    n.current = (n.current + 1) % Math.max(1, every);
+    if (n.current === 0) gl.shadowMap.needsUpdate = true;
+  });
+  return null;
+}
+
+/**
+ * Compile every material's shader ahead of time, once everything has loaded.
+ *
+ * three builds a material's GPU program the first time it is drawn, and the
+ * program depends on how many lights are on - which changes every time you
+ * turn to another site (an off-screen site's lights are switched off). On an
+ * iPhone each of those compiles is a visible freeze. So after loading, this
+ * shows each site (and each pair, for the turns between them) for one
+ * invisible moment and asks the renderer to compile for it, using the
+ * parallel-compile extension where the browser has it.
+ */
+function ShaderPrewarm({ ready }: { ready: boolean }) {
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  const camera = useThree((s) => s.camera);
+  const done = useRef(false);
+  useEffect(() => {
+    if (!ready || done.current) return;
+    done.current = true;
+    const t = window.setTimeout(() => {
+      const locs = [0, 1, 2].map((i) => scene.getObjectByName(`location_${i}`)).filter(Boolean) as THREE.Object3D[];
+      if (locs.length < 3) return;
+      const was = locs.map((l) => l.visible);
+      const combos = [[0], [1], [2], [0, 1], [1, 2], [0, 2]];
+      const run = async () => {
+        for (const combo of combos) {
+          locs.forEach((l, i) => { l.visible = combo.includes(i); });
+          try {
+            const r = gl as unknown as { compileAsync?: (s: THREE.Object3D, c: THREE.Camera) => Promise<unknown> };
+            if (r.compileAsync) await r.compileAsync(scene, camera); else gl.compile(scene, camera);
+          } catch { /* best effort */ }
+          locs.forEach((l, i) => { l.visible = was[i]; });
+          await new Promise((res) => window.setTimeout(res, 50));
+        }
+        console.log("[perf] shaders prewarmed for all sites");
+      };
+      void run();
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, [ready, gl, scene, camera]);
   return null;
 }
 
@@ -12621,7 +12708,7 @@ function ArcadeSector({ config, onSelect, crtMenu, onCrtClick, onCrtHover, crtHo
  */
 const FOREST_TREE_PREFIX = "forest_tree_";
 
-function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onSelect: (name: string) => void }) {
+function ForestAndPaths({ config, onSelect, cull = false }: { config: CampfireSceneConfig; onSelect: (name: string) => void; cull?: boolean }) {
   const camps = useMemo(() => {
     const arr: Array<{ x: number; z: number }> = [];
     for (let i = 0; i < LOCATION_COUNT; i++) {
@@ -12761,6 +12848,27 @@ function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onS
   const instRefs = useRef<Array<THREE.InstancedMesh | null>>([]);
 
   /*
+   * Trees past the fog are never seen. From any of the three site cameras the
+   * fog is solid at fogFar, so on the site (not while flying, not in the lab)
+   * only the pines within that distance of at least one site camera are
+   * drawn. `slots` maps instance slot -> tree index so clicks and the
+   * forest_tree_<i> overrides still land on the right tree.
+   */
+  const slots = useMemo(() => {
+    const all = trees.map((_, i) => i);
+    if (!cull || (config.forestFogCull ?? 1) < 0.5) return all;
+    const cams: THREE.Vector3[] = [];
+    const p = new THREE.Vector3(), t = new THREE.Vector3();
+    for (let i = 0; i < LOCATION_COUNT; i++) { locationCamera(i, config, p, t); cams.push(p.clone()); }
+    const reach = Math.max(1, config.fogFar) + 3;
+    const r2 = reach * reach;
+    return all.filter((i) => {
+      const tr = trees[i];
+      return cams.some((c) => (c.x - tr.x) ** 2 + (c.z - tr.z) ** 2 < r2);
+    });
+  }, [trees, cull, config]);
+
+  /*
    * Every tree, always. The forest was distance-culled for a while; it is not
    * worth it and it is not free. A pine here is 264 TRIANGLES, so all 356 of
    * them together are ~94k triangles in two draw calls - next to nothing, and
@@ -12775,7 +12883,8 @@ function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onS
     const scl = new THREE.Vector3();
     const eul = new THREE.Euler();
     const overrides = config.objectOverrides ?? {};
-    for (let i = 0; i < trees.length; i++) {
+    for (let slot = 0; slot < slots.length; slot++) {
+      const i = slots[slot];
       const t = trees[i];
       // Per-instance override: dx/dy/dz nudge, scale multiplier, hide flag.
       // Stored under `forest_tree_<i>` so the panel's slider updates land in
@@ -12794,16 +12903,16 @@ function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onS
       mat.compose(pos, q, scl);
       for (const inst of instRefs.current) {
         if (!inst) continue;
-        inst.setMatrixAt(i, mat);
+        inst.setMatrixAt(slot, mat);
       }
     }
     for (const inst of instRefs.current) {
       if (!inst) continue;
-      inst.count = trees.length;
+      inst.count = slots.length;
       inst.instanceMatrix.needsUpdate = true;
       inst.computeBoundingSphere();
     }
-  }, [trees, templates, config.forestTreeHeight, config.treeScale, config.treeY, config.objectOverrides]);
+  }, [trees, slots, templates, config.forestTreeHeight, config.treeScale, config.treeY, config.objectOverrides]);
 
   const forestOn = config.forestEnabled >= 0.5 && trees.length > 0 && templates.length > 0;
   const pathsOn = config.pathVisible >= 0.5;
@@ -12839,7 +12948,7 @@ function ForestAndPaths({ config, onSelect }: { config: CampfireSceneConfig; onS
                 const id = e.instanceId;
                 if (id == null) return;
                 e.stopPropagation();
-                onSelect(`${FOREST_TREE_PREFIX}${id}`);
+                onSelect(`${FOREST_TREE_PREFIX}${slots[id] ?? id}`);
               }}
             />
           ))
@@ -13130,20 +13239,36 @@ function CampfireGround({ config, gate = false }: { config: CampfireSceneConfig;
 function PerfProbe({ onSample }: { onSample: (s: PerfSample) => void }) {
   const frames = useRef(0);
   const since = useRef(0);
-  useFrame(({ gl, scene, clock }) => {
+  const worst = useRef(0);
+  const gpu = useRef<string | null>(null);
+  useFrame(({ gl, scene, clock }, delta) => {
     frames.current++;
+    if (!perfFirstFrameMs) perfFirstFrameMs = performance.now() - PERF_T0;
+    worst.current = Math.max(worst.current, delta * 1000);
+    if (gpu.current === null) {
+      try {
+        const ctx = gl.getContext();
+        const ext = ctx.getExtension("WEBGL_debug_renderer_info");
+        gpu.current = ext ? String(ctx.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : String(ctx.getParameter(ctx.RENDERER));
+      } catch { gpu.current = "?"; }
+    }
     const now = clock.elapsedTime;
     if (since.current === 0) since.current = now;
-    if (now - since.current < 0.5) return;
-    const fps = frames.current / (now - since.current);
+    if (now - since.current < 1) return;
+    const span = now - since.current;
+    const fps = frames.current / span;
+    const avgMs = (span * 1000) / Math.max(1, frames.current);
+    const worstMs = worst.current;
+    worst.current = 0;
     frames.current = 0;
     since.current = now;
     let lights = 0;
     let shadowMaps = 0;
     let shadowTexels = 0;
-    scene.traverse((o) => {
+    // traverseVisible: lights in a switched-off site don't count (they aren't drawn)
+    scene.traverseVisible((o) => {
       const l = o as THREE.Light;
-      if (!l.isLight || !l.visible) return;
+      if (!l.isLight) return;
       lights++;
       if (!l.castShadow || !l.shadow) return;
       // A point light's shadow is a CUBE: six faces off one map size.
@@ -13165,6 +13290,8 @@ function PerfProbe({ onSample }: { onSample: (s: PerfSample) => void }) {
       shadowMaps,
       shadowTexels,
       screenTexels: size.x * dpr * size.y * dpr,
+      avgMs, worstMs, dpr, w: Math.round(size.x * dpr), h: Math.round(size.y * dpr),
+      gpu: gpu.current ?? "?", shadowsAuto: gl.shadowMap.autoUpdate,
     });
   });
   return null;
@@ -13174,7 +13301,14 @@ type PerfSample = {
   fps: number; calls: number; tris: number; progs: number;
   geoms: number; textures: number; lights: number;
   shadowMaps: number; shadowTexels: number; screenTexels: number;
+  avgMs: number; worstMs: number; dpr: number; w: number; h: number;
+  gpu: string; shadowsAuto: boolean;
 };
+/** Show the performance readout without ?perf (temporary, for measuring phones). */
+const PERF_OVERLAY_DEFAULT = true;
+/** When the page started, for the "loaded in" line. */
+const PERF_T0 = typeof performance !== "undefined" ? performance.now() : 0;
+let perfFirstFrameMs = 0;
 
 /**
  * Keeps the fog honest when the camera pulls back.
@@ -14105,6 +14239,22 @@ function CampfireWorld({
   };
 
   const panelled = panel != null;
+  /*
+   * The arcade and the cabin wait until the campfire has finished loading:
+   * mounting all three at once meant every model in the site downloading and
+   * compiling before the first scene could show, which on a phone is a long
+   * black screen. They load the moment you head toward one, or once the
+   * campfire is done (in the lab, straight away).
+   */
+  const loadingActive = useProgress((st) => st.active);
+  const [loadRest, setLoadRest] = useState(() => !panelled || !!editing);
+  useEffect(() => {
+    if (loadRest) return;
+    if (!panelled || editing || (panel != null && panel !== LOCATION_CAMPFIRE)) { setLoadRest(true); return; }
+    if (loadingActive) return;
+    const t = window.setTimeout(() => setLoadRest(true), 1500);
+    return () => window.clearTimeout(t);
+  }, [loadRest, panelled, editing, panel, loadingActive]);
   // The fly-in lands on the campfire, which is location 0 - not on the free-look
   // camera, which in panelled mode is never where the scene actually settles.
   const intro = useMemo(() => {
@@ -14225,7 +14375,8 @@ function CampfireWorld({
             selected but never dragged - ObjectDragLayer only sees pointer
             events from its own descendants. Both wrapper groups are transform
             free, so moving it in here changes nothing about where trees land. */}
-        <ForestAndPaths config={config} onSelect={onSelect} />
+        <ForestAndPaths config={config} onSelect={onSelect} cull={panelled && !flying && !editing} />
+        <ShaderPrewarm ready={loadRest && !loadingActive} />
         {/* Duplicate clones live under the drag layer so their bubbled pointer
             events reach the drag handlers - moving DuplicatesLayer outside made
             duplicates selectable but not draggable. */}
@@ -14831,7 +14982,7 @@ function CampfireWorld({
             they were, so both saved camera views still frame the right thing
             and cameraDefaults.json needed no change. */}
         <Location index={LOCATION_ARCADE} config={config} gate={panelled && !flying}>
-          <SafeAsset label="arcade">
+          {loadRest ? <SafeAsset label="arcade">
             <ArcadeSector
               config={config}
               onSelect={onSelect}
@@ -14840,13 +14991,13 @@ function CampfireWorld({
               onCrtHover={onCrtHover}
               crtHot={crtStage === 0 && !editing}
             />
-          </SafeAsset>
+          </SafeAsset> : null}
         </Location>
 
         <Location index={LOCATION_CABIN} config={config} gate={panelled && !flying}>
-          <SafeAsset label="cabin">
+          {loadRest ? <SafeAsset label="cabin">
             <CabinSector config={config} onSelect={onSelect} pc={pcGlass} onlyBears={onlyBearsMount} catFocus={catFocusProps} catSleepFocus={catFocusTableProps} catSleepAnchor={catSleepAnchorRef} />
-          </SafeAsset>
+          </SafeAsset> : null}
         </Location>
       </ObjectDragLayer>
       </group>
@@ -14923,7 +15074,10 @@ export default function CampfireScene({
   const [perf, setPerf] = useState<PerfSample | null>(null);
   useEffect(() => {
     if (typeof window === "undefined") return;
-    setPerfOn(new URLSearchParams(window.location.search).has("perf"));
+    // TEMPORARY: on by default while we measure phones. ?noperf hides it.
+    // Flip PERF_OVERLAY_DEFAULT to false once the numbers are in.
+    const q = new URLSearchParams(window.location.search);
+    setPerfOn(q.has("perf") || (PERF_OVERLAY_DEFAULT && !q.has("noperf")));
   }, []);
   /*
    * Both of these are resolved SYNCHRONOUSLY, on the very first render, and
@@ -14949,7 +15103,34 @@ export default function CampfireScene({
     };
   };
   if (gfxRef.current === null) gfxRef.current = resolveGfx();
-  const maxDpr = gfxRef.current.dpr;
+  /*
+   * Low-graphics mode, for phones and weak laptops. Starts on for touch
+   * devices / few CPU cores / little memory, and a PerformanceMonitor inside
+   * the canvas switches it on if the frame rate sags anywhere else. It drops
+   * the fire's point-light shadow (six full re-renders of the scene every
+   * frame - and on phones its low-precision depth is what speckled the ground
+   * round the fire with dots), shrinks the other shadow maps and caps the
+   * pixel ratio. Lab: "Graphics quality" 0 = auto, 1 = always low, 2 = always high.
+   */
+  const gfxForce = Math.round(Number.isFinite(config.gfxQuality) ? config.gfxQuality : 0);
+  const [autoLow, setAutoLow] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+    const cores = navigator.hardwareConcurrency ?? 8;
+    const mem = (navigator as unknown as { deviceMemory?: number }).deviceMemory ?? 8;
+    return coarse || cores <= 4 || mem <= 4;
+  });
+  const lowGfx = gfxForce === 1 || (gfxForce === 0 && autoLow);
+  const worldConfig = useMemo<CampfireSceneConfig>(() => (lowGfx ? {
+    ...config,
+    fireCastShadow: 0,
+    fireShadowMapSize: Math.min(config.fireShadowMapSize, 512),
+    warmShadowMapSize: Math.min(config.warmShadowMapSize, 1024),
+    deskShadowMapSize: Math.min(config.deskShadowMapSize ?? 512, 256),
+    deskLampVanHeadsShadow: 0, deskLampSmallAShadow: 0, deskLampSmallBShadow: 0, deskLampHoodShadow: 0,
+    deskComputerShadow: 0,
+  } as CampfireSceneConfig : config), [config, lowGfx]);
+  const maxDpr = lowGfx ? Math.min(gfxRef.current.dpr, 1.25) : gfxRef.current.dpr;
   const aaOn = gfxRef.current.aa;
   // Starts at 0 on both server and client, so the first mount is never a
   // remount; only a real toggle bumps it.
@@ -15123,8 +15304,12 @@ export default function CampfireScene({
       onPointerMissed={() => selectHandler("")}
     >
       <Matte />
+      {gfxForce === 0 && !autoLow ? (
+        <PerformanceMonitor onDecline={() => setAutoLow(true)} flipflops={1} />
+      ) : null}
+      {lowGfx ? <ShadowThrottle every={2} /> : null}
       <CampfireWorld
-        config={config}
+        config={worldConfig}
         onCameraChange={cameraChangeHandler}
         onSelect={selectWithSound}
         selectedObject={selectedObject}
@@ -15160,12 +15345,15 @@ export default function CampfireScene({
       {perfOn ? <PerfProbe onSample={setPerf} /> : null}
     </Canvas>
     {perfOn && perf ? (
-      <div className="pointer-events-none absolute left-2 top-2 z-50 rounded bg-black/70 px-2 py-1 font-mono text-[10px] leading-tight text-lime-300">
-        <div>{perf.fps.toFixed(0)} fps &middot; {perf.calls} calls &middot; {(perf.tris / 1000).toFixed(0)}k tris</div>
-        <div>{perf.lights} lights &middot; {perf.shadowMaps} shadow passes</div>
-        <div>shadow {(perf.shadowTexels / 1e6).toFixed(1)}M px &middot; screen {(perf.screenTexels / 1e6).toFixed(2)}M px</div>
-        <div>= {(perf.shadowTexels / Math.max(1, perf.screenTexels)).toFixed(1)}x the screen, per frame</div>
+      <div className="pointer-events-none absolute left-2 top-12 z-50 max-w-[60vw] rounded bg-black/75 px-2 py-1 font-mono text-[10px] leading-tight text-lime-300">
+        <div className="text-white">{["campfire", "arcade", "cabin"][panel ?? -1] ?? (panel == null ? "lab / free" : `panel ${panel}`)} &middot; {lowGfx ? "LOW gfx" : "HIGH gfx"}{gfxForce ? " (forced)" : ""}</div>
+        <div>{perf.fps.toFixed(0)} fps &middot; avg {perf.avgMs.toFixed(1)}ms &middot; worst {perf.worstMs.toFixed(0)}ms</div>
+        <div>{perf.calls} calls &middot; {(perf.tris / 1000).toFixed(0)}k tris</div>
+        <div>{perf.lights} lights &middot; {perf.shadowMaps} shadow passes{perf.shadowsAuto ? "" : " (throttled)"}</div>
+        <div>shadow {(perf.shadowTexels / 1e6).toFixed(1)}M px &middot; screen {perf.w}x{perf.h} @{perf.dpr.toFixed(2)}x</div>
         <div>{perf.progs} programs &middot; {perf.geoms} geom &middot; {perf.textures} tex</div>
+        <div>first frame {(perfFirstFrameMs / 1000).toFixed(1)}s &middot; up {((performance.now() - PERF_T0) / 1000).toFixed(0)}s</div>
+        <div className="text-white/70">{perf.gpu.slice(0, 40)} &middot; {typeof navigator !== "undefined" ? `${navigator.hardwareConcurrency ?? "?"}c` : ""}</div>
       </div>
     ) : null}
     </>
@@ -15173,70 +15361,70 @@ export default function CampfireScene({
 }
 
 useGLTF.preload(CAMPFIRE_SCENE_URL);
-useGLTF.preload(PINE_TREE_URL);
-useGLTF.preload(WOOD_LOG_URL);
-useGLTF.preload(NEW_LOG_URL);
-useGLTF.preload(WHITE_OWL_URL);
-useGLTF.preload(RED_OWL_URL);
-useGLTF.preload(TOUCAN_URL);
-useGLTF.preload(DEER_URL);
-useGLTF.preload(DOE_URL);
-useGLTF.preload(BEAR_URL);
-useGLTF.preload(SMOKEY_BODY_FIT_URL);
-useGLTF.preload(BEAR_OLD_URL);
-useGLTF.preload(BEAR_URL_FRONT_LOG);
-useGLTF.preload(BEAR_URL_BACK_RIGHT_LOG);
-useGLTF.preload(FISH_URL);
-useGLTF.preload(FISH_STICK_URL);
-useGLTF.preload(PICKUP_TRUCK_URL);
-useGLTF.preload(CARAVAN_URL);
-useGLTF.preload(CAMPER_URL);
-useGLTF.preload(CUB_URL);
-useGLTF.preload(WOODEN_CABIN_URL);
-useGLTF.preload(GAMECUBE_URL);
-useGLTF.preload(XBOX360_URL);
-useGLTF.preload(GAMECUBE_CONSOLE_URL);
-useGLTF.preload(CONTROLLER_URL);
-useGLTF.preload(GLASSES_URL);
-useGLTF.preload(SMOKEY_HAT_URL);
-useGLTF.preload(TENT_URL);
-useGLTF.preload(HONEY_WAND_URL);
-useGLTF.preload(WOOD_PILE_URL);
-useGLTF.preload(FISHING_ROD_URL);
-useGLTF.preload(RACCOON2_URL);
-useGLTF.preload(BACKPACK_URL);
-useGLTF.preload(HIKING_BACKPACK_URL);
-useGLTF.preload(BOOK_URL);
-useGLTF.preload(BACKPACK_Q2_URL);
-useGLTF.preload(BACKPACK_TOASTIE_URL);
-useGLTF.preload(FISH_BONE_URL);
-useGLTF.preload(KEG_URL);
-useGLTF.preload(KETTLE_URL);
-useGLTF.preload(BEER_MUG_URL);
-useGLTF.preload(SOJU_URL);
-useGLTF.preload(STOOL_URL);
-useGLTF.preload(CAMERA_URL);
-useGLTF.preload(LOG_AXE_URL);
-useGLTF.preload(BOAT_URL);
-useGLTF.preload(OAR_URL);
-useGLTF.preload(LAPTOP_URL);
-useGLTF.preload(BANJO_URL);
-useGLTF.preload(OLD_BEAR_TABLE_URL);
-useGLTF.preload(OLD_BEAR_CHAIR_URL);
-useGLTF.preload(OLD_BEAR_COMPUTER_URL);
-useGLTF.preload(OLD_BEAR_BOOKS_URL);
-useGLTF.preload(OLD_BEAR_MUG_URL);
-useGLTF.preload(OLD_BEAR_BOXES_URL);
-useGLTF.preload(OLD_BEAR_PAPERS_URL);
-useGLTF.preload(OLD_BEAR_TOILET_URL);
-useGLTF.preload(OLD_BEAR_POSTIT_URL);
-useGLTF.preload(OLD_BEAR_DEBRIS_URL);
-useGLTF.preload(OLD_BEAR_LANTERN_URL);
-useGLTF.preload(OLD_BEAR_CARAVAN_URL);
-useGLTF.preload(OLD_BEAR_CAMPING_URL);
-useGLTF.preload(CARAVAN_HOLLOW_URL);
+idlePreload(PINE_TREE_URL);
+idlePreload(WOOD_LOG_URL);
+idlePreload(NEW_LOG_URL);
+idlePreload(WHITE_OWL_URL);
+idlePreload(RED_OWL_URL);
+idlePreload(TOUCAN_URL);
+idlePreload(DEER_URL);
+idlePreload(DOE_URL);
+idlePreload(BEAR_URL);
+idlePreload(SMOKEY_BODY_FIT_URL);
+idlePreload(BEAR_OLD_URL);
+idlePreload(BEAR_URL_FRONT_LOG);
+idlePreload(BEAR_URL_BACK_RIGHT_LOG);
+idlePreload(FISH_URL);
+idlePreload(FISH_STICK_URL);
+idlePreload(PICKUP_TRUCK_URL);
+idlePreload(CARAVAN_URL);
+idlePreload(CAMPER_URL);
+idlePreload(CUB_URL);
+idlePreload(WOODEN_CABIN_URL);
+idlePreload(GAMECUBE_URL);
+idlePreload(XBOX360_URL);
+idlePreload(GAMECUBE_CONSOLE_URL);
+idlePreload(CONTROLLER_URL);
+idlePreload(GLASSES_URL);
+idlePreload(SMOKEY_HAT_URL);
+idlePreload(TENT_URL);
+idlePreload(HONEY_WAND_URL);
+idlePreload(WOOD_PILE_URL);
+idlePreload(FISHING_ROD_URL);
+idlePreload(RACCOON2_URL);
+idlePreload(BACKPACK_URL);
+idlePreload(HIKING_BACKPACK_URL);
+idlePreload(BOOK_URL);
+idlePreload(BACKPACK_Q2_URL);
+idlePreload(BACKPACK_TOASTIE_URL);
+idlePreload(FISH_BONE_URL);
+idlePreload(KEG_URL);
+idlePreload(KETTLE_URL);
+idlePreload(BEER_MUG_URL);
+idlePreload(SOJU_URL);
+idlePreload(STOOL_URL);
+idlePreload(CAMERA_URL);
+idlePreload(LOG_AXE_URL);
+idlePreload(BOAT_URL);
+idlePreload(OAR_URL);
+idlePreload(LAPTOP_URL);
+idlePreload(BANJO_URL);
+idlePreload(OLD_BEAR_TABLE_URL);
+idlePreload(OLD_BEAR_CHAIR_URL);
+idlePreload(OLD_BEAR_COMPUTER_URL);
+idlePreload(OLD_BEAR_BOOKS_URL);
+idlePreload(OLD_BEAR_MUG_URL);
+idlePreload(OLD_BEAR_BOXES_URL);
+idlePreload(OLD_BEAR_PAPERS_URL);
+idlePreload(OLD_BEAR_TOILET_URL);
+idlePreload(OLD_BEAR_POSTIT_URL);
+idlePreload(OLD_BEAR_DEBRIS_URL);
+idlePreload(OLD_BEAR_LANTERN_URL);
+idlePreload(OLD_BEAR_CARAVAN_URL);
+idlePreload(OLD_BEAR_CAMPING_URL);
+idlePreload(CARAVAN_HOLLOW_URL);
 for (const prop of ARCADE_CUB_PROPS) {
-  useGLTF.preload(prop.url);
+  idlePreload(prop.url);
 }
 
 // Retained scene components that aren't mounted right now but that we want

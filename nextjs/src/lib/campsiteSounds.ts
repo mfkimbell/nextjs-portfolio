@@ -234,7 +234,10 @@ export function useCampsiteAudioLoop(
     installGestureUnlock();
     const a = new Audio(url);
     a.loop = true;
-    a.preload = "auto";
+    // Don't download until it's actually wanted: every loop used to fetch its
+    // whole file at page load (the arcade music and the gramophone song too),
+    // several MB a phone had to pull before anything else. play() loads it.
+    a.preload = "none";
     audioRef.current = a;
 
     // Only stand up the Web Audio graph for loops that actually asked to be

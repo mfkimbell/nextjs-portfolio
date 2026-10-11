@@ -15,6 +15,7 @@
  *               model's own atlas with the white fur recoloured ginger).
  */
 
+import { idlePreload } from "@/lib/idlePreload";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
@@ -1463,7 +1464,7 @@ export function CabinCat({
   );
 }
 
-useGLTF.preload(CAT_SIT_URL);
+idlePreload(CAT_SIT_URL);
 
 /* ------------------------------------------------------------- gramophone */
 
@@ -1660,8 +1661,8 @@ export function CabinGramophone({ tune }: { tune: GramophoneTune }) {
   );
 }
 
-useGLTF.preload(GRAMOPHONE_URL);
-useGLTF.preload(GRAMOPHONE_TABLE_URL);
+idlePreload(GRAMOPHONE_URL);
+idlePreload(GRAMOPHONE_TABLE_URL);
 
 /* ------------------------------------------------------------- microphone */
 
@@ -1743,7 +1744,7 @@ export function MicrophoneStand({
   return <primitive object={model} />;
 }
 
-useGLTF.preload(MICROPHONE_PARTS_URL);
+idlePreload(MICROPHONE_PARTS_URL);
 
 /* ------------------------------------------------------------- typewriter */
 

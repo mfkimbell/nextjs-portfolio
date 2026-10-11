@@ -3838,6 +3838,15 @@ export default function SceneLabClient() {
                     <SliderRow label="Computer startup jingle volume" value={campfireConfig.pcStartupVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("pcStartupVolume", value)} />
                   </ControlGroup>
 
+                  <ControlGroup title="Graphics quality (phones)">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      0 = auto: low on phones / slow machines, and switches to low if the
+                      frame rate drops. 1 = always low (preview what phones get). 2 = always high.
+                      Low drops the fire&apos;s point-light shadow, shrinks shadow maps, caps resolution.
+                    </p>
+                    <SliderRow label="Graphics (0 auto, 1 low, 2 high)" value={campfireConfig.gfxQuality ?? 0} min={0} max={2} step={1} onChange={(value) => updateCampfire("gfxQuality", value)} />
+                  </ControlGroup>
+
                   <ControlGroup title="Desk shadow from the cabin lantern">
                     <SliderRow label="on (0/1)" value={campfireConfig.tableShadowOn ?? 1} min={0} max={1} step={1} onChange={(value) => updateCampfire("tableShadowOn", value)} />
                     <SliderRow label="darkness" value={campfireConfig.tableShadowStrength ?? 0.5} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("tableShadowStrength", value)} />
