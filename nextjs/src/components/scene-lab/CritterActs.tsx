@@ -775,7 +775,7 @@ function CarriedModel({ url }: { url: string }) {
  */
 export function TipOver({
   active, table, heading, groundY, shove, fall = 1, tilt = 0, lift = 0, replay = 0,
-  restitution = 0.22, contactAngle, onContact, onLand,
+  restitution = 0.22, contactAngle, onContact, onLand, soundEarly = 0, onSound,
   rattleAmp = 0, rattleFreq = 7, rattleDamp = 4, children,
 }: {
   active: boolean;
@@ -844,6 +844,10 @@ export function TipOver({
   onContact?: () => void;
   /** fire once when the prop reaches its measured ground-rest angle */
   onLand?: () => void;
+  /** Its fall sound: fired once, at landing (soundEarly 0) or earlier in the
+   *  fall - soundEarly 0.5 = halfway over, 1 = the moment it starts to tip. */
+  soundEarly?: number;
+  onSound?: () => void;
   /*
    * Whip, for something long and springy.
    *
@@ -869,7 +873,7 @@ export function TipOver({
   const g = useRef<THREE.Group>(null);
   /** the <Location> ring group these coordinates are relative to, resolved once */
   const ref = useRef<THREE.Object3D | null>(null);
-  const st = useRef({ th: 0, w: 0, acc: 0, fired: false, landed: false, settled: false,
+  const st = useRef({ th: 0, w: 0, acc: 0, fired: false, landed: false, sounded: false, settled: false,
                       /** current whip excitation, 0..1, and its phase clock */
                       wob: 0, wt: 0 });
 
@@ -895,7 +899,7 @@ export function TipOver({
    * lab it means dragging a slider plays the whole thing again.
    */
   useEffect(() => {
-    st.current = { th: 0, w: active ? solved.kick : 0, acc: 0, fired: false, landed: false, settled: false,
+    st.current = { th: 0, w: active ? solved.kick : 0, acc: 0, fired: false, landed: false, sounded: false, settled: false,
                    wob: active ? 1 : 0, wt: 0 };
   }, [active, replay, solved, groundY, lift, contactAngle, restitution,
       rattleAmp, rattleFreq, rattleDamp]);
@@ -935,6 +939,10 @@ export function TipOver({
       if (!s.fired && contactAngle !== undefined && s.th >= contactAngle) {
         s.fired = true;
         onContact?.();
+      }
+      if (!s.sounded && onSound && s.th >= solved.rest * (1 - Math.min(1, Math.max(0, soundEarly))) - 1e-6) {
+        s.sounded = true;
+        onSound();
       }
       if (!s.landed && s.th >= solved.rest) {
         s.landed = true;

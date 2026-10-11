@@ -84,6 +84,54 @@ function getAudioContext(): AudioContext | null {
   return sharedAudioContext;
 }
 
+/* ------------------------------------------------------------ sound tuning */
+
+/**
+ * Per-sound tuning, keyed by URL, set from the lab config (see
+ * components/scene-lab/soundList.ts). Every one-shot and loop made through
+ * this file reads it at play time, so call sites stay untouched:
+ *  vol   - multiplier on whatever volume the caller asked for (above 1 boosts
+ *          through a Web Audio gain, since <audio>.volume stops at 1)
+ *  rate  - playback speed (pitch follows)
+ *  delay - seconds between the trigger and the sound
+ *  start - seconds into the file to start from (skips lead-in silence)
+ *  end   - seconds into the file to stop at / loop back from (0 = the end)
+ *  pan   - -1 hard left .. 1 hard right
+ */
+export type SoundTune = { vol: number; rate: number; delay: number; start: number; end: number; pan: number };
+const TUNE_DEFAULT: SoundTune = { vol: 1, rate: 1, delay: 0, start: 0, end: 0, pan: 0 };
+const soundTunes = new Map<string, SoundTune>();
+export function setSoundTune(url: string, t: Partial<SoundTune>) {
+  soundTunes.set(url, { ...TUNE_DEFAULT, ...t });
+}
+export function getSoundTune(url: string): SoundTune {
+  return soundTunes.get(url) ?? TUNE_DEFAULT;
+}
+
+/** Route an element through gain + pan when the tuning asks for a boost or
+ *  a side. Each element can only be connected once; returns the nodes. */
+type ElementGraph = { gain: GainNode; pan: StereoPannerNode };
+const elementGraphs = new WeakMap<HTMLMediaElement, ElementGraph>();
+function graphFor(a: HTMLMediaElement): ElementGraph | null {
+  const have = elementGraphs.get(a);
+  if (have) return have;
+  const ctx = getAudioContext();
+  if (!ctx) return null;
+  try {
+    const src = ctx.createMediaElementSource(a);
+    const gain = ctx.createGain();
+    const pan = ctx.createStereoPanner();
+    src.connect(gain);
+    gain.connect(pan);
+    pan.connect(ctx.destination);
+    const g = { gain, pan };
+    elementGraphs.set(a, g);
+    return g;
+  } catch {
+    return null;
+  }
+}
+
 /** The page's one shared AudioContext, for code that synthesizes its own
  *  sounds (lib/retroPcSounds). Null on the server or without Web Audio. */
 export function getSharedAudioContext(): AudioContext | null {
@@ -231,10 +279,12 @@ export function useCampsiteAudioLoop(
     let raf = 0;
     let last: number | null = null;
     let offGesture: (() => void) | null = null;
+    let enabledAt: number | null = null;
     const tryPlay = () => {
       const a = audioRef.current;
       if (!a) return;
-      void a.play().catch(() => {
+      void a.play().then(() => console.log("[sounds] loop playing", { url, vol: a.volume, ctx: sharedAudioContext?.state ?? "none" })).catch((err: unknown) => {
+        console.warn("[sounds] loop play blocked - will retry on next click", { url, error: String(err), gestureUnlocked });
         // Blocked for lack of a gesture yet - retry once one lands.
         offGesture?.();
         offGesture = onGesture(tryPlay);
@@ -250,22 +300,43 @@ export function useCampsiteAudioLoop(
         gainRef.current += (target - gainRef.current) * Math.min(1, step);
         if (Math.abs(target - gainRef.current) < 0.004) gainRef.current = target;
 
+        const tune = getSoundTune(url);
+        // the tuned delay: hold off for that long after being switched on
+        if (enabled && enabledAt === null) enabledAt = now;
+        if (!enabled) enabledAt = null;
+        const waiting = enabled && enabledAt !== null && now - enabledAt < tune.delay * 1000;
+        if (waiting) gainRef.current = Math.min(gainRef.current, 0);
+
         if (gainRef.current > 0 && !playingRef.current) {
           playingRef.current = true;
+          if (tune.start > 0 && a.currentTime < tune.start) { try { a.currentTime = tune.start; } catch { /* not seekable yet */ } }
           tryPlay();
+        }
+        a.playbackRate = Math.max(0.05, tune.rate);
+        a.preservesPitch = false;
+        // loop just the tuned stretch of the file
+        if (playingRef.current) {
+          if (tune.end > tune.start && a.currentTime >= tune.end) a.currentTime = Math.max(0, tune.start);
+          else if (tune.start > 0 && a.currentTime < tune.start - 0.05) a.currentTime = tune.start;
+        }
+        const needGraph = tune.vol > 1 || Math.abs(tune.pan) > 0.001;
+        const g = needGraph || elementGraphs.has(a) ? (panRef ? null : graphFor(a)) : null;
+        if (g) {
+          g.gain.gain.value = Math.max(1, tune.vol);
+          g.pan.pan.value = Math.max(-1, Math.min(1, tune.pan));
         }
         if (timeRef) timeRef.current = Number.isFinite(a.currentTime) ? a.currentTime : 0;
         // clamped: a liveMultiplier may boost past 1 (the banjo up close),
         // and an <audio> element throws on any volume outside 0..1
         const live = liveMultiplier && Number.isFinite(liveMultiplier.current) ? liveMultiplier.current : 1;
-        a.volume = Math.max(0, Math.min(1, perceptualGain(volume) * live * gainRef.current));
+        a.volume = Math.max(0, Math.min(1, perceptualGain(volume) * live * gainRef.current * Math.min(1, Math.max(0, tune.vol))));
         if (gainRef.current <= 0 && target === 0 && playingRef.current) {
           a.pause();
           playingRef.current = false;
         }
         if (pannerRef.current && panRef) {
-          const p = panRef.current;
-          pannerRef.current.pan.value = Number.isFinite(p) ? Math.max(-1, Math.min(1, p)) : 0;
+          const p = (Number.isFinite(panRef.current) ? panRef.current : 0) + tune.pan;
+          pannerRef.current.pan.value = Math.max(-1, Math.min(1, p));
         }
       }
       raf = requestAnimationFrame(tick);
@@ -294,14 +365,59 @@ export function useCampsiteOneShot(url: string) {
     return () => { templateRef.current = null; };
   }, [url]);
 
-  return useCallback((volume: number, rate = 1) => {
+  // Returns the element (or null) so a caller can cut a long cue short - the
+  // axe's spin stops the moment it bites back into the block. The lab's
+  // per-sound tuning (getSoundTune) is applied here: speed, delay, a start
+  // offset into the file, an end point, boost and pan.
+  return useCallback((volume: number, rate = 1): HTMLAudioElement | null => {
     const template = templateRef.current;
-    if (!template) return;
+    if (!template) { console.warn("[sounds] one-shot not loaded yet", { url }); return null; }
+    const t = getSoundTune(url);
     const v = perceptualGain(volume);
-    if (v <= 0) return;
+    if (v <= 0 || t.vol <= 0) { console.log("[sounds] one-shot skipped: volume is 0", { url, volume, tuneVol: t.vol }); return null; }
     const node = template.cloneNode(true) as HTMLAudioElement;
-    node.volume = v;
-    if (Number.isFinite(rate) && rate > 0) node.playbackRate = rate;
-    void node.play().catch(() => {});
-  }, []);
+    node.volume = Math.min(1, v * Math.min(1, t.vol));
+    const r = (Number.isFinite(rate) && rate > 0 ? rate : 1) * Math.max(0.05, t.rate);
+    node.playbackRate = r;
+    node.preservesPitch = false;
+    if (t.vol > 1 || Math.abs(t.pan) > 0.001) {
+      const g = graphFor(node);
+      if (g) { g.gain.gain.value = Math.max(1, t.vol); g.pan.pan.value = Math.max(-1, Math.min(1, t.pan)); }
+    }
+    const go = () => {
+      if ((node as AudioWithCancel).__cancelled) return;
+      const begin = () => {
+        if (t.start > 0) { try { node.currentTime = t.start; } catch { /* not seekable yet */ } }
+        void node.play().then(
+          () => console.log("[sounds] one-shot playing", { url, vol: node.volume, rate: node.playbackRate, start: t.start, ctx: sharedAudioContext?.state ?? "none" }),
+          (err: unknown) => console.warn("[sounds] one-shot BLOCKED", { url, error: String(err), gestureUnlocked, ctx: sharedAudioContext?.state ?? "none" }),
+        );
+        if (t.end > t.start) {
+          window.setTimeout(() => node.pause(), ((t.end - Math.max(0, t.start)) / r) * 1000);
+        }
+      };
+      if (t.start > 0 && node.readyState < 1) node.addEventListener("loadedmetadata", begin, { once: true });
+      else begin();
+    };
+    if (t.delay > 0) window.setTimeout(go, t.delay * 1000);
+    else go();
+    return node;
+  }, [url]);
+}
+
+type AudioWithCancel = HTMLAudioElement & { __cancelled?: boolean };
+
+/** Fade an <audio> element out over `ms` and pause it. */
+export function fadeOutAudio(a: HTMLAudioElement | null | undefined, ms = 120) {
+  if (!a) return;
+  (a as AudioWithCancel).__cancelled = true;   // a delayed cue that hasn't started yet never will
+  const start = a.volume;
+  const t0 = performance.now();
+  const step = () => {
+    const u = Math.min(1, (performance.now() - t0) / Math.max(1, ms));
+    a.volume = Math.max(0, start * (1 - u));
+    if (u < 1) requestAnimationFrame(step);
+    else a.pause();
+  };
+  requestAnimationFrame(step);
 }

@@ -2,6 +2,9 @@ import type { BearVoiceAgent } from "@/hooks/useBearVoiceAgent";
 
 export type BearDialogueProps = {
   agent: BearVoiceAgent;
+  /** How the visitor chose to talk (the arrows over the mic / typewriter).
+   *  Set, it skips the old mic-or-pencil picker. */
+  chatMode?: "mic" | "type";
   opacity: number;
   blurPx: number;
   scale: number;
@@ -23,8 +26,10 @@ export type BearDialogueProps = {
   waveSpeed: number;
   waveSpacing: number;
   textSizeRem: number;
-  textPaddingXRem: number;
-  textPaddingYRem: number;
+  textPadTopRem: number;
+  textPadRightRem: number;
+  textPadBottomRem: number;
+  textPadLeftRem: number;
   textColor: string;
   borderOn: number;
   borderWidthPx: number;
@@ -51,14 +56,12 @@ export type BearDialogueProps = {
   smokeyNameTiltDeg: number;
   mapleNameTiltDeg: number;
   smokeyIconSizeRem: number;
-  smokeyIconAnchor: number;
   smokeyIconInsetXRem: number;
   smokeyIconInsetYRem: number;
+  smokeyIconMarginXRem: number;
+  smokeyIconMarginYRem: number;
   smokeyIconKeepInside: number;
-  smokeyIconXRem: number;
-  smokeyIconYRem: number;
   smokeyIconTiltDeg: number;
-  smokeyIconTextClearanceRem: number;
   smokeyIconOpacity: number;
   smokeyIconBorderOn: number;
   smokeyIconBorderWidthPx: number;
@@ -73,5 +76,4 @@ export type BearDialogueProps = {
   smokeyIconGlowPasses: number;
   smokeyIconGlowOpacity: number;
   smokeyIconGlowColor: string;
-  smokeyIconAutoClearanceOn: number;
 };

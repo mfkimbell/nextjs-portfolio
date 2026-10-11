@@ -13,5 +13,7 @@ export type DialoguePlaqueProps = {
   waveSpacing: number;
   roundness: number;
   minHeight: string;
+  /** Plaque width in rem at design size; sets the em scale inside. */
+  designWidthRem: number;
   children: ReactNode;
 };

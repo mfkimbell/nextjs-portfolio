@@ -42,12 +42,17 @@ export default function JellyBackdrop({
   const hostRef = useRef<HTMLDivElement>(null);
   const pathRef = useRef<SVGPathElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  // The tag scales with the bubble, so its outline and offset shadow have to
+  // as well, or they read heavy when zoomed out and hairline when zoomed in.
+  const [emPx, setEmPx] = useState(16);
   const reducedMotion = useReducedMotion();
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const measure = () => {
+      const fontPx = parseFloat(getComputedStyle(host).fontSize);
+      if (fontPx > 0) setEmPx((current) => (Math.abs(current - fontPx) < 0.01 ? current : fontPx));
       setSize((current) =>
         current.width === host.offsetWidth && current.height === host.offsetHeight
           ? current
@@ -64,7 +69,7 @@ export default function JellyBackdrop({
     const path = pathRef.current;
     if (!path || size.width <= 0 || size.height <= 0) return;
     // Keep the stroke and the wave crests inside the box.
-    const inset = strokeWidthPx / 2 + amplitude;
+    const inset = (strokeWidthPx * emPx) / 32 + amplitude;
     const rx = Math.max(1, size.width / 2 - inset);
     const ry = Math.max(1, size.height / 2 - inset);
     const active = motionOn >= 0.5 && !reducedMotion && amplitude > 0.01 && speed > 0;
@@ -90,7 +95,7 @@ export default function JellyBackdrop({
     };
     draw(start);
     return () => cancelAnimationFrame(frame);
-  }, [amplitude, motionOn, phaseOffset, reducedMotion, roundness, size, spacing, speed, strokeWidthPx]);
+  }, [amplitude, emPx, motionOn, phaseOffset, reducedMotion, roundness, size, spacing, speed, strokeWidthPx]);
 
   return (
     <div ref={hostRef} aria-hidden="true" className="pointer-events-none absolute inset-0">
@@ -98,9 +103,9 @@ export default function JellyBackdrop({
         <svg
           viewBox={`0 0 ${size.width} ${size.height}`}
           className="h-full w-full overflow-visible"
-          style={{ filter: shadowYPx !== 0 ? `drop-shadow(0 ${shadowYPx}px 0 ${shadowColor})` : undefined }}
+          style={{ filter: shadowYPx !== 0 ? `drop-shadow(0 ${(shadowYPx * emPx) / 16}px 0 ${shadowColor})` : undefined }}
         >
-          <path ref={pathRef} fill={fill} stroke={strokeWidthPx > 0 ? stroke : "none"} strokeWidth={strokeWidthPx} strokeLinejoin="round" />
+          <path ref={pathRef} fill={fill} stroke={strokeWidthPx > 0 ? stroke : "none"} strokeWidth={(strokeWidthPx * emPx) / 16} strokeLinejoin="round" />
         </svg>
       ) : null}
     </div>

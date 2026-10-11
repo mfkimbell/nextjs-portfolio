@@ -13,18 +13,15 @@ import { rgbaFromChannels } from "./color";
 const PX_PER_REM = 16;
 const MAX_OUTLINE_PASSES = 8;
 const MIN_TEXT_COLUMN_REM = 4;
-const MIN_TEXT_ROW_REM = 2;
 
 export type SmokeyIconSettings = {
   sizeRem: number;
-  /** 0 = place from the plaque centre with xRem/yRem, 1 = pin to the bottom-right corner. */
-  anchor: number;
-  /** Centre-anchored offsets. */
-  xRem: number;
-  yRem: number;
-  /** Bottom-right-anchored insets, corner to icon centre. */
+  /** Insets from the plaque's bottom-right corner to the icon's centre. */
   insetXRem: number;
   insetYRem: number;
+  /** The icon's own breathing room, kept clear of text on each axis. */
+  marginXRem: number;
+  marginYRem: number;
   /** Clamp the insets so the icon and its effects cannot cross the plaque edge. */
   keepInside: number;
   tiltDeg: number;
@@ -47,11 +44,9 @@ export type SmokeyIconSettings = {
 
 export type SmokeyTextLayout = {
   widthRem: number;
-  minHeightRem: number;
-  paddingXRem: number;
-  paddingYRem: number;
-  clearanceRem: number;
-  autoClearanceOn: number;
+  /** Only the two sides the icon's corner can reach matter here. */
+  paddingRightRem: number;
+  paddingBottomRem: number;
 };
 
 const round = (value: number) => Math.round(value * 1000) / 1000;
@@ -118,8 +113,6 @@ export const smokeyIconBleedRem = (icon: SmokeyIconSettings): number => {
 export const smokeyIconReachRem = (icon: SmokeyIconSettings): number =>
   icon.sizeRem / 2 + smokeyIconBleedRem(icon);
 
-export const isAnchored = (icon: SmokeyIconSettings): boolean => icon.anchor >= 0.5;
-
 /**
  * The corner insets actually used, after the keep-inside clamp. An inset
  * smaller than the icon's reach would hang the artwork (or its shadow) off the
@@ -135,112 +128,138 @@ export const resolvedInsetsRem = (icon: SmokeyIconSettings): { x: number; y: num
   };
 };
 
-/** Tailwind classes for the icon, which differ by anchor. */
-export const smokeyIconClassName = (icon: SmokeyIconSettings): string =>
-  isAnchored(icon)
-    ? "pointer-events-none absolute z-10 object-contain"
-    : "pointer-events-none absolute left-1/2 top-1/2 z-10 object-contain";
+export const SMOKEY_ICON_CLASS = "pointer-events-none absolute z-10 object-contain";
 
 export const smokeyIconStyle = (icon: SmokeyIconSettings): CSSProperties => {
-  const shared = {
-    width: `${icon.sizeRem}rem`,
-    height: `${icon.sizeRem}rem`,
+  const inset = resolvedInsetsRem(icon);
+  // right/bottom follow the plaque's real corner at any width or height, so
+  // the icon keeps its distance from it instead of drifting with the centre.
+  return {
+    width: `${icon.sizeRem}em`,
+    height: `${icon.sizeRem}em`,
     opacity: icon.opacity,
     filter: smokeyIconFilter(icon),
-  };
-  if (isAnchored(icon)) {
-    const inset = resolvedInsetsRem(icon);
-    // right/bottom follow the plaque's real corner at any width or height, so
-    // the icon keeps its distance from it instead of drifting with the centre.
-    return {
-      ...shared,
-      right: `${round(inset.x)}rem`,
-      bottom: `${round(inset.y)}rem`,
-      transform: `translate(50%, 50%) rotate(${icon.tiltDeg}deg)`,
-    };
-  }
-  return {
-    ...shared,
-    transform: `translate(-50%, -50%) translate(${icon.xRem}rem, ${icon.yRem}rem) rotate(${icon.tiltDeg}deg)`,
+    right: `${round(inset.x)}em`,
+    bottom: `${round(inset.y)}em`,
+    transform: `translate(50%, 50%) rotate(${icon.tiltDeg}deg)`,
   };
 };
 
+/** Silhouette points, relative to the icon box centre, in units of its side. */
+export type ArtworkOutline = readonly (readonly [number, number])[];
+
+export type SmokeyTextReserve = {
+  reserveWidthRem: number;
+  reserveHeightRem: number;
+  /** CSS shape-outside for the reserve float, tracing the bear's silhouette. */
+  shape?: string;
+};
+
+export const NO_TEXT_RESERVE: SmokeyTextReserve = { reserveWidthRem: 0, reserveHeightRem: 0 };
+
+const OUTLINE_BANDS = 40;
+
 /**
- * Padding for the text block so the copy never touches the icon.
+ * What the text must flow around in the bottom-right corner.
  *
- * The icon is absolutely centred and then offset, so it only collides with the
- * text when its box overlaps the text rect on BOTH axes. When it does, the copy
- * is pushed along whichever axis needs less room, and the push is measured from
- * the icon's visual edge — outline and shadow bleed included — not from the
- * image box.
+ * With the artwork's outline, that is the bear's actual silhouette: rotated by
+ * the icon's tilt, grown by the margin (plus outline/shadow/glow bleed) on
+ * each axis, and returned as a shape-outside polygon so each line of copy
+ * stops exactly the margin away from whatever part of the bear is level with
+ * it — the brim tip, the top of the hat, the cheek. Lines below the bear wrap
+ * full width again. Without an outline (not loaded yet, or unreadable) it
+ * falls back to the icon's square box.
+ *
+ * Width is capped so a huge icon cannot squeeze the copy below a readable
+ * column.
  */
-export const smokeyTextPadding = (
+export const smokeyTextReserve = (
   icon: SmokeyIconSettings,
   layout: SmokeyTextLayout,
-): CSSProperties => {
-  const base: CSSProperties = {
-    paddingTop: `${layout.paddingYRem}rem`,
-    paddingBottom: `${layout.paddingYRem}rem`,
-    paddingLeft: `${layout.paddingXRem}rem`,
-    paddingRight: `${layout.paddingXRem}rem`,
-  };
+  outline?: ArtworkOutline | null,
+): SmokeyTextReserve => {
+  if (icon.opacity <= 0) return NO_TEXT_RESERVE;
 
-  if (layout.autoClearanceOn < 0.5 || icon.opacity <= 0) return base;
+  const inset = resolvedInsetsRem(icon);
+  const maxWidth = Math.max(0, layout.widthRem - layout.paddingRightRem - MIN_TEXT_COLUMN_REM);
 
-  const reach = smokeyIconReachRem(icon);
-  const halfWidth = layout.widthRem / 2;
-  const halfHeight = layout.minHeightRem / 2;
-  const capX = Math.max(0, halfWidth - layout.paddingXRem - MIN_TEXT_COLUMN_REM);
-  const capY = Math.max(0, halfHeight - layout.paddingYRem - MIN_TEXT_ROW_REM);
-
-  // Pinned to the corner, the overlap depends only on the inset and the reach,
-  // never on how wide or tall the plaque happens to be.
-  if (isAnchored(icon)) {
-    const inset = resolvedInsetsRem(icon);
-    const overX = inset.x + reach - layout.paddingXRem;
-    const overY = inset.y + reach - layout.paddingYRem;
-    if (overX <= 0 || overY <= 0) return base;
-    const wantX = overX + layout.clearanceRem;
-    const wantY = overY + layout.clearanceRem;
-    const okX = wantX <= capX;
-    const okY = wantY <= capY;
-    const takeX = okX && okY ? wantX <= wantY : okX || (!okY && capX >= capY);
-    return takeX
-      ? { ...base, paddingRight: `${round(layout.paddingXRem + Math.min(wantX, capX))}rem` }
-      : { ...base, paddingBottom: `${round(layout.paddingYRem + Math.min(wantY, capY))}rem` };
+  if (!outline || outline.length < 3) {
+    const reach = smokeyIconReachRem(icon);
+    const reserveWidthRem = Math.min(
+      Math.max(0, inset.x + reach + icon.marginXRem - layout.paddingRightRem),
+      maxWidth,
+    );
+    const reserveHeightRem = Math.max(0, inset.y + reach + icon.marginYRem - layout.paddingBottomRem);
+    return { reserveWidthRem, reserveHeightRem };
   }
 
-  const overlapX = icon.xRem >= 0
-    ? halfWidth - layout.paddingXRem - (icon.xRem - reach)
-    : icon.xRem + reach - (layout.paddingXRem - halfWidth);
-  const overlapY = icon.yRem >= 0
-    ? halfHeight - layout.paddingYRem - (icon.yRem - reach)
-    : icon.yRem + reach - (layout.paddingYRem - halfHeight);
+  const bleed = smokeyIconBleedRem(icon);
+  // Negative margins are allowed: they tuck the copy slightly under the art.
+  const marginX = icon.marginXRem + bleed;
+  const marginY = icon.marginYRem + bleed;
 
-  // Clear of the text rect on at least one axis: nothing to push.
-  if (overlapX <= 0 || overlapY <= 0) return base;
+  // Silhouette in em, rotated as drawn, relative to the icon's centre.
+  const theta = (icon.tiltDeg * Math.PI) / 180;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  let top = Infinity;
+  let bottom = -Infinity;
+  const points = outline.map(([nx, ny]) => {
+    const x = nx * icon.sizeRem;
+    const y = ny * icon.sizeRem;
+    const px = x * cos - y * sin;
+    const py = x * sin + y * cos;
+    if (py < top) top = py;
+    if (py > bottom) bottom = py;
+    return [px, py] as const;
+  });
+  const step = Math.max(1e-6, (bottom - top) / OUTLINE_BANDS);
 
-  // What each axis would need, and the most it can give up before the text
-  // column collapses.
-  const needX = overlapX + layout.clearanceRem;
-  const needY = overlapY + layout.clearanceRem;
-  const fitsX = needX <= capX;
-  const fitsY = needY <= capY;
-
-  // Prefer the cheaper axis, but only among the axes that can actually clear
-  // the icon. If neither can, take the one that gets furthest.
-  const useX = fitsX && fitsY ? needX <= needY : fitsX || (!fitsY && capX >= capY);
-
-  if (useX) {
-    const addX = Math.min(needX, capX);
-    return icon.xRem >= 0
-      ? { ...base, paddingRight: `${round(layout.paddingXRem + addX)}rem` }
-      : { ...base, paddingLeft: `${round(layout.paddingXRem + addX)}rem` };
+  // Leftmost point per horizontal band; gaps take a neighbour's value.
+  const leftmost = new Array<number>(OUTLINE_BANDS).fill(Infinity);
+  for (const [px, py] of points) {
+    const band = Math.min(OUTLINE_BANDS - 1, Math.max(0, Math.floor((py - top) / step)));
+    if (px < leftmost[band]) leftmost[band] = px;
   }
-  const addY = Math.min(needY, capY);
-  return icon.yRem >= 0
-    ? { ...base, paddingBottom: `${round(layout.paddingYRem + addY)}rem` }
-    : { ...base, paddingTop: `${round(layout.paddingYRem + addY)}rem` };
+  for (let i = 1; i < OUTLINE_BANDS; i += 1) if (!Number.isFinite(leftmost[i])) leftmost[i] = leftmost[i - 1];
+  for (let i = OUTLINE_BANDS - 2; i >= 0; i -= 1) if (!Number.isFinite(leftmost[i])) leftmost[i] = leftmost[i + 1];
+
+  // Grow by the margin: sideways directly, vertically by letting each band
+  // take the leftmost edge of every band within marginY of it.
+  const spread = Math.min(OUTLINE_BANDS, Math.max(0, Math.ceil(marginY / step)));
+  const edge = leftmost.map((_, i) => {
+    let min = Infinity;
+    for (let j = Math.max(0, i - spread); j <= Math.min(OUTLINE_BANDS - 1, i + spread); j += 1) {
+      if (leftmost[j] < min) min = leftmost[j];
+    }
+    return min - marginX;
+  });
+
+  // Plaque-corner space: the text box's bottom-right corner is the origin.
+  const toX = (x: number) => x - inset.x + layout.paddingRightRem;
+  const toY = (y: number) => y - inset.y + layout.paddingBottomRem;
+  const shapeTop = top - marginY;
+  const shapeBottom = bottom + marginY;
+
+  const reserveWidthRem = Math.min(Math.max(0, -toX(Math.min(...edge))), maxWidth);
+  const reserveHeightRem = Math.max(0, -toY(shapeTop));
+  if (reserveWidthRem <= 0 || reserveHeightRem <= 0) return NO_TEXT_RESERVE;
+
+  // Float space: origin at the float's top-left, float bottom-right on the corner.
+  const fx = (x: number) => round(Math.min(reserveWidthRem, Math.max(0, reserveWidthRem + toX(x))));
+  const fy = (y: number) => round(Math.min(reserveHeightRem, Math.max(0, reserveHeightRem + toY(y))));
+  const vertices: string[] = [`${fx(edge[0])}em ${fy(shapeTop)}em`];
+  for (let i = 0; i < OUTLINE_BANDS; i += 1) {
+    const y0 = top + i * step;
+    vertices.push(`${fx(edge[i])}em ${fy(y0)}em`, `${fx(edge[i])}em ${fy(y0 + step)}em`);
+  }
+  vertices.push(
+    `${fx(edge[OUTLINE_BANDS - 1])}em ${fy(shapeBottom)}em`,
+    `${round(reserveWidthRem)}em ${fy(shapeBottom)}em`,
+    `${round(reserveWidthRem)}em ${fy(shapeTop)}em`,
+  );
+
+  return { reserveWidthRem, reserveHeightRem, shape: `polygon(${vertices.join(", ")})` };
 };
 
 /** @deprecated use rgbaFromChannels from ./color */

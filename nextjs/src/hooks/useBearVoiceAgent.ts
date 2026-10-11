@@ -35,8 +35,11 @@ export type BearVoiceAgent = {
   start: () => Promise<void>;
   reactToFishFire: () => void;
   requestMicrophone: () => Promise<void>;
-  beginConversation?: () => Promise<boolean>;
+  beginConversation?: (opts?: { microphone?: boolean }) => Promise<boolean>;
   sendTextMessage?: (message: string) => Promise<boolean>;
+  /** Turn the visitor's microphone on/off mid-conversation (the browser asks
+   *  for permission the first time). Resolves false if it was refused. */
+  setMicrophone?: (on: boolean) => Promise<boolean>;
   status: VoiceStatus;
   stop: () => void;
   toggleMute: () => void;

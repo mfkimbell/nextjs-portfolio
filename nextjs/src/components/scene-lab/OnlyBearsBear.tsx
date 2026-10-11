@@ -3,29 +3,35 @@
 /*
  * The OnlyBears gag.
  *
- * Click OnlyBears on the cabin computer and, instead of a window, a bear
- * who has been standing behind the monitor the whole time rises up, reaches
- * over the top of it and slowly lays a huge paw across the screen. The camera
- * then pulls back and you see him: leaning over the computer, paw on the
- * glass, looking straight at you. Any click (or Back / Escape) and he takes
- * the paw back and sinks out of sight again.
+ * Click OnlyBears on the cabin laptop and, instead of a window opening, a paw
+ * comes down over the top edge of the screen, shoves the lid, and it slams
+ * shut on you. The camera pulls back off the closed laptop to show the old
+ * bear standing behind the desk; he leans in, pats the lid twice and gives
+ * you a look. Any click (or Back / Escape) and he lets go and sinks out of
+ * sight behind the desk; the lid opens again once he has gone.
  *
- * The pose was built in Blender against the real props - the computer, table,
- * chair and cabin at their saved lab transforms - with IK on the arms, then
- * exported as glTF-local bone rotations to src/config/onlyBearsPose.json:
+ * THE MOTION IS A BAKED CLIP, authored in Blender against the real laptop,
+ * table and cameras (blender/onlybears_close.blend), exported as
+ * /wildpoly/onlybears_close.glb and played here on the bear's own skeleton.
+ * Earlier versions posed him procedurally from keyposes made for the old CRT
+ * and could only be checked by maths; they buried him under the laptop, hung
+ * his beard across the screen and put his paw on the far side of the lid.
+ * In Blender every beat was rendered from the site's own two cameras:
  *
- *   tucked  standing behind the monitor, arms in, leaning a little
- *   raised  left arm up above the monitor, paw forward
- *   over    left arm across the top, paw starting down the glass, right paw supports
- *   cover   leaning in over the monitor, left paw flat over the whole screen
+ *   - in the close-up only his paw and forearm are ever in shot - no face,
+ *     at any frame of the close (checked by casting rays across the frame)
+ *   - he stands behind the table, feet on the floor, body clear of the lid
+ *   - the paw rides the lid's top edge for the shove and lets go at 40% shut;
+ *     the lid slams the rest of the way on its own
+ *   - his wrist is exactly on its target through the shove and the pats
  *
- * Those rotations were checked against sit_log's own frame-1 values (0.00
- * degrees apart), so what the site plays is what was posed in Blender. At
- * runtime this only interpolates between them, adds the head turning to find
- * the camera, blinks, and keeps the mouth shut.
+ * The clip's bone values match the original rig to float precision (checked
+ * against sit_log on the untouched bones), so it plays on the cloned skeleton
+ * directly. On top of it, at runtime: the head turning to find the camera at
+ * the end, blinks, the mouth kept shut, breathing, and the key light.
  *
- * Mounted as a child of the computer's Selectable, so every number here is in
- * the COMPUTER'S local frame and he follows it wherever the lab moves it.
+ * Mounted under the computer's Selectable, so every number here is in the
+ * COMPUTER'S local frame and he follows it wherever the lab moves it.
  */
 
 import { useEffect, useMemo, useRef } from "react";
@@ -33,70 +39,59 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
-import poseRaw from "@/config/onlyBearsPose.json";
 import { useOldBearLook, type OldBearLook } from "@/components/scene-lab/oldBear";
 
-type Quat = [number, number, number, number];
-type PoseFile = {
-  coverHand: "left";
-  supportHand: "right";
-  holdFrame: number;
-  root: { position: [number, number, number]; rotationY: number; scale: number; hiddenDrop: number };
-  handScale: Record<string, number>;
-  keys: Record<"tucked" | "raised" | "over" | "cover", Record<string, Quat>>;
-};
-const POSE = poseRaw as unknown as PoseFile;
-const KEY_ORDER = ["tucked", "raised", "over", "cover"] as const;
-const POSED_BONES = Object.keys(POSE.keys.cover);
+/** The baked routine (Blender: blender/onlybears_close.blend). */
+export const ONLY_BEARS_CLIP_URL = "/wildpoly/onlybears_close.glb";
 
 /*
- * The timeline, in seconds from the click.
+ * The timeline, in seconds of clip time (at speed 1). These are the beats the
+ * clip was baked to - change them only by re-baking it.
  *
- * Played for comedy, not for realism: the whole routine is about 1.2s where it
- * used to be 5.3s. The shape is a cartoon take - POP up, a tiny wind-up beat
- * where he hangs there with the paw cocked, then a SLAM down over the glass,
- * and a wobble to settle. The beat between `raisedEnd` and `overEnd` is the
- * joke; without a held frame there the slam has nothing to land against.
+ *   0.60  paw comes down over the top edge, fingers over the front of the screen
+ *   1.10  a held beat, paw on the lid
+ *   1.30  shoves: slow off the mark, accelerating; lets go at 40% shut
+ *   1.72  SHUT - thud, a few degrees of bounce
+ *   1.85  camera pulls back (pcRevealSettle) to show him behind the desk
+ *   2.75  leans in, two pats on the closed lid
+ *   3.20  looks at you
+ *   3.45  shakes his head no (runtime, not baked)
+ *   4.20  holds a beat, then onDone (the site takes you back to the campfire);
+ *         a click before that sends him away instead
+ *   4.20-5.20  lets go and sinks behind the desk
+ *
+ * The run-up is played faster than baked (INTRO_RATE) and starts at
+ * reachStart, so the OnlyBears page is only up for ~0.6 s before it shuts.
  */
 export const OB_T = {
-  riseEnd: 0.26,     // pops up from behind the monitor, overshooting
-  raisedEnd: 0.42,   // right arm snaps up above the monitor
-  overEnd: 0.60,     // winds back over the top - the beat
-  coverEnd: 0.82,    // SLAM, accelerating all the way down the glass
-  lookIn: 0.86,      // head whips round to find you, just after the impact
-  reveal: 1.02,      // camera starts pulling back
-  exitFoldEnd: 0.32,
-  exitLookLeftEnd: 0.58,
-  exitLookRightEnd: 0.84,
-  exitRunStart: 0.92,
+  reachStart: 0.6,
+  reachEnd: 1.1,
+  closeStart: 1.3,
+  closeEnd: 1.72,
+  reveal: 1.85,
+  patStart: 2.75,
+  lookBack: 3.2,
+  shakeStart: 3.45,
+  shakeEnd: 4.15,
+  hold: 4.2,
+  exitEnd: 5.2,
 };
-const T_MAX = OB_T.reveal + 0.5;
 
 /*
- * Easing. One smoothstep everywhere is what made the old routine read as
- * polite rather than funny, so each leg gets the curve its gag needs.
- *
- *   outBack   overshoots then settles - the pop up
- *   outQuad   fast off the mark, decelerating - the arm snap
- *   inBack    moves AGAINST the target first - the wind-up before the slam
- *   inQuint   starts near-still and accelerates hard - the slam itself
+ * Where he stands, in the computer's frame, at the size of the rocking-chair
+ * bear (the same character): straight out of the Blender scene.
  */
-const easeOutBack = (u: number, k = 1.9) => 1 + (k + 1) * Math.pow(u - 1, 3) + k * Math.pow(u - 1, 2);
-const easeOutQuad = (u: number) => 1 - (1 - u) * (1 - u);
-const easeInBack = (u: number, k = 1.7) => (k + 1) * u * u * u - k * u * u;
-const easeInQuint = (u: number) => u * u * u * u * u;
-/** Blend an eased curve back toward plain smoothstep, so `snap` can dial the
- *  exaggeration down to nothing without changing the timing. */
-const snapped = (eased: number, plain: number, snap: number) => plain + (eased - plain) * snap;
+const BEAR_POSITION: [number, number, number] = [-0.1, -0.87, -0.7459];
+const BEAR_SCALE = 2.547;
 
-/** The gag's live state, shared with the camera and the desktop. */
 export type OnlyBearsState = {
-  /** "in" = playing forwards / holding, "out" = taking the paw back. */
+  /** "in" = playing forwards / holding, "out" = leaving. */
   mode: "off" | "in" | "out";
+  /** Clip time, seconds. */
   t: number;
   /** The camera should be pulled back to show the bear. */
   reveal: boolean;
-  /** Seconds elapsed in the comic exit sequence. */
+  /** Seconds since he started to leave. */
   exitT: number;
 };
 
@@ -104,70 +99,95 @@ export function makeOnlyBearsState(): OnlyBearsState {
   return { mode: "off", t: 0, reveal: false, exitT: 0 };
 }
 
+function lidCloseAt(t: number): number {
+  if (t <= OB_T.closeStart) return 0;
+  if (t < OB_T.closeEnd) return Math.pow((t - OB_T.closeStart) / (OB_T.closeEnd - OB_T.closeStart), 2.4);
+  // the thunk: bounces a few degrees back open and settles
+  const e = t - OB_T.closeEnd;
+  return 1 - 0.07 * Math.max(0, Math.exp(-e * 9) * Math.sin(e * 26));
+}
+
+/**
+ * How shut the lid is, 0 open .. 1 shut. The same curve the clip was baked
+ * against, read off the same clip time, so the lid and his paw cannot
+ * disagree - including when you send him away early and the clip runs on
+ * through the shove.
+ */
+export function onlyBearsLidClose(s: OnlyBearsState): number {
+  return s.mode === "off" ? 0 : lidCloseAt(s.t);
+}
+
 /** The gag's lab knobs (config keys `onlyBears*`). */
 export type OnlyBearsTune = {
   /** Playback speed of the whole routine; 0.5 = twice as slow. */
   speed: number;
-  /** How big the paw grows on the way over (1 = normal paw). */
-  pawScale: number;
   /** Multiplies the bear's size. */
   scale: number;
-  /** Nudge where he stands, in the computer's own units (x right, y up,
-   *  z towards the viewer). */
+  /** Nudge where he stands, in the computer's own units. */
   x: number;
   y: number;
   z: number;
-  /** Extra forward lean at the cover pose, degrees (negative = more upright). */
-  lean: number;
-  /** How far his head turns to look at you, 0..1. */
+  /** How far his head turns to look at you at the end, 0..1. */
   look: number;
-  /** Breathing while he holds the pose - chest only, arms stay put. */
+  /** Breathing while he holds - chest only. */
   breath: number;
-  /** How exaggerated the cartoon easing is. 0 = the old even smoothstep,
-   *  1 = full overshoot / wind-up / slam. */
-  snap: number;
-  /** The wobble after the paw hits the glass. 0 = dead stop, 1 = big rubbery
-   *  bounce. Scaled in world units off his own size. */
-  impact: number;
+  /** The "no" head shake after the pats, 0 = none, 1 = full. */
+  shake: number;
+  /** Key light on him while the gag plays (0 = off). */
+  keyLight: number;
+  /** How far past him the key light carries, as a multiple of its distance
+   *  to his head (1.2 = stops just behind him, 6 = lights the whole yard). */
+  keyReach?: number;
 };
 
 export const ONLY_BEARS_TUNE_DEFAULTS: OnlyBearsTune = {
-  speed: 1, pawScale: 1.6, scale: 1, x: 0, y: 0, z: 0, lean: 0, look: 0.85, breath: 0.3,
-  snap: 0, impact: 0,
+  speed: 1, scale: 1, x: 0, y: 0, z: 0, look: 0.85, breath: 0.3, shake: 1, keyLight: 2.5,
 };
 
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 const smooth = (a: number, b: number, x: number) => {
-  const u = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  const u = clamp01((x - a) / (b - a));
   return u * u * (3 - 2 * u);
 };
 
 /* Face axes of this rig's head bone, the same ones the talking bears use. */
 const FACE_FWD_LOCAL = new THREE.Vector3(0, 0.848, 0.531).normalize();
 const FACE_RIGHT_LOCAL = new THREE.Vector3(1, 0, 0);
-const EXIT_LOOK_AXIS = new THREE.Vector3(0, 1, 0);
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+/** Where the key light sits relative to his head, in the computer's frame:
+ *  out in front of the laptop, up, and off to his left. */
+const KEY_OFFSET = new THREE.Vector3(0.9, 1.1, 2.6);
+/** Clip seconds per real second before the slam: the reach, the held beat
+ *  and the shove. From the slam on it plays as baked. */
+const INTRO_RATE = { reach: 2, beat: 3, shove: 1.5 };
+const introRate = (t: number) =>
+  t < OB_T.reachEnd ? INTRO_RATE.reach : t < OB_T.closeStart ? INTRO_RATE.beat : t < OB_T.closeEnd ? INTRO_RATE.shove : 1;
+/** How long he holds the end pose, after the head shake, before onDone. */
+const DONE_PAUSE = 0.45;
 
-/* hand_R runs along its own local +Y (its child fingers_R sits at
- * [0, 0.2003, 0]), so this is the axis a palm-to-back twist turns about. */
 export default function OnlyBearsBear({
   url,
   stateRef,
   onPawLand,
   onGone,
+  onDone,
   tune = ONLY_BEARS_TUNE_DEFAULTS,
   look,
 }: {
   url: string;
-  /** Lab knobs for the routine. */
   tune?: OnlyBearsTune;
   /** The old bear's coat, glasses and beard (see oldBear.ts). */
   look?: OldBearLook;
   stateRef: React.MutableRefObject<OnlyBearsState>;
-  /** The paw has come to rest on the glass. */
+  /** The lid has slammed shut. */
   onPawLand?: () => void;
-  /** Fully retracted - the parent can unmount this. */
+  /** Fully gone - the parent can unmount this. */
   onGone?: () => void;
+  /** Played through to the end (pats, head shake, a beat): time to leave. */
+  onDone?: () => void;
 }) {
-  const gltf = useGLTF(url) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
+  const gltf = useGLTF(url) as unknown as { scene: THREE.Group };
+  const clipGltf = useGLTF(ONLY_BEARS_CLIP_URL) as unknown as { animations: THREE.AnimationClip[] };
   const model = useMemo(() => skeletonClone(gltf.scene) as THREE.Group, [gltf.scene]);
   useOldBearLook(look ? model : null, look ?? ({} as OldBearLook));
   const tuneRef = useRef(tune);
@@ -176,14 +196,11 @@ export default function OnlyBearsBear({
   const gl = useThree((s) => s.gl);
   const get = useThree((s) => s.get);
   const rootRef = useRef<THREE.Group>(null);
-  const glowRef = useRef<THREE.PointLight>(null);
+  const frameRef = useRef<THREE.Group>(null);
+  const keyRef = useRef<THREE.SpotLight>(null);
+  const keyTargetRef = useRef<THREE.Object3D>(null);
+  const keyLit = useRef(0);
 
-  /*
-   * Bones, the clip pose and the keyposes as THREE quaternions. sit_log is
-   * evaluated ONCE at the authored frame and never advanced - every bone the
-   * gag moves is then written absolutely each frame, and the rest keep the
-   * clip's pose.
-   */
   const rig = useMemo(() => {
     const bones: Record<string, THREE.Bone> = {};
     let face: THREE.Mesh | null = null;
@@ -200,57 +217,39 @@ export default function OnlyBearsBear({
       // the stray helper sphere some exports of this rig carry
       if (o.name.startsWith("Icosphere")) o.visible = false;
     });
-    const clip = gltf.animations.find((a) => a.name === "sit_log") ?? gltf.animations[0];
-    if (clip) {
-      const mixer = new THREE.AnimationMixer(model);
-      const action = mixer.clipAction(clip);
+    const clip = clipGltf.animations[0];
+    const mixer = new THREE.AnimationMixer(model);
+    const action = clip ? mixer.clipAction(clip) : null;
+    if (action) {
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
       action.play();
-      mixer.setTime(POSE.holdFrame / 24);
-      // Left running but never advanced again. Stopping the action would hand
-      // the bones back their bind pose (the mixer restores original state
-      // when a binding's last action deactivates).
+      mixer.setTime(0);
+    } else {
+      console.warn("[scene] OnlyBears: the baked clip is missing - he will not move");
     }
-    const keys = KEY_ORDER.map((k) => {
-      const out: Record<string, THREE.Quaternion> = {};
-      for (const [name, q] of Object.entries(POSE.keys[k])) out[name] = new THREE.Quaternion(q[0], q[1], q[2], q[3]);
-      return out;
-    });
-    const headRest = bones.head ? bones.head.quaternion.clone() : null;
-    const jawRest = bones.jaw ? bones.jaw.quaternion.clone() : null;
-    const lipRest = bones.lip_lower ? bones.lip_lower.quaternion.clone() : null;
-    const handRest = bones.hand_R ? bones.hand_R.scale.clone() : new THREE.Vector3(1, 1, 1);
-    const handRestL = bones.hand_L ? bones.hand_L.scale.clone() : new THREE.Vector3(1, 1, 1);
-    const fingersRestL = bones.fingers_L ? bones.fingers_L.position.clone() : new THREE.Vector3();
-    return { bones, face: face as THREE.Mesh | null, keys, headRest, jawRest, lipRest, handRest, handRestL, fingersRestL };
-  }, [model, gltf.animations]);
-
-  // Mouth closed: the same rest seal the talking bears use.
-  useEffect(() => {
-    const q = new THREE.Quaternion();
-    if (rig.bones.jaw && rig.jawRest) {
-      rig.bones.jaw.quaternion.copy(rig.jawRest).multiply(q.setFromAxisAngle(FACE_RIGHT_LOCAL, -0.015));
-    }
-    if (rig.bones.lip_lower && rig.lipRest) {
-      rig.bones.lip_lower.quaternion.copy(rig.lipRest).multiply(q.setFromAxisAngle(FACE_RIGHT_LOCAL, -0.10));
-    }
-    const f = rig.face;
-    if (f?.morphTargetInfluences && f.morphTargetDictionary) {
-      for (const k of ["jawOpen", "mouthWide", "mouthRound"]) {
-        const i = f.morphTargetDictionary[k];
-        if (i !== undefined) f.morphTargetInfluences[i] = 0;
-      }
-    }
-  }, [rig]);
+    /*
+     * The bones the runtime adjusts on top of the clip. Their clean clip pose
+     * is put back before the mixer runs each frame: the mixer only WRITES a
+     * bone when its keyed value changes, and these are constant for long
+     * stretches (the jaw for the whole clip, everything during the hold).
+     * Without the restore each frame's mouth seal, breath and head turn were
+     * applied on top of the last frame's, and his face wound itself up.
+     */
+    const tweaked = ["jaw", "lip_lower", "chest", "head"].filter((n) => bones[n]);
+    const clean = Object.fromEntries(tweaked.map((n) => [n, bones[n].quaternion.clone()])) as Record<string, THREE.Quaternion>;
+    return { bones, face: face as THREE.Mesh | null, mixer, tweaked, clean };
+  }, [model, clipGltf.animations]);
 
   /*
-   * Any click once he is looking at you sends him away. Listened for on the
-   * canvas itself so it works wherever you click - he fills most of the view.
+   * Any click once the camera has pulled back sends him away. Listened for
+   * on the canvas itself so it works wherever you click.
    */
   useEffect(() => {
     const el = (get().events.connected as HTMLElement | undefined) ?? gl.domElement;
     const onClick = () => {
       const s = stateRef.current;
-      if (s.mode === "in" && s.t >= OB_T.reveal) { s.mode = "out"; s.reveal = false; }
+      if (s.mode === "in" && s.t >= OB_T.reveal) { s.mode = "out"; s.exitT = 0; }
     };
     el.addEventListener("click", onClick);
     return () => el.removeEventListener("click", onClick);
@@ -265,7 +264,8 @@ export default function OnlyBearsBear({
     fwd: new THREE.Vector3(),
     toCam: new THREE.Vector3(),
     landed: false,
-    chestRest: null as THREE.Quaternion | null,
+    heldFor: 0,
+    done: false,
     blinkAt: 2.5,
     blink: 0,
   }), []);
@@ -274,140 +274,58 @@ export default function OnlyBearsBear({
     const s = stateRef.current;
     const tu = tuneRef.current;
     const dt = Math.min(delta, 1 / 20) * Math.max(0.05, tu.speed);
-    if (s.mode === "in") s.t = Math.min(T_MAX, s.t + dt);
-    else if (s.mode === "out") {
+    if (s.mode === "in") {
+      // nothing happens before the paw arrives, so start there
+      if (s.t < OB_T.reachStart) s.t = OB_T.reachStart;
+      s.t = Math.min(OB_T.hold, s.t + dt * introRate(s.t));
+    } else if (s.mode === "out") {
+      // Sent away early: the clip runs on (quickly) to the hold, then into
+      // the exit, so the lid finishes shutting and his paw stays on it.
       s.exitT += dt;
-      // taking it back is quicker than giving it
-      s.t = Math.max(0, s.t - dt * 1.7);
-      if (s.t <= 0) { s.mode = "off"; onGone?.(); }
+      s.t += dt * (s.t < OB_T.hold ? 3 : 1);
+      if (s.t >= OB_T.exitEnd) { s.mode = "off"; s.t = 0; onGone?.(); }
     }
-    s.reveal = s.mode === "in" && s.t >= OB_T.reveal;
+    // the camera stays on the screen for the slam, then pulls back for the rest
+    s.reveal = (s.mode === "in" && s.t >= OB_T.reveal) || s.mode === "out";
     const t = s.t;
 
-    // the paw landing - once per visit
-    if (s.mode === "in" && !tmp.landed && t >= OB_T.coverEnd) { tmp.landed = true; onPawLand?.(); }
-    if (s.mode !== "in") tmp.landed = false;
+    // the slam - once per visit
+    if (s.mode === "in" && !tmp.landed && t >= OB_T.closeEnd) { tmp.landed = true; onPawLand?.(); }
+    if (s.mode === "off") { tmp.landed = false; tmp.heldFor = 0; tmp.done = false; }
+    // played through: hold the end pose a moment, then hand back
+    if (s.mode === "in" && t >= OB_T.hold) {
+      tmp.heldFor += dt;
+      if (!tmp.done && tmp.heldFor >= DONE_PAUSE) { tmp.done = true; onDone?.(); }
+    }
 
     const root = rootRef.current;
     if (!root) return;
     root.visible = s.mode !== "off";
+    root.position.set(BEAR_POSITION[0] + tu.x, BEAR_POSITION[1] + tu.y, BEAR_POSITION[2] + tu.z);
+    root.scale.setScalar(BEAR_SCALE * Math.max(0.05, tu.scale));
 
-    const snap = Math.max(0, Math.min(1, tu.snap ?? 1));
+    // the baked routine, from its clean pose (see `clean` above)
+    for (const n of rig.tweaked) rig.bones[n].quaternion.copy(rig.clean[n]);
+    rig.mixer.setTime(Math.min(t, OB_T.exitEnd));
+    for (const n of rig.tweaked) rig.clean[n].copy(rig.bones[n].quaternion);
 
-    // Rise from behind the monitor, overshooting the top so he bobs back down
-    // into place - the single biggest thing that reads as "popped up" rather
-    // than "was raised".
-    const riseU = Math.min(1, Math.max(0, t / OB_T.riseEnd));
-    const rise = snapped(easeOutBack(riseU), riseU * riseU * (3 - 2 * riseU), snap);
+    // mouth kept shut: the talking bears' rest seal, on top of the clip
+    if (rig.bones.jaw) rig.bones.jaw.quaternion.multiply(tmp.q.setFromAxisAngle(FACE_RIGHT_LOCAL, -0.015));
+    if (rig.bones.lip_lower) rig.bones.lip_lower.quaternion.multiply(tmp.q.setFromAxisAngle(FACE_RIGHT_LOCAL, -0.10));
 
-    /*
-     * The impact wobble. After the paw lands he carries a damped bounce for a
-     * few tenths of a second - vertical on the root, plus a squash on the
-     * scale. Decay and frequency are fixed; `impact` only scales the amplitude.
-     */
-    let bounce = 0;
-    if (t >= OB_T.coverEnd) {
-      const e = t - OB_T.coverEnd;
-      bounce = Math.exp(-e * 14) * Math.sin(e * 34) * (tu.impact ?? 1);
-    }
-
-    const [px, py, pz] = POSE.root.position;
-    root.position.set(
-      px + tu.x,
-      py + tu.y - POSE.root.hiddenDrop * (1 - rise) + bounce * 0.06,
-      pz + tu.z
-    );
-    const squash = 1 - bounce * 0.05;
-    const rs = POSE.root.scale * Math.max(0.05, tu.scale);
-    root.scale.set(rs / Math.max(0.5, squash), rs * squash, rs / Math.max(0.5, squash));
-
-    // which pair of keyposes, how far between them, and the curve that leg uses
-    type Ease = (u: number) => number;
-    const plain = (u: number) => u * u * (3 - 2 * u);
-    const segs: Array<[number, number, number, Ease]> = [
-      [0, OB_T.riseEnd, 0, plain],
-      // arm snaps up: quick off the mark, decelerating
-      [OB_T.riseEnd, OB_T.raisedEnd, 0, easeOutQuad],
-      // the wind-up - pulls back over the top before committing
-      [OB_T.raisedEnd, OB_T.overEnd, 1, easeInBack],
-      // the slam - barely moves, then all at once
-      [OB_T.overEnd, OB_T.coverEnd, 2, easeInQuint],
-    ];
-    let a = 3, u = 1;
-    for (const [t0, t1, from, ease] of segs) {
-      if (t < t1) {
-        a = from;
-        const raw = t0 === 0 ? 0 : Math.min(1, Math.max(0, (t - t0) / (t1 - t0)));
-        // Clamped: easeInBack dips below 0 on purpose, but Quaternion.slerp
-        // cannot extrapolate, so the wind-up reads as a held pose rather than
-        // a reversal. The overshoot that DOES survive is on the root position
-        // above, where a plain lerp is happy to go past 1.
-        u = t0 === 0 ? 0 : Math.min(1, Math.max(0, snapped(ease(raw), plain(raw), snap)));
-        break;
-      }
-    }
-    const A = rig.keys[a];
-    const B = rig.keys[Math.min(3, a + 1)];
-    for (const name of POSED_BONES) {
-      const b = rig.bones[name];
-      if (!b || !A[name] || !B[name]) continue;
-      b.quaternion.slerpQuaternions(A[name], B[name], a === 3 ? 0 : u);
-    }
-    // the paw grows to its full size on the way over, out of sight above
-    const grow = smooth(OB_T.riseEnd, OB_T.overEnd, t);
-
-    // Contact orientation is authored in Blender. Runtime must not rotate both
-    // hands after export: that changes the screen-plane solution and was the
-    // source of the previous left/right contract drift.
-    const coverHandScale = (POSE.handScale.hand_L ?? 1)
-      * (1 + (tu.pawScale - 1) * grow)
-      * (1 + bounce * 0.14);
-    const supportHandScale = POSE.handScale.hand_R ?? 1;
-    rig.bones.hand_L?.scale.copy(rig.handRestL).multiplyScalar(coverHandScale);
-    rig.bones.hand_R?.scale.copy(rig.handRest).multiplyScalar(supportHandScale);
-    if (rig.bones.fingers_L) {
-      rig.bones.fingers_L.position.copy(rig.fingersRestL).divideScalar(coverHandScale);
-    }
-
-    /*
-     * Extra lean, from the lab. Applied to `center` about the bear's own
-     * right-hand axis in WORLD terms (the Blender lean was made the same way),
-     * and only as he leans in - it grows over the "over -> cover" leg.
-     */
-    const center = rig.bones.center;
-    if (center?.parent && Math.abs(tu.lean) > 0.01) {
-      const w = smooth(OB_T.raisedEnd, OB_T.coverEnd, t);
-      root.updateWorldMatrix(true, false);
-      root.getWorldQuaternion(tmp.headWQ);
-      tmp.fwd.set(1, 0, 0).applyQuaternion(tmp.headWQ).normalize();
-      tmp.q.setFromAxisAngle(tmp.fwd, THREE.MathUtils.degToRad(tu.lean) * w);
-      center.parent.updateWorldMatrix(true, false);
-      center.parent.getWorldQuaternion(tmp.parentQ);
-      const local = center.quaternion.clone();
-      center.quaternion.copy(tmp.parentQ).invert().multiply(tmp.q).multiply(tmp.parentQ).multiply(local);
-    }
-
-    /*
-     * Breathing. On the CHEST only - a leaf bone in this rig, so it swells
-     * the ribcage and nothing hangs off it. It used to rock `center`, which
-     * carries the shoulders, and his arms bobbed up and down with every
-     * breath while the paw was meant to be resting on the glass.
-     */
+    // breathing while he holds - chest only, a leaf bone, so nothing swings
     const chest = rig.bones.chest;
     if (chest) {
-      if (!tmp.chestRest) tmp.chestRest = chest.quaternion.clone();
-      const breath = Math.sin(performance.now() / 1000 * 1.4) * 0.05 * tu.breath
-        * smooth(OB_T.coverEnd, OB_T.coverEnd + 0.6, t);
-      chest.quaternion.copy(tmp.chestRest).multiply(tmp.q2.setFromAxisAngle(FACE_RIGHT_LOCAL, breath));
+      const breath = Math.sin(performance.now() / 1000 * 1.4) * 0.05 * tu.breath * smooth(OB_T.lookBack, OB_T.lookBack + 0.6, t);
+      chest.quaternion.multiply(tmp.q.setFromAxisAngle(FACE_RIGHT_LOCAL, breath));
     }
 
-    // head: turns to find the camera once the paw is down
+    // head: turns to find you once he has patted it
     const head = rig.bones.head;
-    if (head && rig.headRest) {
-      head.quaternion.copy(rig.headRest);
-      const look = smooth(OB_T.lookIn, OB_T.lookIn + 1.0, t) * Math.min(1, Math.max(0, tu.look));
-      if (look > 0.001 && head.parent) {
-        head.updateWorldMatrix(true, false);
+    if (head?.parent) {
+      const lookW = smooth(OB_T.lookBack, OB_T.lookBack + 0.45, t) * (1 - smooth(OB_T.hold, OB_T.hold + 0.3, t)) * clamp01(tu.look);
+      if (lookW > 0.001) {
+        root.updateWorldMatrix(true, true);
         head.getWorldPosition(tmp.headPos);
         head.getWorldQuaternion(tmp.headWQ);
         tmp.fwd.copy(FACE_FWD_LOCAL).applyQuaternion(tmp.headWQ).normalize();
@@ -416,25 +334,58 @@ export default function OnlyBearsBear({
         // no more than ~45 degrees, and only part of the way - a glance, not a snap
         const ang = 2 * Math.acos(Math.min(1, Math.abs(tmp.q.w)));
         const lim = Math.min(1, 0.8 / Math.max(ang, 1e-4));
-        tmp.q2.identity().slerp(tmp.q, look * lim);
+        tmp.q2.identity().slerp(tmp.q, lookW * lim);
         head.parent.getWorldQuaternion(tmp.parentQ);
-        // world delta -> head local: local' = P^-1 * D * P * local
         const local = head.quaternion.clone();
         head.quaternion.copy(tmp.parentQ).invert().multiply(tmp.q2).multiply(tmp.parentQ).multiply(local);
       }
-      if (s.mode === "out") {
-        const left = smooth(0.28, 0.48, s.exitT) * (1 - smooth(0.48, 0.62, s.exitT));
-        const right = smooth(0.58, 0.72, s.exitT) * (1 - smooth(0.72, 0.88, s.exitT));
-        tmp.q.setFromAxisAngle(EXIT_LOOK_AXIS, -0.7 * left + 0.7 * right);
-        head.quaternion.multiply(tmp.q);
+
+      // "no": two side-to-side shakes about the world's up axis, on top of
+      // the look. Only on the way in - a fast-forwarded exit would make it
+      // frantic. Starts and ends at zero, eased in and out.
+      const shakeLen = OB_T.shakeEnd - OB_T.shakeStart;
+      const u = (t - OB_T.shakeStart) / shakeLen;
+      if (s.mode === "in" && u > 0 && u < 1 && tu.shake > 0.001) {
+        const env = Math.sin(Math.PI * u);
+        const yaw = Math.sin(2 * Math.PI * 2 * u) * 0.32 * env * tu.shake;
+        root.updateWorldMatrix(true, false);
+        head.parent.getWorldQuaternion(tmp.parentQ);
+        tmp.q2.setFromAxisAngle(WORLD_UP, yaw);
+        const local = head.quaternion.clone();
+        head.quaternion.copy(tmp.parentQ).invert().multiply(tmp.q2).multiply(tmp.parentQ).multiply(local);
       }
     }
 
-    // The screen lights the paw from underneath as it comes down over the
-    // glass - otherwise, lit from the cabin behind it, the paw that fills the
-    // close-up is a flat black shape.
-    if (glowRef.current) {
-      glowRef.current.intensity = 0.9 * smooth(OB_T.overEnd - 0.4, OB_T.coverEnd, t) * (s.mode === "off" ? 0 : 1);
+    /*
+     * The key light: a warm spot from in front of the laptop and up to his
+     * left, aimed at his head wherever it is. Fades up while he is there and
+     * down again once he has gone.
+     */
+    const key = keyRef.current, keyTarget = keyTargetRef.current, frame = frameRef.current;
+    if (key && keyTarget && frame) {
+      keyLit.current += ((s.mode !== "off" ? 1 : 0) - keyLit.current) * (1 - Math.exp(-dt * 3));
+      let falloff = 1;
+      if (head) {
+        root.updateWorldMatrix(true, true);
+        head.getWorldPosition(tmp.headPos);
+        frame.updateWorldMatrix(true, false);
+        frame.worldToLocal(keyTarget.position.copy(tmp.headPos));
+        key.position.copy(keyTarget.position).add(KEY_OFFSET);
+        key.target = keyTarget;
+        /*
+         * Reach: the spot used to carry forever (distance 0), so its cone ran
+         * on past him and lit up the yard behind. Cut it off a little past his
+         * head instead, and lift the intensity by the falloff at his head so
+         * he stays exactly as bright as before.
+         */
+        const reach = Math.max(1.05, tu.keyReach ?? 1.6);
+        key.updateWorldMatrix(true, false);
+        const toHead = key.getWorldPosition(new THREE.Vector3()).distanceTo(tmp.headPos);
+        key.distance = toHead * reach;
+        const r4 = Math.pow(1 / reach, 4);
+        falloff = Math.max(0.05, (1 - r4) * (1 - r4));
+      }
+      key.intensity = (Math.max(0, tu.keyLight ?? 2.5) * keyLit.current) / falloff;
     }
 
     // blinks, every few seconds
@@ -450,19 +401,14 @@ export default function OnlyBearsBear({
   });
 
   return (
-    <>
-    {/* in the computer's own frame, just out in front of the screen */}
-    <pointLight ref={glowRef} position={[-0.1, 0.95, 1.2]} color="#a9dcff" intensity={0} distance={0.6} decay={2} />
-    <group
-      ref={rootRef}
-      name="onlybears_bear"
-      position={POSE.root.position}
-      rotation={[0, POSE.root.rotationY, 0]}
-      scale={POSE.root.scale * tune.scale}
-      visible={false}
-    >
-      <primitive object={model} />
+    <group ref={frameRef}>
+      <object3D ref={keyTargetRef} />
+      <spotLight ref={keyRef} userData={{ gagKeep: true }} color="#ffe6c8" intensity={0} angle={0.55} penumbra={0.65} decay={0} distance={0} />
+      <group ref={rootRef} name="onlybears_bear" position={BEAR_POSITION} scale={BEAR_SCALE * tune.scale} visible={false}>
+        <primitive object={model} />
+      </group>
     </group>
-    </>
   );
 }
+
+useGLTF.preload(ONLY_BEARS_CLIP_URL);

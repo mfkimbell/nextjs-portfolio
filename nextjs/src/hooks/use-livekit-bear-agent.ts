@@ -18,6 +18,12 @@ const BEAR_DISTANCE_FILTER_HZ = 4_800;
 const BEAR_DRY_GAIN = 0.72;
 const BEAR_REVERB_GAIN = 0.18;
 
+/** Voice debugging: everything is tagged "[bears]" - filter the console on it.
+ *  Each room gets a short id so two rooms alive at once are obvious. */
+const bearLog = (msg: string, data?: Record<string, unknown>) => console.log(`[bears] ${msg}`, data ?? "");
+const bearWarn = (msg: string, data?: Record<string, unknown>) => console.warn(`[bears] ${msg}`, data ?? "");
+let liveRooms = 0;
+
 const publishVisitorReady = async (room: Room) => {
   const payload = new Uint8Array(new TextEncoder().encode(JSON.stringify({ type: "visitor.ready" })));
   await room.localParticipant.publishData(payload, { reliable: true });
@@ -36,6 +42,7 @@ export const useLiveKitBearAgent = (
   const trackStatesRef = useRef(new Map<string, { state: BearVoiceState; rms: number; lastAudibleAt: number }>());
   const subscriptionTimerRef = useRef<number | null>(null);
   const readyRequestedRef = useRef(false);
+  const doubleWarnRef = useRef({ at: 0 });
 
   const voiceRef = useRef<BearVoiceState>({
     activeBearId: "back_left_log",
@@ -102,7 +109,12 @@ export const useLiveKitBearAgent = (
   }, []);
 
   const monitorAudioTrack = useCallback((track: Track, participantIdentity: string) => {
-    if (track.kind !== Track.Kind.Audio || audioContextsRef.current.has(participantIdentity)) return;
+    if (track.kind !== Track.Kind.Audio) return;
+    if (audioContextsRef.current.has(participantIdentity)) {
+      bearLog("audio track for a participant that already has a graph - not adding a second one", { participant: participantIdentity, trackSid: track.sid });
+      return;
+    }
+    bearLog("creating audio graph", { participant: participantIdentity, trackSid: track.sid, graphsNow: audioContextsRef.current.size + 1 });
     const mediaTrack = track.mediaStreamTrack;
     if (!mediaTrack) return;
     const context = new AudioContext();
@@ -151,6 +163,7 @@ export const useLiveKitBearAgent = (
       isInterrupted: false,
     };
     const trackState = { state, rms: 0, lastAudibleAt: 0 };
+    const lastDoubleWarn = doubleWarnRef.current;
     trackStatesRef.current.set(participantIdentity, trackState);
     const measure = () => {
       analyser.getFloatTimeDomainData(samples);
@@ -166,6 +179,19 @@ export const useLiveKitBearAgent = (
         .filter(([, candidate]) => now - candidate.lastAudibleAt < 350)
         .sort((a, b) => b[1].rms - a[1].rms)[0];
       const speaking = Boolean(active);
+      // doubled-voice detector: two different participants audible as the SAME bear
+      const audibleByBear = new Map<string, string[]>();
+      for (const [identity, candidate] of trackStatesRef.current) {
+        if (now - candidate.lastAudibleAt > 120) continue;
+        const b = participantBearsRef.current.get(identity) ?? (identity.includes("maple") ? "back_right_log" : "back_left_log");
+        audibleByBear.set(b, [...(audibleByBear.get(b) ?? []), identity]);
+      }
+      for (const [b, ids] of audibleByBear) {
+        if (ids.length > 1 && now - lastDoubleWarn.at > 2000) {
+          lastDoubleWarn.at = now;
+          bearWarn("DOUBLED VOICE: two participants audible as the same bear", { bear: b, participants: ids, graphs: [...audioContextsRef.current.keys()] });
+        }
+      }
       if (active) {
         const [identity, candidate] = active;
         const bear = participantBearsRef.current.get(identity)
@@ -195,12 +221,14 @@ export const useLiveKitBearAgent = (
   }, [updateAmbience, voiceRef]);
 
   const start = useCallback(async () => {
-    if (roomRef.current) return;
+    if (roomRef.current) { bearLog("start() ignored - a room already exists", { room: roomRef.current.name || "(connecting)" }); return; }
     setStatus("connecting");
     setError(null);
     try {
       const room = new Room();
       roomRef.current = room;
+      const roomTag = Math.random().toString(36).slice(2, 7);
+      bearLog("start: new room", { roomTag });
       // Request browser audio unlock synchronously from the Talk button gesture
       // before network/token awaits can consume the activation window.
       void room.startAudio().catch(() => {});
@@ -216,10 +244,17 @@ export const useLiveKitBearAgent = (
       });
       if (!response.ok) throw new Error("Unable to create a LiveKit room.");
       const { token, url } = await response.json() as { token?: string; url?: string };
+      // Stale start: this room was torn down while the token was being fetched
+      // (React dev mounts effects twice; a stop() can land mid-start). Without
+      // this check the abandoned room still connected, got its OWN bears
+      // dispatched, and the visitor heard every line twice.
+      if (roomRef.current !== room) { bearWarn("stale start after token fetch - dropping room (this used to double the voices)", { roomTag }); void room.disconnect(); return; }
       if (!token || !url) throw new Error("LiveKit token response was incomplete.");
 
       room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
         if (track.kind !== Track.Kind.Audio) return;
+        if (roomRef.current !== room) { bearWarn("audio from a room that is no longer current - ignored", { roomTag, participant: participant.identity }); return; }
+        bearLog("track subscribed", { roomTag, room: room.name, participant: participant.identity, trackSid: track.sid, attachedElements: audioElementsRef.current.length + 1 });
         const element = track.attach() as HTMLAudioElement;
         element.autoplay = true;
         // Web Audio owns audible output so each bear gets an independent spatial mix.
@@ -255,6 +290,9 @@ export const useLiveKitBearAgent = (
         if (!participant) return;
         try {
           const event = JSON.parse(new TextDecoder().decode(payload)) as { type?: unknown; bear?: unknown; text?: unknown };
+          if (typeof event.type === "string" && event.type.startsWith("bear.") || event.type === "turn.completed") {
+            bearLog(`data ${String(event.type)}`, { roomTag, from: participant.identity, bear: event.bear, text: typeof event.text === "string" ? event.text.slice(0, 60) : undefined });
+          }
           if (event.type === "bear.play" && typeof event.text === "string") {
             setSpokenText(event.text);
             setDialoguePhase("playing");
@@ -262,17 +300,32 @@ export const useLiveKitBearAgent = (
           if (event.type === "turn.completed") setDialoguePhase("your-turn");
           if (event.type !== "bear.identity" || (event.bear !== "smokey" && event.bear !== "maple")) return;
           const bear = event.bear === "maple" ? "back_right_log" : "back_left_log";
+          for (const [identity, other] of participantBearsRef.current) {
+            if (other === bear && identity !== participant.identity) {
+              // two agents speaking as the same bear (a duplicate dispatch):
+              // keep the newest, silence the older so the voice isn't doubled
+              console.warn("LiveKit: duplicate bear participant, muting the older one", { bear, identity });
+              const g = ambienceGraphsRef.current.get(identity);
+              if (g) { g.dry.gain.value = 0; g.wet.gain.value = 0; }
+              participantBearsRef.current.delete(identity);
+            }
+          }
           participantBearsRef.current.set(participant.identity, bear);
           updateAmbience(participant.identity, bear);
         } catch {
           // Ignore non-bear room data.
         }
       });
+      room.on(RoomEvent.ParticipantConnected, (p) => bearLog("participant joined", { roomTag, participant: p.identity, inRoom: room.remoteParticipants.size }));
+      room.on(RoomEvent.ParticipantDisconnected, (p) => bearLog("participant left", { roomTag, participant: p.identity }));
       room.on(RoomEvent.Disconnected, () => {
+        liveRooms = Math.max(0, liveRooms - 1);
+        bearLog("room disconnected", { roomTag, liveRooms });
         if (roomRef.current === room) cleanup();
         setStatus("disconnected");
       });
       await room.connect(url, token, { autoSubscribe: true });
+      if (roomRef.current !== room) { bearWarn("stale start after connect - dropping room", { roomTag }); void room.disconnect(); return; }
       const subscribeToAgentAudio = () => {
         for (const participant of room.remoteParticipants.values()) {
           for (const publication of participant.trackPublications.values()) {
@@ -285,6 +338,9 @@ export const useLiveKitBearAgent = (
       };
       subscribeToAgentAudio();
       subscriptionTimerRef.current = window.setInterval(subscribeToAgentAudio, 500);
+      liveRooms += 1;
+      bearLog("room connected", { roomTag, room: room.name, participants: [...room.remoteParticipants.keys()], liveRooms });
+      if (liveRooms > 1) bearWarn("MORE THAN ONE ROOM CONNECTED - every bear line will play once per room", { liveRooms });
       setStatus("active");
       if (readyRequestedRef.current) {
         await publishVisitorReady(room);
@@ -321,14 +377,15 @@ export const useLiveKitBearAgent = (
     return true;
   }, []);
 
-  const beginConversation = useCallback(async () => {
+  const beginConversation = useCallback(async (opts?: { microphone?: boolean }) => {
     const room = roomRef.current;
     if (!room) return false;
     readyRequestedRef.current = true;
+    const withMic = opts?.microphone !== false;   // typewriter visitors talk by text only
     try {
       await room.startAudio();
-      await room.localParticipant.setMicrophoneEnabled(true);
-      setMicrophonePermission("granted");
+      await room.localParticipant.setMicrophoneEnabled(withMic);
+      if (withMic) setMicrophonePermission("granted");
     } catch (activationError) {
       setError(activationError instanceof Error ? activationError.message : "Microphone or audio activation was blocked.");
       return false;
@@ -339,10 +396,43 @@ export const useLiveKitBearAgent = (
     return true;
   }, []);
 
+  // The visitor picked "talk" after the greeting: ask for the mic (this is
+  // what pops the browser's permission prompt) and publish it into the room.
+  // No visitor.ready here - the bears have already said hello.
+  const setMicrophone = useCallback(async (on: boolean) => {
+    if (on) {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setMicrophonePermission("unsupported");
+        setError("This browser can't share a microphone. Try typing instead.");
+        return false;
+      }
+      try {
+        const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+        probe.getTracks().forEach((t) => t.stop());
+        setMicrophonePermission("granted");
+      } catch {
+        setMicrophonePermission("denied");
+        setError("Microphone blocked. Allow it in the address bar, or type instead.");
+        return false;
+      }
+    }
+    const room = roomRef.current;
+    if (!room) return false;
+    try {
+      await room.startAudio();
+      await room.localParticipant.setMicrophoneEnabled(on);
+      setIsMuted(!on);
+      setError(null);
+      return true;
+    } catch (micError) {
+      setError(micError instanceof Error ? micError.message : "Couldn't turn the microphone on.");
+      return false;
+    }
+  }, []);
+
   useEffect(() => () => cleanup(), [cleanup]);
-  useEffect(() => {
-    void requestMicrophone();
-  }, [requestMicrophone]);
+  // (The microphone is asked for when the visitor picks the mic, not on load:
+  //  phone and typewriter visitors never need it.)
 
   return {
     activeSpeakerName,
@@ -357,6 +447,7 @@ export const useLiveKitBearAgent = (
     requestMicrophone,
     beginConversation,
     sendTextMessage,
+    setMicrophone,
     start,
     status,
     stop,

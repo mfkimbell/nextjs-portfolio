@@ -7,8 +7,9 @@ import SafeAsset from "@/components/scene-lab/SafeAsset";
 import { CampCritters, TipOver, RACCOON2_URL, type ActName } from "@/components/scene-lab/CritterActs";
 import { TIP_TABLES } from "@/components/scene-lab/tipTables";
 import { useComputerPointer, useRetroDesktop, useRetroDesktopTexture, type PcSounds, type PcState } from "@/components/scene-lab/RetroDesktop";
-import { pcBeep, pcChirp, pcKey, pcMouseClick, pcPark, pcPawThud, pcSeek, pcWake } from "@/lib/retroPcSounds";
-import OnlyBearsBear, { OB_T, makeOnlyBearsState, type OnlyBearsState, type OnlyBearsTune } from "@/components/scene-lab/OnlyBearsBear";
+import { pcBeep, pcChirp, pcKey, pcMouseClick, pcPark, pcPawThud, pcSeek } from "@/lib/retroPcSounds";
+import { CabinCat, CabinGramophone, gramophoneSongClock, CabinMoon, CAT_GAZE_DEFAULTS, CAT_SIT_URL, catPetLock, type CatGaze, ChoiceArrow, MicrophoneStand, TypewriterPaper, type ChatChoice } from "@/components/scene-lab/CabinExtras";
+import OnlyBearsBear, { makeOnlyBearsState, onlyBearsLidClose, type OnlyBearsState, type OnlyBearsTune } from "@/components/scene-lab/OnlyBearsBear";
 import { oldBearLookFromConfig, useOldBearLook } from "@/components/scene-lab/oldBear";
 import { applyRockingPosture, makePostureState, readRockingPosture, type PostureState, type RockingPosture } from "@/components/scene-lab/rockingPosture";
 import {
@@ -19,7 +20,7 @@ import { RetroCrtTv, Table, Chair, meleeMenuHit, meleePageBackHit, meleeGridHit,
 import { roles } from "@/lib/experience";
 import { projects } from "@/lib/projects";
 import { SKILLS, skillIcon } from "@/lib/skills";
-import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
+import { Canvas, createPortal, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Clone, OrbitControls, Stars, useAnimations, useGLTF, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
@@ -30,7 +31,8 @@ import type { BugSwarmScope, BugSwarmTweak } from "@/components/scene-lab/sceneC
 import banjoBearPoseRaw from "@/config/banjoBearPose.json";
 import rockingChairBearPoseRaw from "@/config/rockingChairBearPose.json";
 import bearPosesRaw from "@/config/bearPoses.json";
-import { useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
+import { fadeOutAudio, useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
+import { applySoundTuning } from "@/components/scene-lab/soundList";
 import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
 import { clampSpring, stepSpring } from "@/lib/bear-animation";
 import { getBanjoFingerPhase } from "@/lib/banjo-performance";
@@ -64,14 +66,21 @@ const CRT_ZOOM_OUT_URL = "/CRT/zoom out of crt.wav";
 // The glide onto the monitor. Was sitting unused in public/sound - the PC
 // close-up only had the CRT degauss thump (pcWake), which is the monitor
 // switching on, not the camera travelling. This is the travel.
-const PC_GLIDE_IN_URL = "/sound/Go into computer.mp3";
 // Pulling back out reuses the between-scenes swoosh, slowed a touch so it
 // reads as a retreat rather than a second arrival.
-const PC_GLIDE_OUT_URL = "/sound/switch-between-scenes.wav";
 // The old bear's chair. Also unused until now - the cabin was the only
 // location with no ambience of its own at all.
 const ROCKING_CHAIR_SOUND_URL = "/sound/rocking-chair.mp3";
 const CRT_MUSIC_URL = "/sound/CRT music.mp3";
+const AXE_SPIN_URL = "/sound2/axe-spinning-in-air-sound.mp3";
+const AXE_HIT_WOOD_URL = "/sound2/axehitwood.mp3";
+const WOOD_ROLLING_URL = "/sound2/wood-rolling-needs-to-be-looped.mp3";
+const GRAMOPHONE_SONG_URL = "/sound2/gramaphone_song.mp3";
+const PC_STARTUP_URL = "/sound2/scene3computerstart.mp3";
+/** Gramophone volume multiplier, eased toward a lower level while the camera
+ *  is in close on the cats or the computer (written in CampfireWorld's frame
+ *  loop, read by the gramophone's audio loop). */
+const gramophoneDuck = { current: 1 };
 /** CRT_MUSIC's volume multiplier at the two ends of the zoom: quiet while
  *  you're just standing in the arcade panel, lifted once the close-up is
  *  held. CrtFocusCamera eases a 0..1 progress value between them over
@@ -606,6 +615,48 @@ const OLD_BEAR_PAPERS_URL = "/bear/3/Small%20Stack%20of%20Paper%20by%20Jarlan%20
 const OLD_BEAR_TOILET_URL = "/bear/3/Toilet%20Paper%20stack%20by%20Quaternius%20-%206jlZSAxsYb.glb";
 const OLD_BEAR_POSTIT_URL = "/bear/3/Yellow%20Post-it%20by%20Zack%20Huang%20-%201-ZStsi8S91.glb";
 const OLD_BEAR_DEBRIS_URL = "/bear/3/Debris%20Papers%20by%20Quaternius%20-%20MujITy1NRR.glb";
+const TELEPHONE_URL = "/telephone_red.glb";
+/*
+ * Where the three chat props sit (base placement + their saved override), and
+ * how tall each is at scale 1, so an arrow can hover just above it wherever it
+ * has been dragged. Keep the bases in step with the Selectables below.
+ */
+const CHAT_PROPS: { name: string; base: [number, number, number]; height: number; choice: "phone" | "mic" | "type"; label: string }[] = [
+  { name: "campfire_telephone", base: [-1.55, 0, 1.75], height: 0.19, choice: "phone", label: "Call" },
+  { name: "campfire_microphone", base: [-1.3, -0.39, -2.35], height: 1.62 * 0.95, choice: "mic", label: "Talk" },
+  { name: "campfire_typewriter", base: [-0.98, 0.42 + 0.133 * 0.7, -1.98], height: 0.3, choice: "type", label: "Type" },
+];
+type ChatHover = { phone: boolean; mic: boolean; type: boolean };
+function ChatChoiceArrows({ config, hover }: {
+  config: CampfireSceneConfig;
+  /** which prop the pointer is over - its arrow + word light up with it */
+  hover: React.MutableRefObject<ChatHover>;
+}) {
+  return (
+    <>
+      {CHAT_PROPS.map((p, i) => {
+        const o = config.objectOverrides?.[p.name] ?? EMPTY_OVERRIDE;
+        const extra = p.choice === "mic" ? (config.campfireMicHeight ?? 0) * 0.95 : 0;
+        const top = p.base[1] + o.dy + (p.height + extra) * (o.scale ?? 1);
+        const own = p.choice === "phone" ? config.chatArrowPhoneLift : p.choice === "mic" ? config.chatArrowMicLift : config.chatArrowTypeLift;
+        const sx = (p.choice === "phone" ? config.chatArrowPhoneX : p.choice === "mic" ? config.chatArrowMicX : config.chatArrowTypeX) ?? 0;
+        const sz = (p.choice === "phone" ? config.chatArrowPhoneZ : p.choice === "mic" ? config.chatArrowMicZ : config.chatArrowTypeZ) ?? 0;
+        return (
+          <ChoiceArrow
+            key={p.name}
+            position={[p.base[0] + o.dx + sx, top + (config.chatArrowLift ?? 0.32) + (own ?? 0), p.base[2] + o.dz + sz]}
+            label={p.label}
+            phase={i}
+            yawExtraDeg={(p.choice === "phone" ? config.chatArrowPhoneYaw : p.choice === "mic" ? config.chatArrowMicYaw : config.chatArrowTypeYaw) ?? 0}
+            tune={config}
+            propHovered={() => hover.current[p.choice]}
+          />
+        );
+      })}
+    </>
+  );
+}
+const TYPEWRITER_URL = "/Typewriter%20by%20Naam%20-%202SmAWPS6_mH.glb";
 const OLD_BEAR_LANTERN_URL = "/bear/3/Lantern%20by%20Poly%20by%20Google%20-%209YMVn5hMiv8.glb";
 /** Rocking chair for the cabin study. Bear sits in it via ROCKING_CHAIR_BEAR,
  *  rendered as a child of the same Selectable so moving/rotating/scaling the
@@ -1814,6 +1865,119 @@ function CrtFocusCamera({
 }
 
 /**
+ * Flies the camera in to the chair cat for petting, and back out again.
+ *
+ * Same shape as CrtFocusCamera, but aimed off the cat itself: `anchorRef` is
+ * the box round the posed cat (see CabinCat), so the shot follows the cat
+ * wherever it has been dragged. The camera stands `catFocusDistance` out in
+ * front of the cat (its own facing, swung by `catFocusYaw` degrees about the
+ * vertical), `catFocusHeight` above its middle, looking at its middle.
+ */
+function CatFocusCamera({
+  active,
+  hold = false,
+  anchorRef,
+  sleepAnchorRef,
+  config,
+  handoff,
+}: {
+  active: boolean;
+  anchorRef: React.MutableRefObject<THREE.Object3D | null>;
+  /** another close-up (the computer) has the camera for now: keep our place,
+   *  don't glide back out, and pick up again when it lets go */
+  hold?: boolean;
+  /** the sleeping cat's box - with catFocusBoth the shot frames both cats */
+  sleepAnchorRef?: React.MutableRefObject<THREE.Object3D | null>;
+  config: CampfireSceneConfig;
+  handoff: boolean;
+}) {
+  const { camera } = useThree();
+  type Pose = { px: number; py: number; pz: number; tx: number; ty: number; tz: number };
+  const pose = useRef<Pose | null>(null);
+  const seed = useRef<Pose | null>(null);
+  const baseFov = useRef<number | null>(null);   // the lens before the close-up
+  const tmp = useMemo(() => ({
+    c: new THREE.Vector3(), f: new THREE.Vector3(), q: new THREE.Quaternion(), up: new THREE.Vector3(0, 1, 0),
+    goal: new THREE.Vector3(), aim: new THREE.Vector3(), fwd: new THREE.Vector3(),
+    c2: new THREE.Vector3(), line: new THREE.Vector3(), perp: new THREE.Vector3(),
+  }), []);
+
+  useFrame((_, delta) => {
+    if (hold) return;
+    const settle = Math.max(0.05, config.locationTurnSpeed);
+    const k = 1 - Math.pow(0.01, Math.min(delta, 1 / 20) / settle);
+    const anchor = anchorRef.current;
+    if (active && anchor) {
+      if (!pose.current) {
+        camera.getWorldDirection(tmp.fwd);
+        const look = camera.position.clone().addScaledVector(tmp.fwd, 3);
+        pose.current = { px: camera.position.x, py: camera.position.y, pz: camera.position.z, tx: look.x, ty: look.y, tz: look.z };
+        seed.current = { ...pose.current };
+      }
+      anchor.updateWorldMatrix(true, false);
+      anchor.getWorldPosition(tmp.c);
+      anchor.getWorldQuaternion(tmp.q);
+      tmp.f.set(0, 0, 1).applyQuaternion(tmp.q).setY(0).normalize();     // the cat's facing
+      const sleeper = sleepAnchorRef?.current;
+      let dist = config.catFocusDistance ?? 0.38;
+      const cam = camera as THREE.PerspectiveCamera;
+      if (baseFov.current == null) baseFov.current = cam.fov;
+      const wantFov = (config.catFocusFov ?? 0) > 0 ? config.catFocusFov : baseFov.current;
+      if (Math.abs(cam.fov - wantFov) > 0.01) { cam.fov += (wantFov - cam.fov) * k; cam.updateProjectionMatrix(); }
+      if ((config.catFocusBoth ?? 1) >= 0.5 && sleeper) {
+        // frame BOTH porch cats: look at the point between them, from square on
+        // to the line joining them (on the chair cat's front side), far enough
+        // back that the pair fits the frame's width with some room
+        sleeper.updateWorldMatrix(true, false);
+        sleeper.getWorldPosition(tmp.c2);
+        tmp.line.copy(tmp.c2).sub(tmp.c).setY(0);
+        const spread = tmp.line.length();
+        tmp.c.lerp(tmp.c2, 0.5);
+        if (spread > 1e-3) {
+          tmp.perp.set(-tmp.line.z, 0, tmp.line.x).normalize();
+          if (tmp.perp.dot(tmp.f) < 0) tmp.perp.negate();
+          tmp.f.copy(tmp.perp);
+        }
+        const halfV = THREE.MathUtils.degToRad(wantFov / 2);
+        const halfH = Math.atan(Math.tan(halfV) * (cam.aspect || 1.6));
+        const need = (spread / 2 + 0.12) / Math.tan(Math.min(halfH, halfV * 1.6));
+        if ((config.catFocusAutoFit ?? 1) >= 0.5) dist = need * (config.catFocusFit ?? 1.25);
+      }
+      tmp.f.applyAxisAngle(tmp.up, THREE.MathUtils.degToRad(config.catFocusYaw ?? 18));
+      tmp.perp.set(tmp.f.z, 0, -tmp.f.x);                       // the shot's sideways
+      tmp.c.addScaledVector(tmp.perp, config.catFocusSide ?? 0);
+      tmp.aim.copy(tmp.c).addScaledVector(tmp.f, config.catFocusForward ?? 0);
+      tmp.aim.y += config.catFocusAimHeight ?? 0.02;
+      tmp.goal.copy(tmp.c).addScaledVector(tmp.f, dist);
+      tmp.goal.y += config.catFocusHeight ?? 0.15;
+      const p = pose.current;
+      p.px += (tmp.goal.x - p.px) * k; p.py += (tmp.goal.y - p.py) * k; p.pz += (tmp.goal.z - p.pz) * k;
+      p.tx += (tmp.aim.x - p.tx) * k;  p.ty += (tmp.aim.y - p.ty) * k;  p.tz += (tmp.aim.z - p.tz) * k;
+      camera.position.set(p.px, p.py, p.pz);
+      camera.lookAt(p.tx, p.ty, p.tz);
+      return;
+    }
+    if (baseFov.current != null) {
+      const cam = camera as THREE.PerspectiveCamera;
+      cam.fov += (baseFov.current - cam.fov) * (handoff ? 1 : k);
+      cam.updateProjectionMatrix();
+      if (Math.abs(cam.fov - baseFov.current) < 0.01) { cam.fov = baseFov.current; cam.updateProjectionMatrix(); baseFov.current = null; }
+    }
+    if (!pose.current || !seed.current) return;
+    if (handoff) { pose.current = null; seed.current = null; return; }
+    const p = pose.current, s = seed.current;
+    p.px += (s.px - p.px) * k; p.py += (s.py - p.py) * k; p.pz += (s.pz - p.pz) * k;
+    p.tx += (s.tx - p.tx) * k;  p.ty += (s.ty - p.ty) * k;  p.tz += (s.tz - p.tz) * k;
+    camera.position.set(p.px, p.py, p.pz);
+    camera.lookAt(p.tx, p.ty, p.tz);
+    if (Math.abs(p.px - s.px) + Math.abs(p.py - s.py) + Math.abs(p.pz - s.pz) < 1e-3) {
+      pose.current = null; seed.current = null;
+    }
+  });
+  return null;
+}
+
+/**
  * Flies the camera onto the cabin computer's glass, and off it again.
  *
  * The same job CrtFocusCamera does for the arcade tube, but aimed off the
@@ -1831,7 +1995,7 @@ function PcFocusCamera({
   revealRef,
 }: {
   active: boolean;
-  screenRef: React.MutableRefObject<THREE.Mesh | null>;
+  screenRef: React.MutableRefObject<THREE.Object3D | null>;
   config: CampfireSceneConfig;
   handoff: boolean;
   /** OnlyBears: while `.reveal` is set the shot pulls back from the glass to
@@ -1854,7 +2018,12 @@ function PcFocusCamera({
   useFrame((_, delta) => {
     const reveal = !!revealRef?.current.reveal;
     // the pull-back is a slow, deliberate move - the reveal is the joke
-    const settle = Math.max(0.05, config.locationTurnSpeed) * (reveal ? 1.9 : 1);
+    // The reveal has its own settle (pcRevealSettle), short enough that the
+    // camera is out before the bear touches the lid: tied to the location
+    // turn speed it took ~4s, and the lid had slammed while still zoomed in.
+    const settle = reveal
+      ? Math.max(0.05, Number.isFinite(config.pcRevealSettle) ? config.pcRevealSettle : 0.9)
+      : Math.max(0.05, config.locationTurnSpeed);
     const k = 1 - Math.pow(0.01, Math.min(delta, 1 / 20) / settle);
     const mesh = screenRef.current;
 
@@ -1934,6 +2103,11 @@ function OrbitCameraSaver({
 }) {
   const controlsRef = useRef<ComponentRef<typeof OrbitControls>>(null);
   const userDraggingRef = useRef(false);
+  // hold still while a porch cat is being petted (see catPetLock)
+  useFrame(() => {
+    const c = controlsRef.current;
+    if (c) c.enabled = enabled && !catPetLock.active;
+  });
 
   useEffect(() => {
     if (!controlsRef.current) return;
@@ -2079,7 +2253,7 @@ type GlowCache = {
  *    different object and the old one is put back first, or it keeps whatever
  *    it was wearing when the target moved on.
  */
-function useHoverGlow(target: GlowTarget, lit: boolean) {
+function useHoverGlow(target: GlowTarget, lit: boolean, cursorLit: boolean = lit) {
   const cache = useRef<GlowCache | null>(null);
 
   const restore = useCallback(() => {
@@ -2124,23 +2298,27 @@ function useHoverGlow(target: GlowTarget, lit: boolean) {
   // and if the prop unmounts while lit, put the shared material back
   useEffect(() => restore, [restore]);
 
+  // The cursor is tracked separately from the glow. After a click the glow is
+  // muted but the prop is still under the pointer and still clickable, so the
+  // hand stays: dropping back to the default arrow would read as "this is no
+  // longer a thing you can press".
   useEffect(() => {
-    if (!lit) return;
+    if (!cursorLit) return;
     const prev = document.body.style.cursor;
     document.body.style.cursor = HOVER_CURSOR;
     // Restore on unmount too: these props get carried off mid-hover, and a
     // cursor left pointing at nothing would stick for the rest of the visit.
     return () => { document.body.style.cursor = prev; };
-  }, [lit]);
+  }, [cursorLit]);
 }
 
 /**
  * Hover affordance for a Selectable: same glow, but it owns the group ref the
  * caller wraps its children in.
  */
-function useHoverLift(hovered: boolean, enabled: boolean) {
+function useHoverLift(hovered: boolean, enabled: boolean, muted = false) {
   const group = useRef<THREE.Group>(null);
-  useHoverGlow(group, hovered && enabled);
+  useHoverGlow(group, hovered && enabled && !muted, hovered && enabled);
   return group;
 }
 
@@ -2153,6 +2331,7 @@ function Selectable({
   baseScale = 1,
   hidden = false,
   interactive = false,
+  onHoverChange,
   children,
 }: {
   name: string;
@@ -2168,13 +2347,15 @@ function Selectable({
   hidden?: boolean;
   /** true = this one does something when clicked, so advertise it on hover */
   interactive?: boolean;
+  /** told when the pointer goes over / leaves (only while interactive) */
+  onHoverChange?: (hovered: boolean) => void;
   children: ReactNode;
 }) {
   return (
     <SelectableInner
       name={name} onSelect={onSelect} config={config} basePosition={basePosition}
       baseRotationY={baseRotationY} baseScale={baseScale} hidden={hidden}
-      interactive={interactive}
+      interactive={interactive} onHoverChange={onHoverChange}
     >
       {children}
     </SelectableInner>
@@ -2183,7 +2364,7 @@ function Selectable({
 
 function SelectableInner({
   name, onSelect, config, basePosition = [0, 0, 0], baseRotationY = 0,
-  baseScale = 1, hidden = false, interactive = false, children,
+  baseScale = 1, hidden = false, interactive = false, onHoverChange, children,
 }: {
   name: string;
   onSelect: (name: string) => void;
@@ -2193,13 +2374,19 @@ function SelectableInner({
   baseScale?: number;
   hidden?: boolean;
   interactive?: boolean;
+  onHoverChange?: (hovered: boolean) => void;
   children: ReactNode;
 }) {
   const [hovered, setHovered] = useState(false);
-  const liftRef = useHoverLift(hovered && interactive, interactive);
+  // Clicking answers the question the glow was asking. Leaving it lit under a
+  // resting pointer makes a prop you have already dealt with go on shouting,
+  // so the glow mutes on click and only re-arms once the pointer has left and
+  // come back - a deliberate second visit, not an accidental twitch.
+  const [glowMuted, setGlowMuted] = useState(false);
+  const liftRef = useHoverLift(hovered && interactive, interactive, glowMuted);
   // onPointerOut is unmounted along with interactivity, so without this the
   // flag would stay true forever on a prop that was clicked mid-hover.
-  useEffect(() => { if (!interactive) setHovered(false); }, [interactive]);
+  useEffect(() => { if (!interactive) { setHovered(false); setGlowMuted(false); onHoverChange?.(false); } }, [interactive, onHoverChange]);
   const o = config.objectOverrides?.[name] ?? EMPTY_OVERRIDE;
   if (hidden || o.hide >= 0.5) return null;
   return (
@@ -2211,9 +2398,9 @@ function SelectableInner({
       // "tilt left/right" always rolls around world Z, regardless of heading.
       rotation={new THREE.Euler(o.rotX, baseRotationY + o.rotY, o.rotZ, "XZY")}
       scale={baseScale * o.scale}
-      onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); onSelect(name); }}
-      onPointerOver={interactive ? (e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(true); } : undefined}
-      onPointerOut={interactive ? (e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(false); } : undefined}
+      onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); setGlowMuted(true); onSelect(name); }}
+      onPointerOver={interactive ? (e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(true); onHoverChange?.(true); } : undefined}
+      onPointerOut={interactive ? (e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(false); setGlowMuted(false); onHoverChange?.(false); } : undefined}
     >
       <group ref={liftRef}>{children}</group>
     </group>
@@ -2857,7 +3044,11 @@ function CampfireSceneModel({
     while (node && !namedNodes.has(node.name)) node = node.parent;
     return node?.name ?? "";
   };
-  useHoverGlow(bonfire?.node ?? null, fireClickable && fireHot);
+  // Same mute as Selectable, but the fire resolves its own hover by name
+  // inside one GLB, so "the pointer left" is the move handler reporting a
+  // different node rather than a pointerOut on a wrapper group.
+  const [fireGlowMuted, setFireGlowMuted] = useState(false);
+  useHoverGlow(bonfire?.node ?? null, fireClickable && fireHot && !fireGlowMuted, fireClickable && fireHot);
 
   return (
     <primitive
@@ -2868,8 +3059,9 @@ function CampfireSceneModel({
       onPointerMove={(e: ThreeEvent<PointerEvent>) => {
         const on = fireClickable && hitName(e.object) === "bonfire";
         if (on !== fireHot) setFireHot(on);
+        if (!on && fireGlowMuted) setFireGlowMuted(false);
       }}
-      onPointerOut={() => { if (fireHot) setFireHot(false); }}
+      onPointerOut={() => { if (fireHot) setFireHot(false); setFireGlowMuted(false); }}
       onClick={(e: THREE.Event & { object: THREE.Object3D; stopPropagation: () => void }) => {
         // stopPropagation ONLY once we've actually resolved a name. It used to
         // fire unconditionally at the top, which meant a click landing on any
@@ -2892,6 +3084,7 @@ function CampfireSceneModel({
             // as one thing. The individual bonfire override still handles
             // scale/rotation independently.
             e.stopPropagation();
+            if (node.name === "bonfire") setFireGlowMuted(true);
             onSelect(node.name === "bonfire" ? "campfire" : node.name);
             return;
           }
@@ -3700,6 +3893,7 @@ function LogAndAxe({
   play,
   watch,
   onLand,
+  onThrow,
   replayOnTune = false,
 }: {
   config: CampfireSceneConfig;
@@ -3707,6 +3901,8 @@ function LogAndAxe({
   play: number;
   watch?: MutableRefObject<AxeWatch>;
   onLand?: () => void;
+  /** it has just left the block (the spin sound starts here) */
+  onThrow?: () => void;
   /** Lab only: flip again whenever its settings change, so tuning can be seen. */
   replayOnTune?: boolean;
 }) {
@@ -3732,6 +3928,8 @@ function LogAndAxe({
   const lastPlay = useRef(play);
   const onLandRef = useRef(onLand);
   onLandRef.current = onLand;
+  const onThrowRef = useRef(onThrow);
+  onThrowRef.current = onThrow;
   const cfgRef = useRef(config);
   cfgRef.current = config;
   const tmpQ = useMemo(() => new THREE.Quaternion(), []);
@@ -3746,6 +3944,7 @@ function LogAndAxe({
     if (flight.current) return;
     flight.current = { t: 0 };
     settle.current = -1;
+    onThrowRef.current?.();
   }, [play]);
 
   // lab: re-flip when a setting actually changes (compared to the last value,
@@ -3758,6 +3957,7 @@ function LogAndAxe({
     if (!replayOnTune || flight.current) return;
     flight.current = { t: 0 };
     settle.current = -1;
+    onThrowRef.current?.();
   }, [tuneKey, replayOnTune]);
 
   useFrame((_, delta) => {
@@ -3878,12 +4078,15 @@ function WoodPile({
   replayOnTune = false,
   onLogLand,
   onEmpty,
+  onRolling,
 }: {
   config: CampfireSceneConfig;
   /** every bump sends the next log off */
   play: number;
   replayOnTune?: boolean;
   onLogLand?: () => void;
+  /** true while at least one log is rolling along the ground */
+  onRolling?: (rolling: boolean) => void;
   /** the last log has gone */
   onEmpty?: () => void;
 }) {
@@ -3993,6 +4196,9 @@ function WoodPile({
   onLandRef.current = onLogLand;
   const onEmptyRef = useRef(onEmpty);
   onEmptyRef.current = onEmpty;
+  const onRollingRef = useRef(onRolling);
+  onRollingRef.current = onRolling;
+  const rollingWas = useRef(false);
   const scratch = useMemo(() => ({
     q: new THREE.Quaternion(), q2: new THREE.Quaternion(), qm: new THREE.Quaternion(), qmInv: new THREE.Quaternion(),
     s: new THREE.Vector3(), v: new THREE.Vector3(), dir: new THREE.Vector3(), axis: new THREE.Vector3(),
@@ -4157,6 +4363,12 @@ function WoodPile({
       lg.node.quaternion.copy(S.qmInv).multiply(S.q);
 
       if (u >= 1) { run.done = true; lg.node.visible = false; }
+    }
+    // the rolling loop plays while any log is on the ground and moving
+    const rolling = logs.some((lg) => lg.run && lg.run.landed && !lg.run.done);
+    if (rolling !== rollingWas.current) {
+      rollingWas.current = rolling;
+      onRollingRef.current?.(rolling);
     }
   });
 
@@ -6790,14 +7002,50 @@ function StringBulbBloom({
 const COMPUTER_SCREEN_MESH = "Cube.002_Material.001_0";
 
 /*
- * The laptop is normalized into the old computer's local frame in LitComputer
- * below. Its screen is 0.978 x 0.667 in that frame and faces +Z. Keeping this
- * canonical screen frame means the bear pose and close camera do not need a
- * second coordinate conversion just because the prop changed.
+ * GLTFLoader strips "." (and "[]:/") out of node names, so "Cube.002" in the
+ * file is "Cube002" in the scene. Every lookup by a name copied out of the GLB
+ * has to go through this, or it silently finds nothing - which is how the
+ * screen-glow knobs went inert, and how the laptop screen vanished when the
+ * glass was first mounted in the lid.
  */
-const PC_SCREEN_CENTER: [number, number, number] = [-0.0993, 0.8842, -0.2574 + 0.004];
-const PC_SCREEN_SIZE: [number, number] = [0.9783, 0.6675];
+const sceneNodeName = (fileName: string) => THREE.PropertyBinding.sanitizeNodeName(fileName);
 
+/*
+ * Where laptop.glb sits in the computer's frame, and the parts of it measured
+ * from the GLB itself (model units): the display face on the lid node and the
+ * hinge line where the lid meets the deck.
+ *
+ * The screen frame is DERIVED from these. It used to be a hand-copied constant
+ * left over from the old computer, and when the laptop came in the copy was
+ * 0.65 off in depth - the picture floated in front of the laptop and the
+ * OnlyBears bear rose up through its keyboard. Deriving it means moving the
+ * laptop moves the screen with it.
+ */
+const LAPTOP_PLACEMENT = {
+  position: [-0.0993, 0.4676, -0.5784] as [number, number, number],
+  rotationY: -Math.PI / 2,
+  scale: 0.055,
+};
+const LAPTOP_LID_NODE = "Cube.002";
+const LAPTOP_SCREEN_MODEL = { faceX: -5.908, centerY: 7.575, width: 17.788, height: 12.136 };
+/** A hair above the deck's top (0.782) so the shut screen cannot z-fight it. */
+const LAPTOP_HINGE_MODEL: [number, number, number] = [-5.908, 0.79, 0];
+const LID_AXIS = new THREE.Vector3(0, 0, 1);
+/** Glass sits this far proud of the display face, in frame units. */
+const PC_GLASS_LIFT = 0.004;
+const laptopToFrame = (x: number, y: number, z: number) =>
+  new THREE.Vector3(x, y, z)
+    .multiplyScalar(LAPTOP_PLACEMENT.scale)
+    .applyAxisAngle(new THREE.Vector3(0, 1, 0), LAPTOP_PLACEMENT.rotationY)
+    .add(new THREE.Vector3(...LAPTOP_PLACEMENT.position));
+/** Centre of the glass in the computer's frame, facing +Z. */
+const PC_SCREEN_CENTER = laptopToFrame(LAPTOP_SCREEN_MODEL.faceX, LAPTOP_SCREEN_MODEL.centerY, 0)
+  .add(new THREE.Vector3(0, 0, PC_GLASS_LIFT))
+  .toArray() as [number, number, number];
+const PC_SCREEN_SIZE: [number, number] = [
+  LAPTOP_SCREEN_MODEL.width * LAPTOP_PLACEMENT.scale,
+  LAPTOP_SCREEN_MODEL.height * LAPTOP_PLACEMENT.scale,
+];
 /** What the cabin sector needs to put the desktop on the monitor. */
 type PcGlassProps = {
   stateRef: React.MutableRefObject<PcState>;
@@ -6811,8 +7059,14 @@ type PcGlassProps = {
   focused: boolean;
   /** Off in the lab's config mode, where the computer is just a prop. */
   enabled: boolean;
-  /** The picture plane, for the close-up camera to aim at. */
+  /** The picture plane, for pointer hits. It rides the lid. */
   screenRef: React.MutableRefObject<THREE.Mesh | null>;
+  /** Where the glass sits with the lid OPEN, for the close-up camera. A
+   *  separate fixed anchor so the shot holds still while the lid shuts,
+   *  instead of swinging down after a screen that is folding away. */
+  cameraAnchorRef: React.MutableRefObject<THREE.Object3D | null>;
+  /** The lid's hinge, published so the OnlyBears paw can ride the lid. */
+  lidRef: React.MutableRefObject<THREE.Object3D | null>;
   onlyBearsState?: React.MutableRefObject<OnlyBearsState>;
 };
 
@@ -6828,7 +7082,6 @@ type PcGlassProps = {
 function PcGlass({ pc, body, brightness = 1 }: { pc: PcGlassProps; body: THREE.Object3D; brightness?: number }) {
   const [over, setOver] = useState(false);
   const bodyRef = useRef<THREE.Object3D | null>(body);
-  const hingeRef = useRef<THREE.Group>(null);
   bodyRef.current = body;
   const onOver = pc.onOver;
   useComputerPointer({
@@ -6841,51 +7094,134 @@ function PcGlass({ pc, body, brightness = 1 }: { pc: PcGlassProps; body: THREE.O
     onOver: useCallback((o: boolean) => { setOver(o); onOver(o); }, [onOver]),
   });
   const texture = useRetroDesktopTexture(pc.stateRef, pc.hot && over);
-  useFrame(() => {
-    const state = pc.onlyBearsState?.current;
-    const closing = state?.mode === "out"
-      ? THREE.MathUtils.smoothstep(state.exitT, 0, OB_T.exitFoldEnd)
-      : 0;
-    if (hingeRef.current) hingeRef.current.rotation.x = -Math.PI * 0.78 * closing;
-  });
   return (
-    <group ref={hingeRef} position={[PC_SCREEN_CENTER[0], PC_SCREEN_CENTER[1] - PC_SCREEN_SIZE[1] / 2, PC_SCREEN_CENTER[2]]}>
-      <mesh ref={pc.screenRef} position={[0, PC_SCREEN_SIZE[1] / 2, 0]}>
-        <planeGeometry args={PC_SCREEN_SIZE} />
-        {/* colour multiplies the picture: >1 brightens the glass (not tone
-            mapped, so it can go past white), <1 dims it */}
-        <meshBasicMaterial map={texture} toneMapped={false} color={new THREE.Color().setScalar(Math.max(0, brightness))} />
-      </mesh>
-    </group>
+    <mesh ref={pc.screenRef}>
+      <planeGeometry args={PC_SCREEN_SIZE} />
+      {/* colour multiplies the picture: >1 brightens the glass (not tone
+          mapped, so it can go past white), <1 dims it */}
+      <meshBasicMaterial map={texture} toneMapped={false} color={new THREE.Color().setScalar(Math.max(0, brightness))} />
+    </mesh>
   );
 }
 
 function LitComputer({ config, pc }: { config: CampfireSceneConfig; pc?: PcGlassProps }) {
   const gltf = useGLTF(OLD_BEAR_COMPUTER_URL) as unknown as { scene: THREE.Group };
-  const { model, screens } = useMemo(() => {
+  const { model, screens, screenFaces, lidHinge } = useMemo(() => {
     const cloned = gltf.scene.clone(true);
     // Collected into an array rather than a `let` the traversal assigns to:
     // TS narrows a closure-assigned local to `never` and the callers would
     // stop typechecking.
     const found: THREE.MeshStandardMaterial[] = [];
+    const faces: THREE.Mesh[] = [];
     cloned.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh) return;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      if (mesh.name !== COMPUTER_SCREEN_MESH) return;
+      if (mesh.name !== sceneNodeName(COMPUTER_SCREEN_MESH)) return;
       const src = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
       const lit = (src as THREE.MeshStandardMaterial).clone();
       mesh.material = lit;
       found.push(lit);
+      faces.push(mesh);
     });
     if (!found.length) {
       // Worth saying out loud: the model was re-exported and the screen is
       // now called something else, so its knobs silently do nothing.
       console.warn(`[scene] computer: no "${COMPUTER_SCREEN_MESH}" mesh - screen knobs are inert`);
     }
-    return { model: cloned, screens: found };
+
+    /*
+     * The lid is its own node in laptop.glb, standing straight up at the back
+     * of the deck. Re-parent it under a pivot on the hinge line so it can
+     * swing shut, and so the glass mounted inside it shuts with it.
+     */
+    let hinge: THREE.Group | null = null;
+    const lid = cloned.getObjectByName(sceneNodeName(LAPTOP_LID_NODE));
+    if (lid?.parent) {
+      cloned.updateMatrixWorld(true);
+      hinge = new THREE.Group();
+      hinge.name = "laptop_lid_hinge";
+      /*
+       * The hinge's own space is made to equal MODEL space (just moved to the
+       * hinge line), whatever the parents do. laptop.glb wraps everything in
+       * Sketchfab's x0.01 unit conversion, so a pivot that simply lived in the
+       * lid's parent space was 100x off: the glass placed inside it in model
+       * units came out a hundredth of the size, huddled against the hinge.
+       * So: hinge.matrix = inverse(parent world) * translate(hinge point).
+       */
+      new THREE.Matrix4()
+        .copy(lid.parent.matrixWorld)
+        .invert()
+        .multiply(new THREE.Matrix4().makeTranslation(...LAPTOP_HINGE_MODEL))
+        .decompose(hinge.position, hinge.quaternion, hinge.scale);
+      hinge.userData.restQuaternion = hinge.quaternion.clone();
+      lid.parent.add(hinge);
+      hinge.updateMatrixWorld(true);
+      hinge.attach(lid);
+      // The glass is placed from measured numbers; say so if the model moved.
+      const face = cloned.getObjectByName(sceneNodeName(COMPUTER_SCREEN_MESH)) as THREE.Mesh | undefined;
+      if (face?.isMesh) {
+        const box = new THREE.Box3().setFromObject(face);
+        const off = Math.abs(box.min.x - LAPTOP_SCREEN_MODEL.faceX)
+          + Math.abs((box.max.y - box.min.y) - LAPTOP_SCREEN_MODEL.height);
+        if (off > 0.05) console.warn("[scene] computer: laptop screen no longer matches LAPTOP_SCREEN_MODEL - the glass will sit off the lid");
+      }
+    } else {
+      console.warn(`[scene] computer: no "${LAPTOP_LID_NODE}" lid node - the lid cannot close and the glass is not mounted`);
+    }
+    return { model: cloned, screens: found, screenFaces: faces, lidHinge: hinge };
   }, [gltf.scene]);
+
+  /*
+   * With the desktop mounted on the lid, the laptop's own screen face is
+   * hidden. The glass sits a fraction of a millimetre in front of it at scene
+   * scale - too close for the depth buffer to separate at viewing distance - so
+   * the two fought and the face (lit by the screen-glow knobs) won, and the
+   * screen read as flat white. The glass covers the face exactly, so nothing
+   * is lost by not drawing it.
+   */
+  useEffect(() => {
+    const glassMounted = !!pc && !!lidHinge;
+    for (const face of screenFaces) face.visible = !glassMounted;
+  }, [pc, lidHinge, screenFaces]);
+
+  /*
+   * OnlyBears shuts the lid: onlyBearsLidClose decides how far, for both this
+   * and the bear's paw. Shut while he looks around and makes off with the
+   * laptop, eased open again once he has gone.
+   */
+  useEffect(() => {
+    if (!pc) return;
+    pc.lidRef.current = lidHinge;
+    return () => { if (pc.lidRef.current === lidHinge) pc.lidRef.current = null; };
+  }, [pc, lidHinge]);
+  const lidClosed = useRef(0);
+  const lidSwing = useMemo(() => new THREE.Quaternion(), []);
+  const closeDeg = Number.isFinite(config.deskComputerLidCloseDeg) ? config.deskComputerLidCloseDeg : 90;
+  useFrame((_, delta) => {
+    if (!lidHinge) return;
+    const st = pc?.onlyBearsState?.current;
+    const target = st ? onlyBearsLidClose(st) : 0;
+    // Followed exactly while he is there (the slam and its bounce ARE the
+    // gag, and his paw is riding this same curve); eased open once he's gone.
+    const cur = lidClosed.current;
+    lidClosed.current = st && st.mode !== "off"
+      ? target
+      : cur + (target - cur) * (1 - Math.exp(-Math.min(delta, 0.05) * 5));
+    // About model-space Z, on top of the rest orientation that cancels the
+    // file's parent transforms - not a bare rotation.z, which would wipe it.
+    const rest = lidHinge.userData.restQuaternion as THREE.Quaternion | undefined;
+    lidSwing.setFromAxisAngle(LID_AXIS, -THREE.MathUtils.degToRad(closeDeg) * lidClosed.current);
+    if (rest) lidHinge.quaternion.copy(rest).multiply(lidSwing);
+    else lidHinge.quaternion.copy(lidSwing);
+  });
+
+  const glassInLid: [number, number, number] = [
+    LAPTOP_SCREEN_MODEL.faceX + PC_GLASS_LIFT / LAPTOP_PLACEMENT.scale - LAPTOP_HINGE_MODEL[0],
+    LAPTOP_SCREEN_MODEL.centerY - LAPTOP_HINGE_MODEL[1],
+    -LAPTOP_HINGE_MODEL[2],
+  ];
 
   useEffect(() => {
     const on = config.deskComputerScreenOn >= 0.5;
@@ -6910,13 +7246,28 @@ function LitComputer({ config, pc }: { config: CampfireSceneConfig; pc?: PcGlass
   return (
     <>
       <group
-        position={[-0.0993, 0.4676, -0.5784]}
-        rotation={[0, -Math.PI / 2, 0]}
-        scale={0.055}
+        position={LAPTOP_PLACEMENT.position}
+        rotation={[0, LAPTOP_PLACEMENT.rotationY, 0]}
+        scale={LAPTOP_PLACEMENT.scale}
       >
         <primitive object={model} />
       </group>
-      {pc ? <PcGlass pc={pc} body={model} brightness={Number.isFinite(config.deskComputerGlassBrightness) ? config.deskComputerGlassBrightness : 1} /> : null}
+      {pc ? <group ref={pc.cameraAnchorRef} position={PC_SCREEN_CENTER} /> : null}
+      {pc && !lidHinge ? (
+        // No lid to hinge (model swapped or renamed): the screen and its clicks
+        // still work, it just cannot close.
+        <group position={PC_SCREEN_CENTER}>
+          <PcGlass pc={pc} body={model} brightness={Number.isFinite(config.deskComputerGlassBrightness) ? config.deskComputerGlassBrightness : 1} />
+        </group>
+      ) : null}
+      {pc && lidHinge ? createPortal(
+        // In the lid's model units: turned to face the deck (+X there), and
+        // scaled back up so the plane keeps its frame-unit size.
+        <group position={glassInLid} rotation={[0, Math.PI / 2, 0]} scale={1 / LAPTOP_PLACEMENT.scale}>
+          <PcGlass pc={pc} body={model} brightness={Number.isFinite(config.deskComputerGlassBrightness) ? config.deskComputerGlassBrightness : 1} />
+        </group>,
+        lidHinge,
+      ) : null}
     </>
   );
 }
@@ -11157,20 +11508,272 @@ function DeskCampfire({ config }: { config: CampfireSceneConfig }) {
 function onlyBearsTune(c: CampfireSceneConfig): OnlyBearsTune {
   return {
     speed: c.onlyBearsSpeed,
-    pawScale: c.onlyBearsPawScale,
     scale: c.onlyBearsScale,
     x: c.onlyBearsX,
     y: c.onlyBearsY,
     z: c.onlyBearsZ,
-    lean: c.onlyBearsLean,
     look: c.onlyBearsLook,
     breath: c.onlyBearsBreath,
-    snap: c.onlyBearsSnap,
-    impact: c.onlyBearsImpact,
+    shake: c.onlyBearsShake ?? 1,
+    keyLight: Number.isFinite(c.onlyBearsKeyLight) ? c.onlyBearsKeyLight : 2.5,
+    keyReach: Number.isFinite(c.onlyBearsKeyReach) ? c.onlyBearsKeyReach : 1.6,
   };
 }
 
-function CabinSector({ config, onSelect, pc, onlyBears }: {
+/**
+ * OnlyBears dims the rest of the world while it plays, so the bear in his key
+ * light is the only thing that reads. Every light in the scene except the ones
+ * tagged userData.gagKeep (his key light) is scaled down for the duration of
+ * each render and put back straight after, so whatever else animates those
+ * lights (flicker, lantern swell) keeps working untouched. The background and
+ * fog colours dim with them. Fades in and out with the gag.
+ */
+function OnlyBearsSceneDimmer({ stateRef, level }: { stateRef: MutableRefObject<OnlyBearsState>; level: number }) {
+  const scene = useThree((s) => s.scene);
+  const lit = useRef(0);
+  const levelRef = useRef(level);
+  levelRef.current = level;
+  useFrame((_, delta) => {
+    const on = stateRef.current && stateRef.current.mode !== "off" ? 1 : 0;
+    lit.current += (on - lit.current) * (1 - Math.exp(-Math.min(delta, 0.05) * 3));
+    if (on === 0 && lit.current < 0.002) lit.current = 0;
+  });
+  useEffect(() => {
+    const saved = new Map<THREE.Light, number>();
+    const bg = new THREE.Color();
+    const fogC = new THREE.Color();
+    let bgSaved = false, fogSaved = false;
+    const prevBefore = scene.onBeforeRender;
+    const prevAfter = scene.onAfterRender;
+    scene.onBeforeRender = function (...args) {
+      prevBefore.apply(this, args);
+      const k = 1 + (Math.max(0, levelRef.current) - 1) * lit.current;
+      if (Math.abs(k - 1) < 1e-4) return;
+      scene.traverse((o) => {
+        const l = o as THREE.Light;
+        if (!l.isLight || o.userData?.gagKeep) return;
+        saved.set(l, l.intensity);
+        l.intensity *= k;
+      });
+      if (scene.background instanceof THREE.Color) { bg.copy(scene.background); scene.background.multiplyScalar(Math.min(1, k)); bgSaved = true; }
+      const fog = scene.fog as THREE.Fog | null;
+      if (fog?.color) { fogC.copy(fog.color); fog.color.multiplyScalar(Math.min(1, k)); fogSaved = true; }
+    };
+    scene.onAfterRender = function (...args) {
+      saved.forEach((v, l) => { l.intensity = v; });
+      saved.clear();
+      if (bgSaved && scene.background instanceof THREE.Color) scene.background.copy(bg);
+      const fog = scene.fog as THREE.Fog | null;
+      if (fogSaved && fog?.color) fog.color.copy(fogC);
+      bgSaved = fogSaved = false;
+      prevAfter.apply(this, args);
+    };
+    return () => { scene.onBeforeRender = prevBefore; scene.onAfterRender = prevAfter; };
+  }, [scene]);
+  return null;
+}
+
+/**
+ * A soft shadow thrown onto the floor by one of the cabin's lanterns, for a
+ * static prop (the desk). No shadow maps - a point light with real shadows
+ * re-renders the scene six times and blew the cabin's lighting budget before.
+ * Instead every mesh of the prop gets a flat black twin whose vertices are
+ * projected from the lantern onto the floor plane. A stencil pass keeps
+ * overlapping parts (legs, top) from stacking darker.
+ */
+function LanternFloorShadow({ target, config }: { target: React.RefObject<THREE.Object3D | null>; config: CampfireSceneConfig }) {
+  const scene = useThree((s) => s.scene);
+  const n = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
+  const u = useMemo(() => ({
+    uLight: { value: new THREE.Vector3(0, 10, 0) },
+    uPlaneY: { value: 0 },
+    uCenter: { value: new THREE.Vector2() },
+    uRadius: { value: 2 },
+    uOpacity: { value: 0.5 },
+  }), []);
+  const mat = useMemo(() => {
+    const m = new THREE.MeshBasicMaterial({
+      color: 0x000000, transparent: true, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+      stencilWrite: true, stencilRef: 0, stencilFunc: THREE.EqualStencilFunc,
+      stencilZPass: THREE.IncrementStencilOp, stencilFail: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp,
+    });
+    m.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, u);
+      sh.vertexShader = sh.vertexShader
+        .replace("void main() {", "uniform vec3 uLight; uniform float uPlaneY; varying vec3 vShadowW;\nvoid main() {")
+        .replace("#include <project_vertex>", `
+  vec4 wp = modelMatrix * vec4( transformed, 1.0 );
+  float dy = min(wp.y - uLight.y, -0.002);
+  float t = min((uPlaneY - uLight.y) / dy, 40.0);
+  vec3 onPlane = uLight + (wp.xyz - uLight) * max(t, 0.0);
+  onPlane.y = uPlaneY;
+  vShadowW = onPlane;
+  gl_Position = projectionMatrix * viewMatrix * vec4( onPlane, 1.0 );`);
+      sh.fragmentShader = sh.fragmentShader
+        .replace("void main() {", "uniform vec2 uCenter; uniform float uRadius; uniform float uOpacity; varying vec3 vShadowW;\nvoid main() {")
+        .replace("#include <dithering_fragment>", `#include <dithering_fragment>
+  float dc = length(vShadowW.xz - uCenter);
+  gl_FragColor = vec4(0.0, 0.0, 0.0, uOpacity * (1.0 - smoothstep(uRadius * 0.45, uRadius, dc)));`);
+    };
+    return m;
+  }, [u]);
+  useEffect(() => () => mat.dispose(), [mat]);
+  const twins = useRef<THREE.Mesh[]>([]);
+  const built = useRef<THREE.Object3D | null>(null);
+  const tmp = useMemo(() => ({ box: new THREE.Box3(), c: new THREE.Vector3(), lp: new THREE.Vector3() }), []);
+  useFrame(() => {
+    const root = target.current;
+    const on = n(config.tableShadowOn, 1) >= 0.5;
+    if (root && built.current !== root) {
+      twins.current.forEach((t) => t.parent?.remove(t));
+      twins.current = [];
+      const meshes: THREE.Mesh[] = [];
+      root.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && !(m as THREE.SkinnedMesh).isSkinnedMesh && m.material !== mat) meshes.push(m); });
+      for (const m of meshes) {
+        const tw = new THREE.Mesh(m.geometry, mat);
+        tw.frustumCulled = false; tw.renderOrder = 1; tw.raycast = () => {};
+        tw.position.copy(m.position); tw.quaternion.copy(m.quaternion); tw.scale.copy(m.scale);
+        m.parent?.add(tw);
+        twins.current.push(tw);
+      }
+      if (meshes.length) built.current = root;
+    }
+    if (!root) return;
+    for (const t of twins.current) t.visible = on;
+    if (!on) return;
+    tmp.box.setFromObject(root, false);
+    tmp.box.getCenter(tmp.c);
+    // which lantern: the nearest one (or a fixed pick, 1-4)
+    const lights: THREE.PointLight[] = [];
+    scene.traverse((o) => { if ((o as THREE.PointLight).isPointLight && o.userData?.cabinLantern) lights.push(o as THREE.PointLight); });
+    if (!lights.length) return;
+    const pick = Math.round(n(config.tableShadowLantern, 0));
+    let light = lights[0];
+    if (pick >= 1 && pick <= lights.length) light = lights[pick - 1];
+    else {
+      let best = Infinity;
+      for (const l of lights) { l.getWorldPosition(tmp.lp); const d = tmp.lp.distanceToSquared(tmp.c); if (d < best) { best = d; light = l; } }
+    }
+    light.getWorldPosition(u.uLight.value);
+    u.uLight.value.x += n(config.tableShadowLightX, 0);
+    u.uLight.value.y += n(config.tableShadowLightY, 0);
+    u.uLight.value.z += n(config.tableShadowLightZ, 0);
+    u.uPlaneY.value = tmp.box.min.y + 0.004;
+    u.uCenter.value.set(tmp.c.x, tmp.c.z);
+    u.uRadius.value = n(config.tableShadowReach, 2.2);
+    u.uOpacity.value = n(config.tableShadowStrength, 0.5);
+  });
+  useEffect(() => () => { twins.current.forEach((t) => t.parent?.remove(t)); twins.current = []; }, []);
+  return null;
+}
+
+/**
+ * A cabin lantern's light that swells while OnlyBears plays. At its everyday
+ * 0.15 the study is lit for mood, and the gag - a bear behind a laptop, a paw
+ * coming over the lid - happened in the dark. It ramps up as the camera pulls
+ * back and eases down again once he has gone, so it reads as the scene being
+ * lit for the moment rather than a light switching.
+ */
+function GagLanternLight({
+  intensity,
+  boost,
+  stateRef,
+  ...rest
+}: {
+  intensity: number;
+  boost: number;
+  stateRef?: React.MutableRefObject<OnlyBearsState>;
+  position: [number, number, number];
+  color: THREE.Color;
+  distance: number;
+}) {
+  const ref = useRef<THREE.PointLight>(null);
+  const lit = useRef(0);
+  useFrame((_, delta) => {
+    const on = stateRef?.current && stateRef.current.mode !== "off" ? 1 : 0;
+    lit.current += (on - lit.current) * (1 - Math.exp(-Math.min(delta, 0.05) * 3));
+    if (ref.current) ref.current.intensity = intensity * (1 + (Math.max(1, boost) - 1) * lit.current);
+  });
+  return <pointLight ref={ref} intensity={intensity} decay={2} userData={{ cabinLantern: true }} {...rest} />;
+}
+
+/*
+ * The cabin's porch lanterns. 1 and 2 keep their old names (and with them
+ * their saved overrides); 3 and 4 were placed in Blender under the porch roof
+ * beams, measured in the cabin's location frame, so they need no override.
+ */
+type CabinLanternLightKey = "cabinLantern1Light" | "cabinLantern2Light" | "cabinLantern3Light" | "cabinLantern4Light";
+const CABIN_LANTERNS: readonly {
+  name: string;
+  basePosition: [number, number, number];
+  baseRotationY: number;
+  baseScale: number;
+  /** This lantern's own brightness multiplier (lab: 3 · Cabin — lanterns). */
+  lightKey: CabinLanternLightKey;
+}[] = [
+  { name: "old_bear_lantern", basePosition: [1.35, 0, 1.15], baseRotationY: 0, baseScale: 1, lightKey: "cabinLantern1Light" },
+  { name: "old_bear_lantern_2", basePosition: [-1.75, 0, 1.35], baseRotationY: 0.6, baseScale: 1, lightKey: "cabinLantern2Light" },
+  { name: "old_bear_lantern_3", basePosition: [0.65, 0.82, -2.02], baseRotationY: 0.35, baseScale: 0.477, lightKey: "cabinLantern3Light" },
+  { name: "old_bear_lantern_4", basePosition: [1.36, 0.82, -0.05], baseRotationY: -0.35, baseScale: 0.477, lightKey: "cabinLantern4Light" },
+];
+
+/**
+ * One porch lantern: the Poly lantern GLB, a candle flame inside it and a warm
+ * point light that swells while OnlyBears plays. The source GLB is authored at
+ * about 1.3M units tall, so a normalization group re-centres X/Z, drops it onto
+ * y=0 and scales it to ~0.5 m.
+ */
+function CabinLantern({
+  name, basePosition, baseRotationY, baseScale, lightKey, config, onSelect, stateRef,
+}: {
+  name: string;
+  basePosition: [number, number, number];
+  baseRotationY: number;
+  baseScale: number;
+  lightKey: CabinLanternLightKey;
+  config: CampfireSceneConfig;
+  onSelect: (name: string) => void;
+  stateRef?: React.MutableRefObject<OnlyBearsState>;
+}) {
+  return (
+    <Selectable name={name} onSelect={onSelect} config={config} basePosition={basePosition} baseRotationY={baseRotationY} baseScale={baseScale}>
+      <group scale={3.7e-7}>
+        <group position={[-1090023.625, 1442.25, -159882.85]}>
+          <SafeAsset label={name}>
+            <GLBModel url={OLD_BEAR_LANTERN_URL} />
+          </SafeAsset>
+        </group>
+      </group>
+      {/* Tiny candle flame inside the lantern body. Position and size come
+          from config (Desk lights section) so it can be nudged onto the
+          actual candle. Color follows the lantern's warm tint. */}
+      <CandleFlame
+        position={[config.deskLanternFlameX, config.deskLanternFlameY, config.deskLanternFlameZ]}
+        scale={config.deskLanternFlameScale}
+        color={new THREE.Color(config.deskLanternFlameColorR, config.deskLanternFlameColorG, config.deskLanternFlameColorB)}
+        speed={config.deskLanternFlameSpeed}
+        sway={config.deskLanternFlameSway}
+        pulse={config.deskLanternFlamePulse}
+        brightness={config.deskLanternFlameBrightness}
+      />
+      <GagLanternLight
+        position={[config.deskLanternLightX, config.deskLanternLightY, config.deskLanternLightZ]}
+        color={new THREE.Color(config.deskLanternColorR, config.deskLanternColorG, config.deskLanternColorB)}
+        intensity={config.deskLanternIntensity * Math.max(0, config[lightKey] ?? 1)}
+        distance={config.deskLanternDistance}
+        boost={Number.isFinite(config.onlyBearsLanternBoost) ? config.onlyBearsLanternBoost : 6}
+        stateRef={stateRef}
+      />
+    </Selectable>
+  );
+}
+
+function CabinSector({ config, onSelect, pc, onlyBears, catFocus, catSleepFocus, catSleepAnchor }: {
+  catSleepFocus?: React.ComponentProps<typeof CabinCat>["focus"];
+  catSleepAnchor?: React.MutableRefObject<THREE.Object3D | null>;
+  /** The chair cat's click-to-zoom (see CatFocusCamera). */
+  catFocus?: React.ComponentProps<typeof CabinCat>["focus"];
   config: CampfireSceneConfig;
   onSelect: (n: string) => void;
   /** The cabin computer's desktop. Unset = a plain lit monitor. */
@@ -11181,22 +11784,102 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
     stateRef: React.MutableRefObject<OnlyBearsState>;
     onPawLand: () => void;
     onGone: () => void;
+    onDone?: () => void;
   };
 }) {
+  // the porch cats' purr and fur-scratch levels, master volume folded in
+  const catSound = useMemo(() => {
+    const master = Math.max(0, Math.min(1, config.masterVolume ?? 1));
+    return { purr: master * (config.catPurrVolume ?? 0.8), scratch: master * (config.catScratchVolume ?? 0.5) };
+  }, [config.masterVolume, config.catPurrVolume, config.catScratchVolume]);
+  const catGlint = {
+    left: [config.catGlintLeftX ?? 0.34, config.catGlintLeftY ?? 0.7] as [number, number],
+    right: [config.catGlintRightX ?? 0.34, config.catGlintRightY ?? 0.7] as [number, number],
+    size: config.catGlintSize ?? 0.13,
+    // one or two dots per eye; the shader takes the second's size as a ratio
+    second: (config.catGlintCount ?? 2) >= 1.5 ? (config.catGlintSecondSize ?? 0.06) / Math.max(1e-4, config.catGlintSize ?? 0.13) : 0,
+    secondOffset: [config.catGlintSecondX ?? 0.17, config.catGlintSecondY ?? -0.15] as [number, number],
+    brightness: config.catGlintBrightness ?? 1,
+    roundness: config.catGlintRoundness ?? 1,
+    softness: config.catGlintSoftness ?? 0.25,
+  };
+  // painted eyes (iris colour, pupil, lighting) - per cat
+  const irisFor = (who: "Sit" | "Sleep") => {
+    const g = (k: string, d: number) => {
+      const v = (config as unknown as Record<string, number | undefined>)[`catIris${who}${k}`];
+      return typeof v === "number" && Number.isFinite(v) ? v : d;
+    };
+    return {
+      on: g("On", 1), inner: [g("InR", 0.98), g("InG", 0.8), g("InB", 0.35)] as [number, number, number],
+      outer: [g("OutR", 0.78), g("OutG", 0.48), g("OutB", 0.1)] as [number, number, number],
+      size: g("Size", 0.5), offset: [g("X", 0), g("Y", 0)] as [number, number],
+      pupilW: g("PupilW", 0.42), pupilH: g("PupilH", 0.62), ring: g("Ring", 0.55), shade: g("Shade", 0.4),
+      glow: g("Glow", 0.45), brightness: g("Bright", 1),
+      trackX: g("TrackX", 0.12), trackY: g("TrackY", 0.1), pupilSoft: g("PupilSoft", 0.14),
+    };
+  };
+  // the table cat's own glints (catGlintTable*), unless it's set to share
+  const tg = (k: string, d: number) => {
+    const v = (config as unknown as Record<string, number | undefined>)[`catGlintTable${k}`];
+    return typeof v === "number" && Number.isFinite(v) ? v : d;
+  };
+  const catGlintTable = (config.catGlintTableOwn ?? 1) >= 0.5 ? {
+    left: [tg("LeftX", 0.34), tg("LeftY", 0.7)] as [number, number],
+    right: [tg("RightX", 0.34), tg("RightY", 0.7)] as [number, number],
+    size: tg("Size", 0.13),
+    second: tg("Count", 2) >= 1.5 ? tg("SecondSize", 0.06) / Math.max(1e-4, tg("Size", 0.13)) : 0,
+    secondOffset: [tg("SecondX", 0.17), tg("SecondY", -0.15)] as [number, number],
+    brightness: tg("Brightness", 1),
+    roundness: tg("Roundness", 1),
+    softness: tg("Softness", 0.25),
+  } : catGlint;
+  // the cats' soft shadows from the monitor glow (CabinExtras CatShadow)
+  const shadowOn = (config.deskComputerCatShadow ?? 1) >= 0.5;
+  const catShadowFor = (who: "Sit" | "Sleep") => {
+    const g = (k: string, d: number) => {
+      const v = (config as unknown as Record<string, number | undefined>)[`catShadow${who}${k}`];
+      return typeof v === "number" && Number.isFinite(v) ? v : d;
+    };
+    return {
+      strength: shadowOn ? g("Strength", 0.5) : 0, length: g("Length", 1), turn: g("Turn", 0), radius: g("Radius", 3),
+      fade: g("Fade", 0.4), shiftX: g("ShiftX", 0), shiftZ: g("ShiftZ", 0), width: g("Width", 1),
+    };
+  };
+  const catGazeFor = (who: "Sit" | "Sleep"): Partial<CatGaze> => {
+    const out: Record<string, number> = {};
+    for (const k of Object.keys(CAT_GAZE_DEFAULTS)) {
+      const v = (config as unknown as Record<string, number | undefined>)[`catGaze${who}${k[0].toUpperCase()}${k.slice(1)}`];
+      if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+    }
+    return out as Partial<CatGaze>;
+  };
+  const catGazeSit = catGazeFor("Sit");
+  const catGazeSleep = catGazeFor("Sleep");
+  const catShadowSit = catShadowFor("Sit");
+  const catShadowSleep = catShadowFor("Sleep");
+  // each cat's fur, painted live (CabinExtras paintCat)
+  const catColors = {
+    sit: {
+      fur: [config.catSitFurR ?? 0.93, config.catSitFurG ?? 0.52, config.catSitFurB ?? 0.19] as [number, number, number],
+      stripe: [config.catSitStripeR ?? 0.74, config.catSitStripeG ?? 0.33, config.catSitStripeB ?? 0.1] as [number, number, number],
+      stripes: config.catSitStripes ?? 0.55,
+      white: config.catSitWhite ?? 1,
+      whiteSize: config.catSitWhiteSize ?? 0.55,
+      whiteEdge: config.catSitWhiteEdge ?? 0.9,
+    },
+    sleep: {
+      fur: [config.catSleepFurR ?? 0.93, config.catSleepFurG ?? 0.52, config.catSleepFurB ?? 0.19] as [number, number, number],
+      stripe: [config.catSleepStripeR ?? 0.74, config.catSleepStripeG ?? 0.33, config.catSleepStripeB ?? 0.1] as [number, number, number],
+      stripes: config.catSleepStripes ?? 0.55,
+      white: config.catSleepWhite ?? 0,
+      whiteSize: config.catSleepWhiteSize ?? 0.55,
+      whiteEdge: config.catSleepWhiteEdge ?? 0.9,
+    },
+  };
   // Top surface of the code-built Table is at y ≈ 0.62. GLB props that live on
   // the table start there; drag/scale in the lab.
   const TABLE_TOP_Y = 0.62;
-  const laptopCarryRef = useRef<THREE.Group>(null);
-  useFrame(() => {
-    const state = onlyBears?.stateRef.current;
-    const carry = laptopCarryRef.current;
-    if (!carry) return;
-    const run = state?.mode === "out"
-      ? THREE.MathUtils.smoothstep(state.exitT, OB_T.exitRunStart, OB_T.exitRunStart + 0.42)
-      : 0;
-    carry.position.set(run * 1.8, run * 0.18, run * 0.45);
-    carry.rotation.z = -run * 0.38;
-  });
+
 
   // Where the monitor's screen light points.
   //
@@ -11210,6 +11893,25 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
   // local +X, and pitch tips it down (negative) or up. The target only has to
   // land somewhere along the ray, so the 2-unit throw is arbitrary.
   const deskScreenLightRef = useRef<THREE.SpotLight>(null);
+  const contactTableRef = useRef<THREE.Group>(null);
+  const oldBearTableRef = useRef<THREE.Group>(null);
+  /*
+   * The screen's light goes out as the lid shuts - it is the screen, after
+   * all. Same curve as the lid: followed exactly while OnlyBears is on, eased
+   * back up as the lid reopens once he has gone.
+   */
+  const screenLit = useRef(1);
+  useFrame((_, delta) => {
+    const light = deskScreenLightRef.current;
+    if (!light) return;
+    const st = onlyBears?.stateRef.current;
+    const open = 1 - (st ? onlyBearsLidClose(st) : 0);
+    screenLit.current = st && st.mode !== "off"
+      ? open
+      : screenLit.current + (open - screenLit.current) * (1 - Math.exp(-Math.min(delta, 0.05) * 5));
+    light.intensity = config.deskComputerIntensity * screenLit.current * screenLit.current;
+    light.userData.fullIntensity = config.deskComputerIntensity;   // the cats' shadows fade with the screen
+  });
   const deskScreenTargetRef = useRef<THREE.Object3D>(null);
   useEffect(() => {
     if (deskScreenLightRef.current && deskScreenTargetRef.current) {
@@ -11264,65 +11966,61 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
           </SafeAsset>
         </group>
       </Selectable>
-      {/* Two lanterns, moved over from the desk scene. Each carries its own
-          warm pointLight so it acts as a real light source. The source GLB is
-          authored at about 1.3M units tall (Poly by Google), so a normalization
-          group re-centers X/Z and drops it onto y=0, then scales it to ~0.5m.
-          They still read the deskLantern* config keys - the objects moved
-          scenes, the knobs kept their historical names. */}
-      <Selectable name="old_bear_lantern" onSelect={onSelect} config={config} basePosition={[1.35, 0, 1.15]} baseRotationY={0}>
-        <group scale={3.7e-7}>
-          <group position={[-1090023.625, 1442.25, -159882.85]}>
-            <SafeAsset label="old-bear lantern">
-              <GLBModel url={OLD_BEAR_LANTERN_URL} />
-            </SafeAsset>
-          </group>
-        </group>
-        {/* Tiny candle flame inside the lantern body. Position and size come
-            from config (Desk lights section) so it can be nudged onto the
-            actual candle. Color follows the lantern's warm tint. */}
-        <CandleFlame
-          position={[config.deskLanternFlameX, config.deskLanternFlameY, config.deskLanternFlameZ]}
-          scale={config.deskLanternFlameScale}
-          color={new THREE.Color(config.deskLanternFlameColorR, config.deskLanternFlameColorG, config.deskLanternFlameColorB)}
-          speed={config.deskLanternFlameSpeed}
-          sway={config.deskLanternFlameSway}
-          pulse={config.deskLanternFlamePulse}
-          brightness={config.deskLanternFlameBrightness}
-        />
-        <pointLight
-          position={[config.deskLanternLightX, config.deskLanternLightY, config.deskLanternLightZ]}
-          color={new THREE.Color(config.deskLanternColorR, config.deskLanternColorG, config.deskLanternColorB)}
-          intensity={config.deskLanternIntensity}
-          distance={config.deskLanternDistance}
-          decay={2}
-        />
+      {/* The cabin's porch lanterns. The first two moved over from the desk
+          scene; 3 and 4 hang under the same two roof beams, nearer the wall,
+          so the porch and the desk are lit from both ends. Each carries its
+          own candle flame and warm pointLight. They all read the deskLantern*
+          config keys - the objects moved scenes, the knobs kept their names. */}
+      {CABIN_LANTERNS.map((l) => (
+        <CabinLantern key={l.name} {...l} config={config} onSelect={onSelect} stateRef={onlyBears?.stateRef} />
+      ))}
+
+      {/* The porch gramophone on its little table, by the cabin wall under
+          lantern 3 - placed in Blender clear of the wall, the post and the
+          lanterns, horn turned to scene 3's camera. One object: drag it and
+          the table comes too. */}
+      <Selectable name="cabin_gramophone" onSelect={onSelect} config={config} basePosition={[0.85, 0.04, -1.8]} baseRotationY={THREE.MathUtils.degToRad(205)}>
+        <SafeAsset label="gramophone">
+          <CabinGramophone
+            tune={{
+              recordSpeed: config.gramophoneRecordSpeed ?? 0.75,
+              crankSpeed: config.gramophoneCrankSpeed ?? 0.5,
+              bpm: config.gramophoneBpm ?? 96,
+              pump: config.gramophonePump ?? 1,
+              bounce: config.gramophoneBounce ?? 1,
+              notes: config.gramophoneNotes ?? 0,
+              speed: config.gramophoneAnimSpeed ?? 1,
+              delay: config.gramophoneAnimDelay ?? 0,
+            }}
+          />
+        </SafeAsset>
       </Selectable>
-      <Selectable name="old_bear_lantern_2" onSelect={onSelect} config={config} basePosition={[-1.75, 0, 1.35]} baseRotationY={0.6}>
-        <group scale={3.7e-7}>
-          <group position={[-1090023.625, 1442.25, -159882.85]}>
-            <SafeAsset label="old-bear lantern 2">
-              <GLBModel url={OLD_BEAR_LANTERN_URL} />
-            </SafeAsset>
-          </group>
-        </group>
-        <CandleFlame
-          position={[config.deskLanternFlameX, config.deskLanternFlameY, config.deskLanternFlameZ]}
-          scale={config.deskLanternFlameScale}
-          color={new THREE.Color(config.deskLanternFlameColorR, config.deskLanternFlameColorG, config.deskLanternFlameColorB)}
-          speed={config.deskLanternFlameSpeed}
-          sway={config.deskLanternFlameSway}
-          pulse={config.deskLanternFlamePulse}
-          brightness={config.deskLanternFlameBrightness}
+
+      {/* A giant moon rising behind the cabin roof, aimed off scene 3's own
+          camera (see CabinExtras). */}
+      {(config.cabinMoonOn ?? 1) >= 0.5 ? (
+        <CabinMoon
+          view={locationView(LOCATION_CABIN, config)}
+          leftDeg={config.cabinMoonLeft ?? 4}
+          upDeg={config.cabinMoonUp ?? 17}
+          distance={config.cabinMoonDistance ?? 60}
+          sizeDeg={config.cabinMoonSize ?? 19}
+          color={[config.cabinMoonColorR ?? 1, config.cabinMoonColorG ?? 1, config.cabinMoonColorB ?? 1]}
+          brightness={config.cabinMoonBrightness ?? 1}
+          surface={{
+            texture: config.cabinMoonTexture ?? 0,
+            craters: config.cabinMoonCraters ?? 46,
+            craterSize: config.cabinMoonCraterSize ?? 1,
+            maria: config.cabinMoonMaria ?? 0.5,
+            limb: config.cabinMoonLimb ?? 0,
+            seed: config.cabinMoonSeed ?? 7,
+          }}
+          bloom={config.cabinMoonGlow ?? 0.6}
+          bloomSize={config.cabinMoonGlowSize ?? 2.8}
+          bloomSoftness={config.cabinMoonGlowSoftness ?? 2}
+          bloomColor={[config.cabinMoonGlowColorR ?? 1, config.cabinMoonGlowColorG ?? 1, config.cabinMoonGlowColorB ?? 1]}
         />
-        <pointLight
-          position={[config.deskLanternLightX, config.deskLanternLightY, config.deskLanternLightZ]}
-          color={new THREE.Color(config.deskLanternColorR, config.deskLanternColorG, config.deskLanternColorB)}
-          intensity={config.deskLanternIntensity}
-          distance={config.deskLanternDistance}
-          decay={2}
-        />
-      </Selectable>
+      ) : null}
 
       {/* --- the bear's study, moved here from the camping scene -------
           These override rows were dialled in while the study lived in the
@@ -11336,8 +12034,10 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
           to the cabin as a unit. Per-prop dragging still works through it. */}
       <group position={[config.cabinSetX, config.cabinSetY, config.cabinSetZ]}>
       <Selectable name="contact_table" onSelect={onSelect} config={config} basePosition={[0.15, 0, 0]} baseRotationY={0}>
-        <Table />
+        <group ref={contactTableRef}><Table /></group>
       </Selectable>
+      <LanternFloorShadow target={contactTableRef} config={config} />
+      <LanternFloorShadow target={oldBearTableRef} config={config} />
       <Selectable name="contact_chair" onSelect={onSelect} config={config} basePosition={[-0.95, 0, 0]} baseRotationY={Math.PI / 2}>
         <Chair />
       </Selectable>
@@ -11346,7 +12046,7 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
           in the lab once you've dialled these in. */}
       <Selectable name="old_bear_table" onSelect={onSelect} config={config} basePosition={[0.15, 0, 0]} baseRotationY={0}>
         <SafeAsset label="old-bear table">
-          <GLBModel url={OLD_BEAR_TABLE_URL} />
+          <group ref={oldBearTableRef}><GLBModel url={OLD_BEAR_TABLE_URL} /></group>
         </SafeAsset>
       </Selectable>
       <Selectable name="old_bear_chair" onSelect={onSelect} config={config} basePosition={[-0.95, 0, 0]} baseRotationY={Math.PI / 2}>
@@ -11358,19 +12058,19 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
           code-built table (y = 0.62) around the bear's writing spot. */}
        <Selectable name="old_bear_computer" onSelect={onSelect} config={config} basePosition={[0.35, TABLE_TOP_Y, -0.15]} baseRotationY={Math.PI} interactive={!!pc?.hot}>
          <SafeAsset label="old-bear computer">
-          <group ref={laptopCarryRef}>
+          <group>
             <LitComputer config={config} pc={pc} />
-            {/* The bear steals the laptop as he retreats. */}
             {onlyBears?.mounted ? (
               <SafeAsset label="onlybears bear">
                 <OnlyBearsBear
-                  url={BEAR_OLD_URL}
-                  tune={onlyBearsTune(config)}
-                  look={oldBearLookFromConfig(config as unknown as Record<string, unknown>)}
-                  stateRef={onlyBears.stateRef}
-                  onPawLand={onlyBears.onPawLand}
-                  onGone={onlyBears.onGone}
-                />
+                url={BEAR_OLD_URL}
+                tune={onlyBearsTune(config)}
+                look={oldBearLookFromConfig(config as unknown as Record<string, unknown>)}
+                stateRef={onlyBears.stateRef}
+                onPawLand={onlyBears.onPawLand}
+                onGone={onlyBears.onGone}
+                onDone={onlyBears.onDone}
+              />
               </SafeAsset>
             ) : null}
           </group>
@@ -11408,6 +12108,21 @@ function CabinSector({ config, onSelect, pc, onlyBears }: {
           shadow-mapSize-height={512}
           shadow-bias={-0.0005}
         />
+      </Selectable>
+      {/* Two of the white cats, in place of the books and mug (those are
+          hidden in the saved config, not deleted). Placed in Blender: the
+          sleeper curled up on the desk beside the laptop, clear of the screen,
+          face turned to the camera;
+          the sitter on the chair seat (y 0.244), turned out towards the shot. */}
+      <Selectable name="cabin_cat_sitting" onSelect={onSelect} config={config} basePosition={[1.14, 0.244, 2.63]} baseRotationY={THREE.MathUtils.degToRad(135)} baseScale={0.19}>
+        <SafeAsset label="sitting cat">
+          <CabinCat url={CAT_SIT_URL} kind="sit" speed={config.cabinCatSpeed ?? 1} sound={catSound} gaze={catGazeSit} focus={catFocus} colors={catColors.sit} glint={{ ...catGlint, iris: irisFor("Sit") }} shadowLight={deskScreenLightRef as React.MutableRefObject<THREE.Light | null>} shadow={catShadowSit} fat={config.catSitFat ?? 0.7} fatBelly={config.catSitFatBelly ?? 1} fatWide={config.catSitFatWide ?? 1} />
+        </SafeAsset>
+      </Selectable>
+      <Selectable name="cabin_cat_sleeping" onSelect={onSelect} config={config} basePosition={[1.78, 0.394, 2.50]} baseRotationY={THREE.MathUtils.degToRad(-35)} baseScale={0.17}>
+        <SafeAsset label="sleeping cat">
+          <CabinCat url={CAT_SIT_URL} kind="sit" speed={config.cabinCatSpeed ?? 1} sound={catSound} colors={catColors.sleep} glint={{ ...catGlintTable, iris: irisFor("Sleep") }} gaze={catGazeSleep} focus={catSleepFocus} anchorOut={catSleepAnchor} shadowLight={deskScreenLightRef as React.MutableRefObject<THREE.Light | null>} shadow={catShadowSleep} fat={config.catSleepFat ?? 0} fatBelly={config.catSleepFatBelly ?? 1} fatWide={config.catSleepFatWide ?? 1} />
+        </SafeAsset>
       </Selectable>
       <Selectable name="old_bear_books" onSelect={onSelect} config={config} basePosition={[-0.15, TABLE_TOP_Y, -0.25]} baseRotationY={0.3}>
         <SafeAsset label="old-bear books">
@@ -12583,9 +13298,11 @@ function CampfireWorld({
   banjoTimeRef,
   cameraSnapSignal,
   onlyBearsPlaySignal,
+  onRequestPanel,
   cameraLivePoseRef,
   bearVoiceRef,
   onFishImpact,
+  chatChoice,
 }: {
   config: CampfireSceneConfig;
   onCameraChange: (pos: [number, number, number], tgt: [number, number, number]) => void;
@@ -12604,6 +13321,9 @@ function CampfireWorld({
   cameraSnapSignal?: number;
   /** Lab: play the OnlyBears gag in place (or send him away). */
   onlyBearsPlaySignal?: number;
+  /** Ask the host to move to another location (0-2). OnlyBears uses it to
+   *  take you back to the campfire once he has finished. */
+  onRequestPanel?: (index: number) => void;
   /** while true, freeze IntroFlight at its pulled-back start pose */
   titleHeld?: boolean;
   onFishClickSound?: () => void;
@@ -12647,6 +13367,9 @@ function CampfireWorld({
   /** Live remote-audio state for the two scene-one bears. */
   bearVoiceRef?: BearVoiceStateRef;
   onFishImpact?: () => void;
+  /** Site: before the bears start, arrows over the telephone, microphone and
+   *  typewriter ask how the visitor wants to talk; onChoose gets the pick. */
+  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void };
 }) {
   /*
    * Clicking the fire throws embers up out of it.
@@ -12666,11 +13389,15 @@ function CampfireWorld({
   const playLeftBagFall = useCampsiteOneShot(LEFT_BAG_FALL_URL);
   const playRightBagFall = useCampsiteOneShot(RIGHT_BAG_FALL_URL);
   const playFishingRodFall = useCampsiteOneShot(FISHING_ROD_FALL_URL);
-  const tipSoundVolume = clampUnit(config.masterVolume) * clampUnit(config.clickVolume);
+  // Things falling over (bags, rod, logs). Used to ride the generic "Click"
+  // slider, which is cubed for loudness and sat around 0.4 - so in the scene
+  // the bags came out at a few percent volume while the lab's preview played
+  // them loud. They have their own slider now.
+  const tipSoundVolume = clampUnit(config.masterVolume) * clampUnit(Number.isFinite(config.propSoundVolume) ? config.propSoundVolume : 0.85);
   const handleLeftBagContact = useCallback(() => playLeftBagFall(tipSoundVolume), [playLeftBagFall, tipSoundVolume]);
-  const handleRightBagContact = useCallback(() => {
-    setRodPlay((n) => n + 1);
-  }, []);
+  // The right bag and the fishing rod are separate gags now: the bag no longer
+  // knocks the rod over - click the rod itself for that.
+  const handleRightBagContact = useCallback(() => {}, []);
   const handleRightBagLand = useCallback(() => playRightBagFall(tipSoundVolume), [playRightBagFall, tipSoundVolume]);
   const handleRodContact = useCallback(() => playFishingRodFall(tipSoundVolume), [playFishingRodFall, tipSoundVolume]);
   const fishReactionRef = useRef<FishReaction>({ phase: "idle", target: new THREE.Vector3(), phaseStartedAt: 0, flightProgress: 0 });
@@ -12687,11 +13414,30 @@ function CampfireWorld({
   const [fishRespawn, setFishRespawn] = useState(0);
   const handleFishGone = useCallback(() => setFishGone(true), []);
   const handleFishBack = useCallback(() => setFishGone(false), []);
-  const handleWoodLand = useCallback(
-    () => playFishingRodFall(tipSoundVolume * clampUnit(Number.isFinite(config.woodRollSoundVolume) ? config.woodRollSoundVolume : 0.5)),
-    [playFishingRodFall, tipSoundVolume, config.woodRollSoundVolume],
-  );
-  const handleAxeLand = useCallback(() => playFishingRodFall(tipSoundVolume), [playFishingRodFall, tipSoundVolume]);
+  // Logs hitting the ground make no knock of their own - the pile only plays
+  // the rolling loop (it borrowed the fishing rod's clatter before).
+  const handleWoodLand = useCallback(() => {}, []);
+  // The axe: a whirring spin while it is up, cut off by the bite of the
+  // blade back into the block.
+  const playAxeSpin = useCampsiteOneShot(AXE_SPIN_URL);
+  const playAxeHit = useCampsiteOneShot(AXE_HIT_WOOD_URL);
+  const axeSpinNode = useRef<HTMLAudioElement | null>(null);
+  const handleAxeThrow = useCallback(() => {
+    fadeOutAudio(axeSpinNode.current, 60);
+    axeSpinNode.current = playAxeSpin(clampUnit(config.masterVolume) * clampUnit(Number.isFinite(config.axeSpinVolume) ? config.axeSpinVolume : 0.6));
+  }, [playAxeSpin, config.masterVolume, config.axeSpinVolume]);
+  const handleAxeLand = useCallback(() => {
+    fadeOutAudio(axeSpinNode.current, 90);
+    axeSpinNode.current = null;
+    playAxeHit(clampUnit(config.masterVolume) * clampUnit(Number.isFinite(config.axeHitVolume) ? config.axeHitVolume : 0.8));
+  }, [playAxeHit, config.masterVolume, config.axeHitVolume]);
+  // Logs rolling off the pile: a looping wooden rumble while any is moving.
+  const [woodRolling, setWoodRolling] = useState(false);
+  useCampsiteAudioLoop(WOOD_ROLLING_URL, {
+    volume: clampUnit(config.masterVolume) * clampUnit(Number.isFinite(config.woodRollLoopVolume) ? config.woodRollLoopVolume : 0.5),
+    enabled: woodRolling,
+    fadeMs: 180,
+  });
   const handleFishLaunch = useCallback((target: THREE.Vector3, progress: number) => {
     fishReactionRef.current.phase = "flying";
     fishReactionRef.current.target.copy(target);
@@ -12754,7 +13500,21 @@ function CampfireWorld({
    * already true would leave the rod lying there through every replay. */
   const [rodPlay, setRodPlay] = useState(0);
   const crittersOn = config.critterActsOn >= 0.5;
+  // The chat-choice arrows (site: before the bears talk; lab: the preview
+  // switch). While they're up, the telephone / mic / typewriter glow on hover
+  // like the other props, and their arrow + word go full opacity and grow.
+  const chatArrowsUp = chatChoice ? chatChoice.show : (config.chatArrowsPreview ?? 0) >= 0.5;
+  const chatHover = useRef<ChatHover>({ phone: false, mic: false, type: false });
+  const chatHoverSet = useMemo(() => ({
+    phone: (h: boolean) => { chatHover.current.phone = h; },
+    mic: (h: boolean) => { chatHover.current.mic = h; },
+    type: (h: boolean) => { chatHover.current.type = h; },
+  }), []);
   const onSelect = useCallback((name: string) => {
+    if (chatChoice?.show && !editing) {
+      const pick: ChatChoice | null = name === "campfire_telephone" ? "phone" : name === "campfire_microphone" ? "mic" : name === "campfire_typewriter" ? "type" : null;
+      if (pick) { chatChoice.onChoose(pick); return; }
+    }
     if (name === "campfire" && fireBurstOn) {
       const now = performance.now();
       if (now - lastFireClickAtRef.current >= FIRE_CLICK_COOLDOWN_MS) {
@@ -12781,6 +13541,7 @@ function CampfireWorld({
       // forward, and TipOver's contact callback is what knocks the rod down -
       // at the angle the meshes actually touch, not on a timer.
       if (name === "campfire_backpack" && !bagDown) { setBagDown(true); return; }
+      if (name === "campfire_fishing_rod" && rodPlay === 0) { setRodPlay(1); return; }
       // In config mode (the lab: `editing`) a click on these selects them so
       // they can be moved like anything else - the gags only run on the site.
       // (Changing their sliders in the lab still replays them to preview.)
@@ -12789,7 +13550,7 @@ function CampfireWorld({
       if (name === "campfire_wood_pile" && !woodEmpty && !editing) { setWoodPlay((n) => n + 1); return; }
     }
     onSelectProp(name);
-  }, [onSelectProp, fireBurstOn, onFireWhooshSound, crittersOn, act, bagDown, hikeBagDown, woodEmpty, fishGone, config.fishReturnOn, editing]);
+  }, [onSelectProp, fireBurstOn, onFireWhooshSound, crittersOn, act, bagDown, hikeBagDown, woodEmpty, fishGone, config.fishReturnOn, editing, chatChoice, rodPlay]);
 
   /*
    * Click the tube to pull the camera in; the screen's last plate lets it go.
@@ -12832,12 +13593,28 @@ function CampfireWorld({
    */
   const pcVolRef = useRef(0);
   pcVolRef.current = clampUnit(config.masterVolume) * clampUnit(config.pcSoundVolume ?? 0.8);
+  // Clicking into the computer plays the startup jingle (sound2/scene3computerstart.mp3)
+  const pcStartVolRef = useRef(1);
+  pcStartVolRef.current = clampUnit(config.masterVolume) * clampUnit(config.pcStartupVolume ?? 0.8);
+  const pcStartAudio = useRef<HTMLAudioElement | null>(null);
+  const playPcStartup = useCampsiteOneShot(PC_STARTUP_URL);
+  const playPcStartupRef = useRef(playPcStartup);
+  playPcStartupRef.current = playPcStartup;
   const pcSounds = useMemo<PcSounds>(() => ({
     click: () => pcMouseClick(pcVolRef.current),
     key: () => pcKey(pcVolRef.current * 0.85),
     seek: () => pcSeek(pcVolRef.current * 0.9, 5 + Math.floor(Math.random() * 4)),
-    wake: () => { pcMouseClick(pcVolRef.current); pcWake(pcVolRef.current); },
-    park: () => pcPark(pcVolRef.current),
+    wake: () => {
+      pcMouseClick(pcVolRef.current);
+      fadeOutAudio(pcStartAudio.current, 40);
+      // the one-shot cubes its volume (perceptual); cbrt keeps the slider's old loudness
+      pcStartAudio.current = playPcStartupRef.current(Math.cbrt(Math.max(0, pcStartVolRef.current)));
+    },
+    park: () => {
+      pcPark(pcVolRef.current);
+      fadeOutAudio(pcStartAudio.current, 80);   // leaving the computer cuts the jingle off
+      pcStartAudio.current = null;
+    },
     error: () => pcBeep(pcVolRef.current),
     done: () => pcChirp(pcVolRef.current),
   }), []);
@@ -12848,6 +13625,40 @@ function CampfireWorld({
    */
   const obStateRef = useRef<OnlyBearsState>(makeOnlyBearsState());
   const [obMounted, setObMounted] = useState(false);
+  /*
+   * The chair cat: click it and the camera flies in close (CatFocusCamera);
+   * from there it can be petted. Escape, a click elsewhere, or leaving the
+   * cabin flies back out.
+   */
+  const [catFocus, setCatFocus] = useState(false);
+  const catAnchorRef = useRef<THREE.Object3D | null>(null);
+  const catSleepAnchorRef = useRef<THREE.Object3D | null>(null);
+  // lab: "Hold the petting view" keeps the close-up on while it's tuned
+  // (lab only - the site passes chatChoice, and must never be stuck in it)
+  const catFocusOn = catFocus || (!chatChoice && (config.catFocusPreview ?? 0) >= 0.5);
+  // From the cat close-up a click on the laptop zooms on into the computer,
+  // and leaving the computer comes back to the cats. That click also reads to
+  // the cats as "clicked somewhere else", so the exit waits a beat and stands
+  // down if the computer took the click.
+  const pcFocusRef = useRef(false);
+  // Clicking anywhere else no longer leaves the cats (it kept firing while
+  // trying to pet them): the way out is the laptop - zoom into the computer,
+  // and leaving the computer takes you all the way back out.
+  const catExit = useCallback(() => {}, []);
+  const catFocusProps = useMemo(() => ({
+    active: catFocusOn,
+    onEnter: () => setCatFocus(true),
+    onExit: catExit,
+    anchorRef: catAnchorRef,
+  }), [catFocusOn, catExit]);
+  // the table cat shares the close-up (click either cat to fly in, pet both
+  // once there) but keeps its own box for the camera to frame
+  const catFocusTableProps = useMemo(() => ({
+    active: catFocusOn,
+    onEnter: () => setCatFocus(true),
+    onExit: catExit,
+    anchorRef: catSleepAnchorRef,
+  }), [catFocusOn, catExit]);
   const startOnlyBears = useCallback(() => {
     const st = obStateRef.current;
     if (st.mode === "in") return;
@@ -12866,27 +13677,56 @@ function CampfireWorld({
     setObMounted(false);
   }, []);
   const obPawLand = useCallback(() => { pcPawThud(pcVolRef.current); }, []);
+  // He has shaken his head no: back to the campfire. Leaving the cabin backs
+  // out of the computer, and that sends him off (see the effects below).
+  const obDone = useCallback(() => {
+    endOnlyBears(); // he sinks behind the desk as the camera pulls away
+    onRequestPanel?.(LOCATION_CAMPFIRE);
+  }, [endOnlyBears, onRequestPanel]);
+  // The computer is only a prop in the lab (clicks there select and drag), but
+  // from the cat close-up it works in the lab too, so cats -> computer can be
+  // tried there the same as on the site.
+  const pcUsable = !editing || catFocusOn;
   const pc = useRetroDesktop({
-    enabled: !editing,
+    enabled: pcUsable,
     sounds: pcSounds,
     onOnlyBears: startOnlyBears,
     busy: () => obStateRef.current.mode !== "off",
     onBusyEscape: endOnlyBears,
   });
   const pcScreenRef = useRef<THREE.Mesh | null>(null);
+  const pcCameraAnchorRef = useRef<THREE.Object3D | null>(null);
+  const pcLidRef = useRef<THREE.Object3D | null>(null);
   const pcFocus = pc.focused;
+  pcFocusRef.current = pcFocus;
+  // leaving the computer after coming in from the cats exits the cats too
+  const pcWasFocused = useRef(pcFocus);
+  useEffect(() => {
+    if (pcWasFocused.current && !pcFocus) setCatFocus(false);
+    pcWasFocused.current = pcFocus;
+  }, [pcFocus]);
+  // the cat close-up steps aside while the computer has the camera
+  const catViewOn = catFocusOn && !pcFocus;
+  // the record quiets down while you're up close with the cats or the computer
+  const closeUp = catFocusOn || pcFocus;
+  useFrame((_, dt) => {
+    const target = closeUp ? Math.max(0, Number.isFinite(config.gramophoneCloseUpVolume) ? config.gramophoneCloseUpVolume : 0.55) : 1;
+    gramophoneDuck.current += (target - gramophoneDuck.current) * (1 - Math.exp(-Math.min(dt, 0.1) * 2.5));
+  });
   const pcExit = pc.exit;
   const pcGlass = useMemo<PcGlassProps>(() => ({
     stateRef: pc.stateRef,
     onClick: pc.onScreenClick,
     onHover: pc.onScreenHover,
     onOver: pc.onComputerOver,
-    hot: !pcFocus && !editing,
+    hot: !pcFocus && pcUsable,
     focused: pcFocus,
-    enabled: !editing,
+    enabled: pcUsable,
     screenRef: pcScreenRef,
+    cameraAnchorRef: pcCameraAnchorRef,
+    lidRef: pcLidRef,
     onlyBearsState: obStateRef,
-  }), [pc.stateRef, pc.onScreenClick, pc.onScreenHover, pc.onComputerOver, pcFocus, editing]);
+  }), [pc.stateRef, pc.onScreenClick, pc.onScreenHover, pc.onComputerOver, pcFocus, pcUsable]);
   const [crtIndex, setCrtIndex] = useState(0);
   /** Back plate lit on a section screen. The menu's own plates need no flag:
    *  hovering one simply makes it the active plate, which already lights. */
@@ -12951,9 +13791,9 @@ function CampfireWorld({
     }
   }, [panel, onCrtExitSound]);
 
-  // Ringing away from the cabin backs out of the computer too.
+  // Ringing away from the cabin backs out of the computer too - and the cat.
   useEffect(() => {
-    if (panel !== LOCATION_CABIN) pcExit();
+    if (panel !== LOCATION_CABIN) { pcExit(); setCatFocus(false); }
   }, [panel, pcExit]);
 
   // Leaving the computer while the bear is up sends him away at once. Only
@@ -12981,7 +13821,9 @@ function CampfireWorld({
 
   const pcFocusWas = useRef(pcFocus);
   useEffect(() => {
-    if (pcFocusWas.current && !pcFocus && obMounted) obGone();
+    // ...unless he is already on his way out (the end-of-gag trip back to the
+    // campfire): then he finishes sinking and onGone unmounts him.
+    if (pcFocusWas.current && !pcFocus && obMounted && obStateRef.current.mode !== "out") obGone();
     pcFocusWas.current = pcFocus;
   }, [pcFocus, obMounted, obGone]);
 
@@ -12999,7 +13841,8 @@ function CampfireWorld({
     stateRef: obStateRef,
     onPawLand: obPawLand,
     onGone: obGone,
-  }), [obMounted, obPawLand, obGone]);
+    onDone: obDone,
+  }), [obMounted, obPawLand, obGone, obDone]);
 
   // Report focus changes upward so the parent can loop CRT background music
   // while the close-up is held.
@@ -13301,11 +14144,13 @@ function CampfireWorld({
       <FogRig config={config} />
       <CameraRig config={config} paused={flying || panelled} />
       {panelled ? (
-        <LocationCamera config={config} panel={panel} active={!flying} editing={editing} suspended={crtFocus || pcFocus} />
+        <LocationCamera config={config} panel={panel} active={!flying} editing={editing} suspended={crtFocus || pcFocus || catFocusOn} />
       ) : null}
       {/* Mounted whether or not a location owns the camera - see CrtFocusCamera. */}
       <CrtFocusCamera active={crtFocus} view={crtFocusView} config={config} handoff={panelled} zoomRef={crtZoomRef} />
-      <PcFocusCamera active={pcFocus} screenRef={pcScreenRef} config={config} handoff={panelled} revealRef={obStateRef} />
+      <PcFocusCamera active={pcFocus} screenRef={pcCameraAnchorRef} config={config} handoff={panelled} revealRef={obStateRef} />
+      <OnlyBearsSceneDimmer stateRef={obStateRef} level={Number.isFinite(config.onlyBearsSceneLight) ? config.onlyBearsSceneLight : 0.3} />
+      <CatFocusCamera active={catViewOn} hold={catFocusOn && pcFocus} anchorRef={catAnchorRef} sleepAnchorRef={catSleepAnchorRef} config={config} handoff={panelled} />
       {flying ? (
         <IntroFlight
           to={intro.to}
@@ -13335,7 +14180,7 @@ function CampfireWorld({
         // !crtFocus: while the CRT close-up holds the camera, orbiting would
         // both fight it and - because onEnd writes the pose back - overwrite
         // this location's saved shot with the close-up. Back releases it.
-        enabled={!flying && !selectedObject && !crtFocus && !pcFocus && (!panelled || editing)}
+        enabled={!flying && !selectedObject && !crtFocus && !pcFocus && !catFocusOn && (!panelled || editing)}
         livePoseRef={cameraLivePoseRef}
         snapTo={(() => {
           // Reset target is per-campsite: in panelled mode, snap to that
@@ -13398,6 +14243,7 @@ function CampfireWorld({
           )}
           <Benches config={config} onSelect={onSelect} />
           <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} banjoPanRef={banjoPanRef} banjoGainRef={banjoGainRef} banjoTimeRef={banjoTimeRef} fishReactionRef={fishReactionRef} axeWatchRef={axeWatchRef} />
+          {chatArrowsUp ? <ChatChoiceArrows config={config} hover={chatHover} /> : null}
           {/* Wood pile near the bonfire, as if stacked ready to feed the fire. */}
           <Selectable
             name="campfire_wood_pile"
@@ -13409,7 +14255,7 @@ function CampfireWorld({
             baseScale={0.4}
           >
             <SafeAsset label="wood pile">
-              <WoodPile config={config} play={woodPlay} replayOnTune={editing || panel == null} onLogLand={handleWoodLand} onEmpty={handleWoodEmpty} />
+              <WoodPile config={config} play={woodPlay} replayOnTune={editing || panel == null} onLogLand={handleWoodLand} onEmpty={handleWoodEmpty} onRolling={setWoodRolling} />
             </SafeAsset>
           </Selectable>
           <Selectable
@@ -13422,6 +14268,24 @@ function CampfireWorld({
           >
             <SafeAsset label="banjo">
               <GLBModel url={BANJO_URL} />
+            </SafeAsset>
+          </Selectable>
+          {/* A red rotary telephone on the ground by the banjo (public/telephone_red.glb:
+              telephone.glb with its orange body recoloured red). Authored ~69 units
+              wide, so 0.0045 brings it to ~30 cm. Drag it from the lab
+              ("campfire_telephone"). */}
+          <Selectable
+            name="campfire_telephone"
+            onSelect={onSelect}
+            interactive={chatArrowsUp}
+            onHoverChange={chatHoverSet.phone}
+            config={config}
+            basePosition={[-1.55, 0, 1.75]}
+            baseRotationY={Math.PI}
+            baseScale={0.0045}
+          >
+            <SafeAsset label="telephone">
+              <GLBModel url={TELEPHONE_URL} />
             </SafeAsset>
           </Selectable>
           {/* Rowboat pulled up at the edge of the camp. First placement - drag /
@@ -13490,7 +14354,7 @@ function CampfireWorld({
           >
             <group position={[-0.013, 0.075, 0.008]}>
               <SafeAsset label="log & axe">
-                <LogAndAxe config={config} play={axePlay} watch={axeWatchRef} onLand={handleAxeLand} replayOnTune={editing || panel == null} />
+                <LogAndAxe config={config} play={axePlay} watch={axeWatchRef} onLand={handleAxeLand} onThrow={handleAxeThrow} replayOnTune={editing || panel == null} />
               </SafeAsset>
             </group>
           </Selectable>
@@ -13547,6 +14411,58 @@ function CampfireWorld({
                 <GLBModel url={STOOL_URL} />
               </SafeAsset>
             </group>
+          </Selectable>
+          {/* A second stool beside the first (the one by the tent, with the red
+              phone on it): same model, same size and ground height as that one's
+              saved placement, half a metre over and turned a little differently. */}
+          <Selectable
+            name="campfire_stool_2"
+            onSelect={onSelect}
+            config={config}
+            basePosition={[-0.98, -0.39, -1.98]}
+            baseRotationY={1.75}
+            baseScale={0.16 * 1.657}
+          >
+            <group position={[0, 2.0, 0]}>
+              <SafeAsset label="stool 2">
+                <GLBModel url={STOOL_URL} />
+              </SafeAsset>
+            </group>
+          </Selectable>
+          {/* Typewriter on the second stool (Typewriter by Naam). Authored ~0.56 m
+              wide with its centre at the origin, so 0.7 brings it to ~40 cm and
+              the lift sets its feet on the stool top (~0.42). Drag it from the
+              lab ("campfire_typewriter"). */}
+          <Selectable
+            name="campfire_typewriter"
+            onSelect={onSelect}
+            interactive={chatArrowsUp}
+            onHoverChange={chatHoverSet.type}
+            config={config}
+            basePosition={[-0.98, 0.42 + 0.133 * 0.7, -1.98]}
+            baseRotationY={Math.PI}
+            baseScale={0.7}
+          >
+            <SafeAsset label="typewriter">
+              <GLBModel url={TYPEWRITER_URL} />
+            </SafeAsset>
+            <TypewriterPaper />
+          </Selectable>
+          {/* Microphone on its stand next to the stools (public/microphone.glb,
+              authored ~1.6 m tall). Drag it from the lab ("campfire_microphone"). */}
+          <Selectable
+            name="campfire_microphone"
+            onSelect={onSelect}
+            interactive={chatArrowsUp}
+            onHoverChange={chatHoverSet.mic}
+            config={config}
+            basePosition={[-1.3, -0.39, -2.35]}
+            baseRotationY={Math.PI}
+            baseScale={0.95}
+          >
+            <SafeAsset label="microphone">
+              <MicrophoneStand extraHeight={config.campfireMicHeight ?? 0} shine={config.campfireMicShine ?? 0.45} gloss={config.campfireMicGloss ?? 0.82} metalness={config.campfireMicMetalness ?? 1} />
+            </SafeAsset>
           </Selectable>
           {/* Soju bottle floating just above the fish so it lands clearly in
               the current camera view. Drag/scale in the drawer to place it
@@ -13726,7 +14642,8 @@ function CampfireWorld({
               rattleAmp={config.hikeBagRattleAmp}
               rattleFreq={config.hikeBagRattleFreq}
               rattleDamp={config.hikeBagRattleDamp}
-              onLand={handleLeftBagContact}
+              soundEarly={config.leftBagSoundEarly ?? 0}
+              onSound={handleLeftBagContact}
             >
             <group position={[20.07, 0.005, 0.069]}>
               <SafeAsset label="hiking backpack">
@@ -13761,7 +14678,8 @@ function CampfireWorld({
               rattleDamp={config.bagRattleDamp}
               contactAngle={config.bagTipContact}
               onContact={handleRightBagContact}
-              onLand={handleRightBagLand}
+              soundEarly={config.rightBagSoundEarly ?? 0}
+              onSound={handleRightBagLand}
             >
               <SafeAsset label="backpack">
                 <GLBModel url={BACKPACK_URL} />
@@ -13775,6 +14693,7 @@ function CampfireWorld({
             name="campfire_fishing_rod"
             onSelect={onSelect}
             config={config}
+            interactive={crittersOn && rodPlay === 0}
             basePosition={[1.6, 0.05, 1.5]}
             baseRotationY={-0.4}
             baseScale={3}
@@ -13793,7 +14712,8 @@ function CampfireWorld({
               rattleAmp={config.rodRattleAmp}
               rattleFreq={config.rodRattleFreq}
               rattleDamp={config.rodRattleDamp}
-              onLand={handleRodContact}
+              soundEarly={config.rodSoundEarly ?? 0}
+              onSound={handleRodContact}
             >
               <SafeAsset label="fishing rod">
                 <GLBModel url={FISHING_ROD_URL} />
@@ -13925,7 +14845,7 @@ function CampfireWorld({
 
         <Location index={LOCATION_CABIN} config={config} gate={panelled && !flying}>
           <SafeAsset label="cabin">
-            <CabinSector config={config} onSelect={onSelect} pc={pcGlass} onlyBears={onlyBearsMount} />
+            <CabinSector config={config} onSelect={onSelect} pc={pcGlass} onlyBears={onlyBearsMount} catFocus={catFocusProps} catSleepFocus={catFocusTableProps} catSleepAnchor={catSleepAnchorRef} />
           </SafeAsset>
         </Location>
       </ObjectDragLayer>
@@ -13949,9 +14869,11 @@ export default function CampfireScene({
   titleHeld = false,
   cameraSnapSignal,
   onlyBearsPlaySignal,
+  onRequestPanel,
   cameraLivePoseRef,
   bearVoiceRef,
   onFishImpact,
+  chatChoice,
 }: {
   config: CampfireSceneConfig;
   onCameraChange?: (pos: [number, number, number], tgt: [number, number, number]) => void;
@@ -13975,6 +14897,9 @@ export default function CampfireScene({
   cameraSnapSignal?: number;
   /** Bumped by the lab's OnlyBears Play button: play the gag, or send him away. */
   onlyBearsPlaySignal?: number;
+  /** Ask the host to move to another location (0-2). OnlyBears uses it to
+   *  take you back to the campfire once he has finished. */
+  onRequestPanel?: (index: number) => void;
   /** Populated by the OrbitControls-managed camera every "change" event, so the
    *  lab can commit whatever is on screen right now via Save without needing a
    *  drag first. */
@@ -13984,6 +14909,9 @@ export default function CampfireScene({
   /** Optional because the scene lab has no voice client. */
   bearVoiceRef?: BearVoiceStateRef;
   onFishImpact?: () => void;
+  /** Site: before the bears start, arrows over the telephone, microphone and
+   *  typewriter ask how the visitor wants to talk; onChoose gets the pick. */
+  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void };
 }) {
   const cameraChangeHandler = onCameraChange ?? (() => {});
   const selectHandler = onSelect ?? (() => {});
@@ -14044,6 +14972,8 @@ export default function CampfireScene({
   // the master multiplier at the front lets a single knob quiet the whole
   // scene without touching per-track balance. Autoplay unlocks on the first
   // click anywhere (browsers require a gesture).
+  // every sound's lab tuning (speed / delay / start / boost / pan), see soundList
+  applySoundTuning(config as unknown as Record<string, unknown>);
   const master = clampUnit(config.masterVolume);
   useCampsiteAudioLoop(FIRE_CRACKLING_URL, {
     volume: master * clampUnit(config.fireCracklingVolume),
@@ -14055,6 +14985,14 @@ export default function CampfireScene({
   useCampsiteAudioLoop(ROCKING_CHAIR_SOUND_URL, {
     volume: master * clampUnit(config.rockingChairVolume),
     enabled: panel === LOCATION_CABIN,
+  });
+  // The porch gramophone's record, playing whenever you're at the cabin.
+  useCampsiteAudioLoop(GRAMOPHONE_SONG_URL, {
+    volume: master * clampUnit(Number.isFinite(config.gramophoneSongVolume) ? config.gramophoneSongVolume : 0.35),
+    enabled: panel === LOCATION_CABIN,
+    fadeMs: 1200,
+    liveMultiplier: gramophoneDuck,
+    timeRef: gramophoneSongClock,
   });
   // -1..1, written every frame inside the canvas (CampfireAnimals) from the
   // banjo bear's live head position relative to the camera - makes the loop
@@ -14081,8 +15019,6 @@ export default function CampfireScene({
   const playFireWhoosh = useCampsiteOneShot(FIRE_WHOOSH_URL);
   const playCrtZoomIn = useCampsiteOneShot(CRT_ZOOM_IN_URL);
   const playCrtZoomOut = useCampsiteOneShot(CRT_ZOOM_OUT_URL);
-  const playPcGlideIn = useCampsiteOneShot(PC_GLIDE_IN_URL);
-  const playPcGlideOut = useCampsiteOneShot(PC_GLIDE_OUT_URL);
 
   const onFishClickSound = () => playFishFlop(master * clampUnit(config.clickVolume));
   // Shared by both ways of landing in the fire: clicking it directly, and the
@@ -14091,8 +15027,11 @@ export default function CampfireScene({
   // throw is already paced by its own multi-second flight, so it doesn't
   // need one.
   const onFireWhooshSound = () => playFireWhoosh(master * clampUnit(config.clickVolume));
-  const playClickCue = () => playClick(master * clampUnit(config.clickVolume));
-  const playHoverCue = () => playHover(master * clampUnit(config.hoverVolume));
+  // The generic click.wav / hover.wav pops are switched off (they fired on
+  // every object); things with their own sound (fish, fire, CRT, PC...) keep it.
+  const GENERIC_UI_POPS = false;
+  const playClickCue = () => { if (GENERIC_UI_POPS) playClick(master * clampUnit(config.clickVolume)); };
+  const playHoverCue = () => { if (GENERIC_UI_POPS) playHover(master * clampUnit(config.hoverVolume)); };
   const playBackCue = () => playBack(master * clampUnit(config.clickVolume));
   // The CRT's own select/back/zoom cues, kept apart from the general
   // playClickCue every other clickable object in the scene uses - the CRT is
@@ -14101,8 +15040,9 @@ export default function CampfireScene({
   const playCrtEnterCue = () => playCrtZoomIn(master * clampUnit(config.swooshVolume));
   const playCrtExitCue = () => playCrtZoomOut(master * clampUnit(config.swooshVolume));
   // out is quieter and slowed a touch: a retreat, not a second arrival
-  const playPcGlideInCue = () => playPcGlideIn(master * clampUnit(config.swooshVolume));
-  const playPcGlideOutCue = () => playPcGlideOut(master * clampUnit(config.swooshVolume) * 0.8, 0.9);
+  // The computer uses the CRT's own zoom in / zoom out cues, at the same level.
+  const playPcGlideInCue = () => playCrtZoomIn(master * clampUnit(config.swooshVolume));
+  const playPcGlideOutCue = () => playCrtZoomOut(master * clampUnit(config.swooshVolume));
 
   // Ambient arcade music. Loops only on the arcade panel (scene 2) -
   // `enabled` drops it the moment you ring away to another campsite. Its
@@ -14211,9 +15151,11 @@ export default function CampfireScene({
         banjoTimeRef={banjoTimeRef}
         cameraSnapSignal={cameraSnapSignal}
         onlyBearsPlaySignal={onlyBearsPlaySignal}
+        onRequestPanel={onRequestPanel}
         cameraLivePoseRef={cameraLivePoseRef}
         bearVoiceRef={bearVoiceRef}
         onFishImpact={onFishImpact}
+        chatChoice={chatChoice}
       />
       {perfOn ? <PerfProbe onSample={setPerf} /> : null}
     </Canvas>

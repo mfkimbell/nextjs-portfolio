@@ -10,7 +10,7 @@ import Matte from "@/components/Matte";
  * Alphabet is composed from GLB letter meshes exported per-glyph from
  * simple_alphabet.glb (see nextjs/public/letters/*.glb).
  */
-const LETTER_WIDTHS: Record<string, number> = {
+export const LETTER_WIDTHS: Record<string, number> = {
   A: 0.9283, B: 0.7235, C: 0.7754, D: 0.7541, E: 0.7035, F: 0.6799,
   G: 0.8095, H: 0.8271, I: 0.3877, J: 0.8007, K: 0.8278, L: 0.6947,
   M: 1.1188, N: 0.8807, O: 0.7677, P: 0.7310, Q: 0.7296, R: 0.7643,

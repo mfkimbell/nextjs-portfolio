@@ -1,14 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChatChoice } from "@/components/scene-lab/CabinExtras";
 import CampfireScene from "@/components/scene-lab/CampfireScene";
 import SceneArrow from "@/components/SceneArrow";
 import CampsiteTitleIntro from "@/components/scene-lab/CampsiteTitleIntro";
 import ForceLandscape from "@/components/ForceLandscape";
 import ViewportDebug from "@/components/ViewportDebug";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
-import BearDialogue from "@/components/bear-dialogue";
-import { darkenedRgb, rgbFromChannels } from "@/components/bear-dialogue/color";
+import ConfiguredBearDialogue from "@/components/bear-dialogue/ConfiguredBearDialogue";
 import { useBearVoiceAgent } from "@/hooks/useBearVoiceAgent";
 import { useLiveKitBearAgent } from "@/hooks/use-livekit-bear-agent";
 import { DEFAULT_CAMPFIRE_CONFIG, type CampfireSceneConfig } from "@/components/scene-lab/sceneConfig";
@@ -52,6 +52,9 @@ const PANELS = [
  * "site" is the finished experience: camera pinned to one of three sectors, arrow on
  * the left to move round the fire.
  */
+/** Twilio number whose Voice webhook points at /call (ConversationRelay). */
+const BEAR_PHONE_NUMBER = process.env.NEXT_PUBLIC_BEAR_PHONE_NUMBER || "+1 (855) 471-0900";
+
 export default function CampsiteHome() {
   const [mode, setMode] = useState<Mode>("site");
   const [panel, setPanel] = useState(0);
@@ -76,11 +79,42 @@ export default function CampsiteHome() {
   const startLiveKit = liveKitBearAgent.start;
   const activeBearAgent = voiceTransport === "livekit" ? liveKitBearAgent : bearVoiceAgent;
   const [dialogueStarted, setDialogueStarted] = useState(false);
+  // Order of events: the title click releases the intro flight; the camera
+  // lands and the bears say hello (no mic, nothing asked of the visitor);
+  // only once their greeting is OVER do the three 3D arrows appear over the
+  // telephone (call a real Twilio number), the microphone (talk - the
+  // browser asks for the mic right then) and the typewriter (type).
+  const [chatMode, setChatMode] = useState<ChatChoice | null>(null);
+  const [greeted, setGreeted] = useState(false);
+  const greetAskedRef = useRef(false);
   const startBearsDuringFlight = useCallback(async () => {
     setTitleHeld(false);
-    await activeBearAgent.start();
-    await activeBearAgent.beginConversation?.();
-  }, [activeBearAgent]);
+  }, []);
+  // ask the bears to greet - on the title's "enter" click, so the browser
+  // counts it as a gesture and lets their audio play
+  const askForGreeting = useCallback(() => {
+    if (greetAskedRef.current) return;
+    greetAskedRef.current = true;
+    if (voiceTransport !== "livekit") { bearVoiceAgent.stop(); setVoiceTransport("livekit"); }
+    void (async () => {
+      await liveKitBearAgent.start();
+      await liveKitBearAgent.beginConversation?.({ microphone: false });
+    })();
+  }, [bearVoiceAgent, liveKitBearAgent, voiceTransport]);
+  const chooseChatMode = useCallback(async (choice: ChatChoice) => {
+    setChatMode(choice);
+    if (choice === "phone") {           // just shows the number; Twilio's /call webhook takes the call
+      await liveKitBearAgent.setMicrophone?.(false);
+      return;
+    }
+    if (choice === "type") {            // typing goes over the LiveKit data channel, mic stays off
+      await liveKitBearAgent.setMicrophone?.(false);
+      return;
+    }
+    // "talk": this is where the browser's microphone prompt appears
+    const ok = await liveKitBearAgent.setMicrophone?.(true);
+    if (ok === false) setChatMode(null);   // refused: back to the three choices
+  }, [liveKitBearAgent]);
   const selectTwilioTransport = useCallback(() => {
     liveKitBearAgent.stop();
     setVoiceTransport("twilio");
@@ -117,6 +151,18 @@ export default function CampsiteHome() {
   useEffect(() => {
     if (activeBearAgent.isRemoteSpeaking) setDialogueStarted(true);
   }, [activeBearAgent.isRemoteSpeaking]);
+  // The greeting is over when the agent hands the turn over. Fallbacks so the
+  // choices can never get stuck hidden: a beat of silence after the bears
+  // have spoken, or 15 s after entering if the bears never connect at all.
+  useEffect(() => {
+    if (greeted || showTitle) return;
+    if (activeBearAgent.dialoguePhase === "your-turn" && !activeBearAgent.isRemoteSpeaking) { setGreeted(true); return; }
+    const wait = dialogueStarted && !activeBearAgent.isRemoteSpeaking ? 2500 : dialogueStarted ? null : 15000;
+    if (wait == null) return;
+    const t = window.setTimeout(() => setGreeted(true), wait);
+    return () => window.clearTimeout(t);
+  }, [greeted, showTitle, dialogueStarted, activeBearAgent.dialoguePhase, activeBearAgent.isRemoteSpeaking]);
+  const choosing = !showTitle && greeted && chatMode == null && panel === 0;
 
   useEffect(() => {
     if (mode !== "site" || voiceTransport !== "livekit") return;
@@ -129,7 +175,7 @@ export default function CampsiteHome() {
       const next: Mode = m === "config" ? "site" : "config";
       try { window.localStorage.setItem(MODE_KEY, next); } catch { /* ignore */ }
       // Re-arm the title whenever we come back into site mode.
-      if (next === "site") { setShowTitle(true); setTitleHeld(true); }
+      if (next === "site") { setShowTitle(true); setTitleHeld(true); setChatMode(null); setGreeted(false); greetAskedRef.current = false; }
       return next;
     });
   }, []);
@@ -211,19 +257,50 @@ export default function CampsiteHome() {
         <CampfireScene
           config={config}
           panel={panel}
+          onRequestPanel={setPanel}
           intro
           titleHeld={titleHeld}
           bearVoiceRef={activeBearAgent.voiceRef}
           onFishImpact={activeBearAgent.reactToFishFire}
+          chatChoice={{ show: choosing, onChoose: chooseChatMode }}
         />
 
-        {!showTitle && panel === 0 ? (
+        {choosing ? (
+          <div className="pointer-events-none absolute bottom-28 left-1/2 z-30 -translate-x-1/2 rounded-full border-2 border-[#96754a] bg-[#fff8df]/90 px-5 py-2 text-center text-sm font-semibold text-[#6f5839] shadow-lg">
+            How do you want to talk to the bears? Call, talk or type.
+          </div>
+        ) : null}
+
+        {chatMode === "phone" && panel === 0 ? (
+          <div className="pointer-events-auto absolute bottom-20 left-1/2 z-40 w-[min(22rem,90vw)] -translate-x-1/2 rounded-3xl border-2 border-[#96754a] bg-[#fff8df] p-5 text-center text-[#6f5839] shadow-xl">
+            <p className="text-sm">Give the bears a ring at</p>
+            {BEAR_PHONE_NUMBER ? (
+              <a href={`tel:${BEAR_PHONE_NUMBER.replace(/[^+\d]/g, "")}`} className="mt-1 block text-2xl font-bold tracking-wide text-[#3a2410] underline-offset-4 hover:underline">{BEAR_PHONE_NUMBER}</a>
+            ) : (
+              <p className="mt-1 text-2xl font-bold text-[#3a2410]">(number coming soon)</p>
+            )}
+            <p className="mt-2 text-xs opacity-80">Smokey and Maple pick up on the first ring.</p>
+            <button type="button" onClick={() => setChatMode(null)} className="mt-4 rounded-full border-2 border-[#96754a] bg-white px-4 py-1.5 text-sm">Back</button>
+          </div>
+        ) : null}
+
+        {(chatMode === "mic" || chatMode === "type") && panel === 0 ? (
+          <button
+            type="button"
+            onClick={() => { void liveKitBearAgent.setMicrophone?.(false); setChatMode(null); }}
+            className="pointer-events-auto absolute right-4 bottom-4 z-40 rounded-full border-2 border-[#96754a] bg-[#fff8df] px-3 py-1.5 text-xs font-semibold text-[#6f5839] shadow-lg"
+          >
+            {chatMode === "mic" ? "🎙 talking - switch" : "⌨ typing - switch"}
+          </button>
+        ) : null}
+
+        {false && !showTitle && panel === 0 ? (
           <div className="pointer-events-auto absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 gap-1 rounded-full border border-white/20 bg-black/70 p-1 text-[0.65rem] text-white shadow-lg backdrop-blur-md">
             <button type="button" onClick={selectTwilioTransport} className={`rounded-full px-2 py-1 ${voiceTransport === "twilio" ? "bg-amber-200 text-stone-950" : "text-white/70"}`}>Twilio</button>
             <button type="button" onClick={selectLiveKitTransport} className={`rounded-full px-2 py-1 ${voiceTransport === "livekit" ? "bg-amber-200 text-stone-950" : "text-white/70"}`}>LiveKit beta</button>
           </div>
         ) : null}
-        {dialogueStarted && panel === 0 ? <BearDialogue agent={activeBearAgent} opacity={config.bearDialogueOpacity} blurPx={config.bearDialogueBlurPx} scale={config.bearDialogueScale} bottomRem={config.bearDialogueBottomRem} font={config.bearDialogueFont} motionOn={config.bearDialogueMotionOn} popStiffness={config.bearDialoguePopStiffness} popDamping={config.bearDialoguePopDamping} leftTiltDeg={config.bearDialogueLeftTiltDeg} rightTiltDeg={config.bearDialogueRightTiltDeg} widthRem={config.bearDialogueWidthRem} minHeightRem={config.bearDialogueMinHeightRem} cloudFlow={config.bearDialogueCloudFlow} cloudCycleSec={config.bearDialogueCloudCycleSec} roundness={config.bearDialogueRoundness} waveDirection={config.bearDialogueWaveDirection} rippleScale={config.bearDialogueRippleScale} waveAmplitude={config.bearDialogueWaveAmplitude} waveSpeed={config.bearDialogueWaveSpeed} waveSpacing={config.bearDialogueWaveSpacing} textSizeRem={config.bearDialogueTextSizeRem} textPaddingXRem={config.bearDialogueTextPaddingXRem} textPaddingYRem={config.bearDialogueTextPaddingYRem} textColor={`rgb(${config.bearDialogueTextColorR * 255} ${config.bearDialogueTextColorG * 255} ${config.bearDialogueTextColorB * 255})`} borderOn={config.bearDialogueBorderOn} borderWidthPx={config.bearDialogueBorderWidthPx} borderColor={`rgb(${config.bearDialogueBorderColorR * 255} ${config.bearDialogueBorderColorG * 255} ${config.bearDialogueBorderColorB * 255})`} nameTagXRem={config.bearDialogueNameTagXRem} nameTagYRem={config.bearDialogueNameTagYRem} nameTagScale={config.bearDialogueNameTagScale} nameTagAnchor={config.bearDialogueNameTagAnchor} nameTagInsetXRem={config.bearDialogueNameTagInsetXRem} nameTagInsetYRem={config.bearDialogueNameTagInsetYRem} nameTagWaveAmplitude={config.bearDialogueNameTagWaveAmplitude} nameTagWaveSpeed={config.bearDialogueNameTagWaveSpeed} nameTagWaveSpacing={config.bearDialogueNameTagWaveSpacing} nameTagRoundness={config.bearDialogueNameTagRoundness} nameTagOutlineOn={config.bearDialogueNameTagOutlineOn} nameTagOutlineWidthPx={config.bearDialogueNameTagOutlineWidthPx} smokeyTagFill={rgbFromChannels(config.bearDialogueSmokeyTagColorR, config.bearDialogueSmokeyTagColorG, config.bearDialogueSmokeyTagColorB)} smokeyTagShadow={darkenedRgb(config.bearDialogueSmokeyTagColorR, config.bearDialogueSmokeyTagColorG, config.bearDialogueSmokeyTagColorB, config.bearDialogueNameTagShadowDarken)} mapleTagFill={rgbFromChannels(config.bearDialogueMapleTagColorR, config.bearDialogueMapleTagColorG, config.bearDialogueMapleTagColorB)} mapleTagShadow={darkenedRgb(config.bearDialogueMapleTagColorR, config.bearDialogueMapleTagColorG, config.bearDialogueMapleTagColorB, config.bearDialogueNameTagShadowDarken)} youTagFill={rgbFromChannels(config.bearDialogueYouTagColorR, config.bearDialogueYouTagColorG, config.bearDialogueYouTagColorB)} youTagShadow={darkenedRgb(config.bearDialogueYouTagColorR, config.bearDialogueYouTagColorG, config.bearDialogueYouTagColorB, config.bearDialogueNameTagShadowDarken)} nameTagOutlineColor={`rgb(${config.bearDialogueNameTagOutlineColorR * 255} ${config.bearDialogueNameTagOutlineColorG * 255} ${config.bearDialogueNameTagOutlineColorB * 255} / ${config.bearDialogueNameTagOutlineOpacity})`} smokeyNameTiltDeg={config.bearDialogueSmokeyNameTiltDeg} mapleNameTiltDeg={config.bearDialogueMapleNameTiltDeg} smokeyIconSizeRem={config.bearDialogueSmokeyIconSizeRem} smokeyIconAnchor={config.bearDialogueSmokeyIconAnchor} smokeyIconInsetXRem={config.bearDialogueSmokeyIconInsetXRem} smokeyIconInsetYRem={config.bearDialogueSmokeyIconInsetYRem} smokeyIconKeepInside={config.bearDialogueSmokeyIconKeepInside} smokeyIconXRem={config.bearDialogueSmokeyIconXRem} smokeyIconYRem={config.bearDialogueSmokeyIconYRem} smokeyIconTiltDeg={config.bearDialogueSmokeyIconTiltDeg} smokeyIconTextClearanceRem={config.bearDialogueSmokeyIconTextClearanceRem} smokeyIconOpacity={config.bearDialogueSmokeyIconOpacity} smokeyIconBorderOn={config.bearDialogueSmokeyIconBorderOn} smokeyIconBorderWidthPx={config.bearDialogueSmokeyIconBorderWidthPx} smokeyIconBorderColor={`rgb(${config.bearDialogueSmokeyIconBorderColorR * 255} ${config.bearDialogueSmokeyIconBorderColorG * 255} ${config.bearDialogueSmokeyIconBorderColorB * 255} / ${config.bearDialogueSmokeyIconBorderOpacity})`} smokeyIconShadowXRem={config.bearDialogueSmokeyIconShadowXRem} smokeyIconShadowYRem={config.bearDialogueSmokeyIconShadowYRem} smokeyIconShadowBlurPx={config.bearDialogueSmokeyIconShadowBlurPx} smokeyIconShadowLayers={config.bearDialogueSmokeyIconShadowLayers} smokeyIconShadowOpacity={config.bearDialogueSmokeyIconShadowOpacity} smokeyIconShadowColor={`rgb(${config.bearDialogueSmokeyIconShadowColorR * 255} ${config.bearDialogueSmokeyIconShadowColorG * 255} ${config.bearDialogueSmokeyIconShadowColorB * 255} / ${config.bearDialogueSmokeyIconShadowOpacity})`} smokeyIconGlowPx={config.bearDialogueSmokeyIconGlowPx} smokeyIconGlowPasses={config.bearDialogueSmokeyIconGlowPasses} smokeyIconGlowOpacity={config.bearDialogueSmokeyIconGlowOpacity} smokeyIconGlowColor={`rgb(${config.bearDialogueSmokeyIconGlowColorR * 255} ${config.bearDialogueSmokeyIconGlowColorG * 255} ${config.bearDialogueSmokeyIconGlowColorB * 255} / ${config.bearDialogueSmokeyIconGlowOpacity})`} smokeyIconAutoClearanceOn={config.bearDialogueSmokeyIconAutoClearanceOn} /> : null}
+        {dialogueStarted && panel === 0 && !(choosing && !activeBearAgent.isRemoteSpeaking) && chatMode !== "phone" ? <ConfiguredBearDialogue agent={activeBearAgent} chatMode={chatMode === "mic" || chatMode === "type" ? chatMode : undefined} config={config} /> : null}
 
 
       {showTitle ? (
@@ -231,6 +308,7 @@ export default function CampsiteHome() {
           onUnmute={startBearsDuringFlight}
           onEnter={() => {
             setShowTitle(false);
+            askForGreeting();
             // Same swoosh the scene-to-scene switches use, hand-fired here
             // because this transition doesn't change `panel` (already 0)
             // for the panel-change effect above to catch - it's the camera

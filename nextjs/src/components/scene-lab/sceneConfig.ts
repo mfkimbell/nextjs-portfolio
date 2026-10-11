@@ -2,6 +2,8 @@ import savedCampfire from "@/config/campfireScene.json";
 import savedCameraDefaults from "@/config/cameraDefaults.json";
 
 export interface CampfireSceneConfig extends BugSwarmTweaks {
+  /** Per-sound tuning, sfx_<id>_<vol|rate|delay|start|end|pan> - see soundList.ts. */
+  [key: `sfx_${string}`]: number;
   cameraX: number;
   cameraY: number;
   cameraZ: number;
@@ -241,8 +243,50 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   deskComputerAimPitchDeg: number;
   /** Screen light casts shadows (1) / doesn't (0). */
   deskComputerShadow: number;
+  /** 1 = the monitor's light casts the porch cats' shadows (only theirs, so
+   *  the rest of the cabin is untouched even with deskComputerShadow off). */
+  deskComputerCatShadow: number;
+  /** Darkness of the cats' monitor-light shadows, 0 - 1. */
+  catShadowStrength: number;
+  /** Size of those shadows (x the cat's footprint). */
+  catShadowSize: number;
+  /** How far they stretch away from the monitor. */
+  catShadowLength: number;
+  /** Chair cat's monitor shadow: darkness 0-1. */
+  catShadowSitStrength: number;
+  /** Chair cat's monitor shadow: length x natural (a lower pretend light). */
+  catShadowSitLength: number;
+  /** Chair cat's monitor shadow: swing round the cat, deg. */
+  catShadowSitTurn: number;
+  /** Chair cat's monitor shadow: reach before fading, x cat height. */
+  catShadowSitRadius: number;
+  /** Chair cat's monitor shadow: 0 hard cut - 1 fades from the paws. */
+  catShadowSitFade: number;
+  /** Chair cat's monitor shadow: nudge x (m). */
+  catShadowSitShiftX: number;
+  /** Chair cat's monitor shadow: nudge z (m). */
+  catShadowSitShiftZ: number;
+  /** Chair cat's monitor shadow: sideways squash, 1 = true. */
+  catShadowSitWidth: number;
+  /** Table cat's monitor shadow: darkness 0-1. */
+  catShadowSleepStrength: number;
+  /** Table cat's monitor shadow: length x natural (a lower pretend light). */
+  catShadowSleepLength: number;
+  /** Table cat's monitor shadow: swing round the cat, deg. */
+  catShadowSleepTurn: number;
+  /** Table cat's monitor shadow: reach before fading, x cat height. */
+  catShadowSleepRadius: number;
+  /** Table cat's monitor shadow: 0 hard cut - 1 fades from the paws. */
+  catShadowSleepFade: number;
+  /** Table cat's monitor shadow: nudge x (m). */
+  catShadowSleepShiftX: number;
+  /** Table cat's monitor shadow: nudge z (m). */
+  catShadowSleepShiftZ: number;
+  /** Table cat's monitor shadow: sideways squash, 1 = true. */
+  catShadowSleepWidth: number;
   /** Brightness of the desktop picture on the glass itself (1 = as drawn). */
   deskComputerGlassBrightness: number;
+  deskComputerLidCloseDeg: number;
   /** Warm ambient fill just for the desk scene - a HemisphereLight parented
    *  inside ContactSector, so it only lights the desk without touching the
    *  campfire or arcade. Tunable so the whole desk can read cozier or dim. */
@@ -895,8 +939,11 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   /** Cabin computer's synthesized hardware sounds (mouse, keys, drive,
    *  monitor), on top of master. */
   pcSoundVolume: number;
+  /** Volume of the Windows-style startup jingle when you click into the cabin computer. */
+  pcStartupVolume: number;
   /** OnlyBears reveal shot: how far back from the glass, in screen heights. */
   pcRevealBack: number;
+  pcRevealSettle: number;
   /** OnlyBears reveal shot: camera height above the screen centre, screen heights. */
   pcRevealHeight: number;
   /** OnlyBears reveal shot: aim point above the screen centre, screen heights. */
@@ -960,11 +1007,521 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   onlyBearsLook: number;
   /** OnlyBears: chest breathing while he holds the pose (arms stay put). */
   onlyBearsBreath: number;
+  /** OnlyBears: the "no" head shake after the pats, 0 = none, 1 = full. */
+  onlyBearsShake: number;
+  /** Scene 3 moon, rising behind the cabin. 0 = hidden. */
+  cabinMoonOn: number;
+  /** Degrees left of scene 3's centre line (negative = right). */
+  cabinMoonLeft: number;
+  /** Degrees above scene 3's centre line. */
+  cabinMoonUp: number;
+  /** How far out the moon sits, in scene units. */
+  cabinMoonDistance: number;
+  /** The moon's size on screen, degrees across. */
+  cabinMoonSize: number;
+  /** Moon bloom strength, 0 = none. */
+  cabinMoonGlow: number;
+  /** Moon brightness, 1 = as painted. */
+  cabinMoonBrightness: number;
+  /** Moon disc colour (white by default). */
+  cabinMoonColorR: number;
+  cabinMoonColorG: number;
+  cabinMoonColorB: number;
+  /** Moon surface detail strength, 0 = solid colour. */
+  cabinMoonTexture: number;
+  /** Number of craters. */
+  cabinMoonCraters: number;
+  /** Crater size multiplier. */
+  cabinMoonCraterSize: number;
+  /** Big soft grey seas, strength. */
+  cabinMoonMaria: number;
+  /** Darkening towards the moon rim, 0 = flat. */
+  cabinMoonLimb: number;
+  /** Changes the crater layout. */
+  cabinMoonSeed: number;
+  /** How far the bloom reaches, x the moon radius. */
+  cabinMoonGlowSize: number;
+  /** Bloom falloff: higher = tight to the rim, lower = hazy. */
+  cabinMoonGlowSoftness: number;
+  /** Bloom colour. */
+  cabinMoonGlowColorR: number;
+  cabinMoonGlowColorG: number;
+  cabinMoonGlowColorB: number;
+  /** Speed of the two table cats' loops (sitting idle, sleeping breath). */
+  cabinCatSpeed: number;
+  /** Volume of the cats purring when petted. */
+  catPurrVolume: number;
+  /** Volume of the fur-scratch sound while petting a cat. */
+  catScratchVolume: number;
+  /** Chair-cat close-up: how far out the camera stands. */
+  catFocusDistance: number;
+  /** Chair-cat close-up: camera height above the middle of the cat. */
+  catFocusHeight: number;
+  /** Chair-cat close-up: swing round the cat, degrees. */
+  /** Cat close-up: 1 frames both porch cats, 0 just the chair cat. */
+  catFocusBoth: number;
+  /** Cat close-up: breathing room round the two cats (1 = tight). */
+  catFocusFit: number;
+  /** Lab: 1 holds the cat petting close-up on, so it can be tuned live. */
+  catFocusPreview: number;
+  /** Petting close-up: how much the cats turn their heads to look at you (0 - 1). */
+  catLookAtCamera: number;
+  /** ...and the furthest their heads turn to do it (deg). */
+  catLookMaxDeg: number;
+  /** Chair cat gaze: How much the head follows the cursor. */
+  catGazeSitAmount: number;
+  /** Chair cat gaze: 1 = also follow the cursor in the normal cabin view. */
+  catGazeSitAlways: number;
+  /** Chair cat gaze: Yaw limit to the cat's left. */
+  catGazeSitMaxLeft: number;
+  /** Chair cat gaze: Yaw limit to the cat's right. */
+  catGazeSitMaxRight: number;
+  /** Chair cat gaze: Pitch limit upward. */
+  catGazeSitMaxUp: number;
+  /** Chair cat gaze: Pitch limit downward (keeps the chin off the chest). */
+  catGazeSitMaxDown: number;
+  /** Chair cat gaze: Multiplier on the wanted side-to-side angle. */
+  catGazeSitYawGain: number;
+  /** Chair cat gaze: Multiplier on the wanted up/down angle. */
+  catGazeSitPitchGain: number;
+  /** Chair cat gaze: Bias added to the side-to-side angle. */
+  catGazeSitYawOffset: number;
+  /** Chair cat gaze: Bias added to the up/down angle. */
+  catGazeSitPitchOffset: number;
+  /** Chair cat gaze: Angles smaller than this are ignored. */
+  catGazeSitDeadzone: number;
+  /** Chair cat gaze: Smoothing speed of the look target. */
+  catGazeSitFollow: number;
+  /** Chair cat gaze: Speed of easing the look in and out. */
+  catGazeSitBlend: number;
+  /** Chair cat gaze: Fraction of the rotation done by the upper spine instead of the head. */
+  catGazeSitNeckShare: number;
+  /** Chair cat gaze: Roll added in proportion to the sideways turn. */
+  catGazeSitTilt: number;
+  /** Chair cat gaze: How far out along the cursor ray the cat looks. */
+  catGazeSitDepth: number;
+  /** Chair cat gaze: how gently it turns when the cursor passes overhead (higher = smoother, less turn). */
+  catGazeSitOverhead: number;
+  /** Chair cat gaze: neck leans forward when looking down (x the down angle). */
+  catGazeSitLean: number;
+  /** Chair cat gaze: most forward neck lean, degrees. */
+  catGazeSitLeanMax: number;
+  /** Chair cat gaze: how far the neck stretches forward when looking down (model units). */
+  catGazeSitReach: number;
+  /** Chair cat gaze: neck bend when looking UP (x). */
+  catGazeSitNeckUp: number;
+  /** Chair cat gaze: neck bend when looking DOWN (x). */
+  catGazeSitNeckDown: number;
+  /** Chair cat gaze: share of a sideways turn done by the neck. */
+  catGazeSitNeckTurn: number;
+  /** Chair cat gaze: hold the head in place while the neck turns (0-1). */
+  catGazeSitHeadPin: number;
+  /** Chair cat gaze: most the neck may slide to hold the head (model units). */
+  catGazeSitNeckSlideMax: number;
+  /** Chair cat gaze: spread the head's turn down the neck (0-1) so it doesn't pinch thin. */
+  catGazeSitTwistSpread: number;
+  /** Chair cat gaze: leans its neck in this many degrees toward a cursor out in front. */
+  catGazeSitLeanForward: number;
+  /** Chair cat gaze: how much a cursor straight in front sets off the lean-in (0-1). */
+  catGazeSitLeanFrontWeight: number;
+  /** Chair cat gaze: lean-in zone direction, turn (deg, + = its left / your right). */
+  catGazeSitLeanZoneYaw: number;
+  /** Chair cat gaze: lean-in zone direction, up/down (deg). */
+  catGazeSitLeanZonePitch: number;
+  /** Chair cat gaze: lean-in zone width (deg, 0 = off). */
+  catGazeSitLeanZoneWidth: number;
+  /** Table cat gaze: How much the head follows the cursor. */
+  catGazeSleepAmount: number;
+  /** Table cat gaze: 1 = also follow the cursor in the normal cabin view. */
+  catGazeSleepAlways: number;
+  /** Table cat gaze: Yaw limit to the cat's left. */
+  catGazeSleepMaxLeft: number;
+  /** Table cat gaze: Yaw limit to the cat's right. */
+  catGazeSleepMaxRight: number;
+  /** Table cat gaze: Pitch limit upward. */
+  catGazeSleepMaxUp: number;
+  /** Table cat gaze: Pitch limit downward (keeps the chin off the chest). */
+  catGazeSleepMaxDown: number;
+  /** Table cat gaze: Multiplier on the wanted side-to-side angle. */
+  catGazeSleepYawGain: number;
+  /** Table cat gaze: Multiplier on the wanted up/down angle. */
+  catGazeSleepPitchGain: number;
+  /** Table cat gaze: Bias added to the side-to-side angle. */
+  catGazeSleepYawOffset: number;
+  /** Table cat gaze: Bias added to the up/down angle. */
+  catGazeSleepPitchOffset: number;
+  /** Table cat gaze: Angles smaller than this are ignored. */
+  catGazeSleepDeadzone: number;
+  /** Table cat gaze: Smoothing speed of the look target. */
+  catGazeSleepFollow: number;
+  /** Table cat gaze: Speed of easing the look in and out. */
+  catGazeSleepBlend: number;
+  /** Table cat gaze: Fraction of the rotation done by the upper spine instead of the head. */
+  catGazeSleepNeckShare: number;
+  /** Table cat gaze: Roll added in proportion to the sideways turn. */
+  catGazeSleepTilt: number;
+  /** Table cat gaze: How far out along the cursor ray the cat looks. */
+  catGazeSleepDepth: number;
+  /** Table cat gaze: how gently it turns when the cursor passes overhead (higher = smoother, less turn). */
+  catGazeSleepOverhead: number;
+  /** Table cat gaze: neck leans forward when looking down (x the down angle). */
+  catGazeSleepLean: number;
+  /** Table cat gaze: most forward neck lean, degrees. */
+  catGazeSleepLeanMax: number;
+  /** Table cat gaze: how far the neck stretches forward when looking down (model units). */
+  catGazeSleepReach: number;
+  /** Table cat gaze: neck bend when looking UP (x). */
+  catGazeSleepNeckUp: number;
+  /** Table cat gaze: neck bend when looking DOWN (x). */
+  catGazeSleepNeckDown: number;
+  /** Table cat gaze: share of a sideways turn done by the neck. */
+  catGazeSleepNeckTurn: number;
+  /** Table cat gaze: hold the head in place while the neck turns (0-1). */
+  catGazeSleepHeadPin: number;
+  /** Table cat gaze: most the neck may slide to hold the head (model units). */
+  catGazeSleepNeckSlideMax: number;
+  /** Table cat gaze: spread the head's turn down the neck (0-1) so it doesn't pinch thin. */
+  catGazeSleepTwistSpread: number;
+  /** Table cat gaze: leans its neck in this many degrees toward a cursor out in front. */
+  catGazeSleepLeanForward: number;
+  /** Table cat gaze: how much a cursor straight in front sets off the lean-in (0-1). */
+  catGazeSleepLeanFrontWeight: number;
+  /** Table cat gaze: lean-in zone direction, turn (deg, + = its left / your right). */
+  catGazeSleepLeanZoneYaw: number;
+  /** Table cat gaze: lean-in zone direction, up/down (deg). */
+  catGazeSleepLeanZonePitch: number;
+  /** Table cat gaze: lean-in zone width (deg, 0 = off). */
+  catGazeSleepLeanZoneWidth: number;
+  /** Petting close-up: 1 = pull back automatically to fit both cats (scaled
+   *  by catFocusFit); 0 = use catFocusDistance exactly. */
+  catFocusAutoFit: number;
+  /** Petting close-up: point looked at, raised this much (m). */
+  catFocusAimHeight: number;
+  /** Petting close-up: slide the whole shot left/right (m). */
+  catFocusSide: number;
+  /** Petting close-up: slide the point looked at toward / away from the camera (m). */
+  catFocusForward: number;
+  /** Petting close-up: lens zoom (field of view, deg) while in the close-up. */
+  catFocusFov: number;
+  catFocusYaw: number;
+  /** chair cat fur colour, sRGB 0..1. */
+  catSitFurR: number;
+  catSitFurG: number;
+  catSitFurB: number;
+  /** chair cat stripe colour, sRGB 0..1. */
+  catSitStripeR: number;
+  catSitStripeG: number;
+  catSitStripeB: number;
+  /** sleeping cat fur colour, sRGB 0..1. */
+  catSleepFurR: number;
+  catSleepFurG: number;
+  catSleepFurB: number;
+  /** sleeping cat stripe colour, sRGB 0..1. */
+  catSleepStripeR: number;
+  catSleepStripeG: number;
+  catSleepStripeB: number;
+  /** Chair cat: tabby stripe strength, 0 = solid. */
+  catSitStripes: number;
+  /** Sleeping cat: tabby stripe strength, 0 = solid. */
+  catSleepStripes: number;
+  /** White nose blaze, muzzle and chest bib on the chair cat, 0 none - 1 full. */
+  catSitWhite: number;
+  /** Same for the shelf cat. */
+  catSleepWhite: number;
+  /** How chubby the chair cat is, 0 as built - 1 round belly (up to 1.5). */
+  catSitFat: number;
+  /** Chair cat white markings: size 0..1 (0.5 as designed). */
+  catSitWhiteSize: number;
+  /** Chair cat white markings: edge, 0 soft - 1 crisp line. */
+  catSitWhiteEdge: number;
+  /** Same for the shelf cat. */
+  catSleepFat: number;
+  /** Table cat white markings: size 0..1 (0.5 as designed). */
+  catSleepWhiteSize: number;
+  /** Table cat white markings: edge, 0 soft - 1 crisp line. */
+  catSleepWhiteEdge: number;
+  /** Chair cat: share of the chubbiness that goes to the belly / the flanks. */
+  catSitFatBelly: number;
+  catSitFatWide: number;
+  /** Shelf cat: same. */
+  catSleepFatBelly: number;
+  catSleepFatWide: number;
+  /** Cat eye catchlights (see CabinExtras CatGlint). */
+  catGlintLeftX: number;
+  catGlintLeftY: number;
+  catGlintRightX: number;
+  catGlintRightY: number;
+  catGlintSize: number;
+  catGlintSecond: number;
+  /** Chair cat painted eye: On. */
+  catIrisSitOn: number;
+  /** Chair cat painted eye: InR. */
+  catIrisSitInR: number;
+  /** Chair cat painted eye: InG. */
+  catIrisSitInG: number;
+  /** Chair cat painted eye: InB. */
+  catIrisSitInB: number;
+  /** Chair cat painted eye: OutR. */
+  catIrisSitOutR: number;
+  /** Chair cat painted eye: OutG. */
+  catIrisSitOutG: number;
+  /** Chair cat painted eye: OutB. */
+  catIrisSitOutB: number;
+  /** Chair cat painted eye: Size. */
+  catIrisSitSize: number;
+  /** Chair cat painted eye: X. */
+  catIrisSitX: number;
+  /** Chair cat painted eye: Y. */
+  catIrisSitY: number;
+  /** Chair cat painted eye: PupilW. */
+  catIrisSitPupilW: number;
+  /** Chair cat painted eye: PupilH. */
+  catIrisSitPupilH: number;
+  /** Chair cat painted eye: Ring. */
+  catIrisSitRing: number;
+  /** Chair cat painted eye: Shade. */
+  catIrisSitShade: number;
+  /** Chair cat painted eye: Glow. */
+  catIrisSitGlow: number;
+  /** Chair cat painted eye: Bright. */
+  catIrisSitBright: number;
+  /** Chair cat painted eye: pupil follows the cursor, side to side (negative flips). */
+  catIrisSitTrackX: number;
+  /** Chair cat painted eye: pupil follows the cursor, up / down. */
+  catIrisSitTrackY: number;
+  /** Chair cat painted eye: pupil edge softness. */
+  catIrisSitPupilSoft: number;
+  /** Table cat painted eye: On. */
+  catIrisSleepOn: number;
+  /** Table cat painted eye: InR. */
+  catIrisSleepInR: number;
+  /** Table cat painted eye: InG. */
+  catIrisSleepInG: number;
+  /** Table cat painted eye: InB. */
+  catIrisSleepInB: number;
+  /** Table cat painted eye: OutR. */
+  catIrisSleepOutR: number;
+  /** Table cat painted eye: OutG. */
+  catIrisSleepOutG: number;
+  /** Table cat painted eye: OutB. */
+  catIrisSleepOutB: number;
+  /** Table cat painted eye: Size. */
+  catIrisSleepSize: number;
+  /** Table cat painted eye: X. */
+  catIrisSleepX: number;
+  /** Table cat painted eye: Y. */
+  catIrisSleepY: number;
+  /** Table cat painted eye: PupilW. */
+  catIrisSleepPupilW: number;
+  /** Table cat painted eye: PupilH. */
+  catIrisSleepPupilH: number;
+  /** Table cat painted eye: Ring. */
+  catIrisSleepRing: number;
+  /** Table cat painted eye: Shade. */
+  catIrisSleepShade: number;
+  /** Table cat painted eye: Glow. */
+  catIrisSleepGlow: number;
+  /** Table cat painted eye: Bright. */
+  catIrisSleepBright: number;
+  /** Table cat painted eye: pupil follows the cursor, side to side (negative flips). */
+  catIrisSleepTrackX: number;
+  /** Table cat painted eye: pupil follows the cursor, up / down. */
+  catIrisSleepTrackY: number;
+  /** Table cat painted eye: pupil edge softness. */
+  catIrisSleepPupilSoft: number;
+  /** 1 = the table cat's eye glints use their own settings (catGlintTable*), 0 = same as the chair cat. */
+  catGlintTableOwn: number;
+  /** Table cat eye glint: LeftX. */
+  catGlintTableLeftX: number;
+  /** Table cat eye glint: LeftY. */
+  catGlintTableLeftY: number;
+  /** Table cat eye glint: RightX. */
+  catGlintTableRightX: number;
+  /** Table cat eye glint: RightY. */
+  catGlintTableRightY: number;
+  /** Table cat eye glint: Size. */
+  catGlintTableSize: number;
+  /** Table cat eye glint: Count. */
+  catGlintTableCount: number;
+  /** Table cat eye glint: SecondSize. */
+  catGlintTableSecondSize: number;
+  /** Table cat eye glint: SecondX. */
+  catGlintTableSecondX: number;
+  /** Table cat eye glint: SecondY. */
+  catGlintTableSecondY: number;
+  /** Table cat eye glint: Brightness. */
+  catGlintTableBrightness: number;
+  /** Table cat eye glint: Roundness. */
+  catGlintTableRoundness: number;
+  /** Table cat eye glint: Softness. */
+  catGlintTableSoftness: number;
+  /** Catchlight dots per eye: 1 or 2. */
+  catGlintCount: number;
+  /** Size of the second dot (same units as catGlintSize). */
+  catGlintSecondSize: number;
+  catGlintSecondX: number;
+  catGlintSecondY: number;
+  catGlintBrightness: number;
+  catGlintRoundness: number;
+  catGlintSoftness: number;
+  /** Scene 1 microphone: extra stand height in metres (base stays put). */
+  campfireMicHeight: number;
+  /** Scene 1 microphone: how strongly the metal reflects (0 = matte). */
+  campfireMicShine: number;
+  /** Scene 1 microphone: highlight sharpness from the lights, 0 matte - 1 mirror. */
+  campfireMicGloss: number;
+  /** Scene 1 microphone: 0 painted - 1 bare metal. */
+  campfireMicMetalness: number;
+  /** Lab only: 1 shows the three "how do you want to talk" arrows over the
+   *  telephone / mic / typewriter, so they can be tuned without the site flow. */
+  chatArrowsPreview: number;
+  /** Size of the chat-choice arrows. */
+  chatArrowScale: number;
+  /** Gap between each prop's top and its arrow (m). */
+  chatArrowLift: number;
+  /** How tall each arrow is (shaft length, 1 = default). */
+  chatArrowLength: number;
+  /** Height of the CALL / TALK / TYPE letters above the arrows (m). */
+  chatArrowLabelSize: number;
+  /** Gap between an arrow's top and its word (m). */
+  chatArrowLabelGap: number;
+  /** Extra height per arrow, on top of chatArrowLift (m). */
+  chatArrowPhoneLift: number;
+  chatArrowMicLift: number;
+  chatArrowTypeLift: number;
+  /** Telephone arrow (and its word) shift left/right (m). */
+  chatArrowPhoneX: number;
+  /** Telephone arrow (and its word) shift front/back (m). */
+  chatArrowPhoneZ: number;
+  /** Microphone arrow (and its word) shift left/right (m). */
+  chatArrowMicX: number;
+  /** Microphone arrow (and its word) shift front/back (m). */
+  chatArrowMicZ: number;
+  /** Typewriter arrow (and its word) shift left/right (m). */
+  chatArrowTypeX: number;
+  /** Typewriter arrow (and its word) shift front/back (m). */
+  chatArrowTypeZ: number;
+  /** Arrow head radius (m). */
+  chatArrowHeadWidth: number;
+  /** Arrow head height (m). */
+  chatArrowHeadHeight: number;
+  /** Arrow shaft thickness (m). */
+  chatArrowShaftWidth: number;
+  /** Number of sides on the head and shaft (4 = square, 32 = round). */
+  chatArrowSides: number;
+  /** Which way the arrows face (deg around the vertical). */
+  chatArrowYaw: number;
+  /** Extra turn for the telephone arrow and its word (deg). */
+  chatArrowPhoneYaw: number;
+  /** Extra turn for the microphone arrow and its word (deg). */
+  chatArrowMicYaw: number;
+  /** Extra turn for the typewriter arrow and its word (deg). */
+  chatArrowTypeYaw: number;
+  /** Arrow tilt forward/back (deg). */
+  chatArrowTiltX: number;
+  /** Arrow tilt sideways (deg). */
+  chatArrowTiltZ: number;
+  /** Arrow spin speed (rad/s, 0 = still). */
+  chatArrowSpinSpeed: number;
+  /** Arrow bob height (m). */
+  chatArrowBobAmount: number;
+  /** Arrow bob speed. */
+  chatArrowBobSpeed: number;
+  /** Phase offset between the three arrows' bob/spin. */
+  chatArrowStagger: number;
+  /** Scale on hover. */
+  chatArrowHoverGrow: number;
+  /** Arrow colour (R, 0-1). */
+  chatArrowColorR: number;
+  /** Arrow colour (G, 0-1). */
+  chatArrowColorG: number;
+  /** Arrow colour (B, 0-1). */
+  chatArrowColorB: number;
+  /** Arrow shininess (1 - roughness). */
+  chatArrowShine: number;
+  /** Arrow metalness. */
+  chatArrowMetalness: number;
+  /** Arrow emissive glow. */
+  chatArrowGlow: number;
+  /** Arrow glow while hovered. */
+  chatArrowHoverGlow: number;
+  /** Arrow glow pulse amount. */
+  chatArrowGlowPulse: number;
+  /** Arrow glow pulse speed. */
+  chatArrowGlowSpeed: number;
+  /** Arrow opacity. */
+  chatArrowOpacity: number;
+  /** 1 = the words turn to face the camera; 0 = they use the facing below. */
+  chatTextFaceCamera: number;
+  /** Which way the words face (deg). */
+  chatTextYaw: number;
+  /** Word tilt (deg). */
+  chatTextTiltX: number;
+  /** Word spin speed (rad/s). */
+  chatTextSpinSpeed: number;
+  /** 1 = words bob with their arrow. */
+  chatTextBobWithArrow: number;
+  /** Word offset x (m). */
+  chatTextOffsetX: number;
+  /** Word offset z (m). */
+  chatTextOffsetZ: number;
+  /** Gap between letters (in letter heights). */
+  chatTextSpacing: number;
+  /** Letter depth scale. */
+  chatTextDepth: number;
+  /** Per-letter idle wave like the title screen. */
+  chatTextWave: number;
+  /** Per-letter wave speed. */
+  chatTextWaveSpeed: number;
+  /** Phase step between letters. */
+  chatTextWaviness: number;
+  /** Word colour (R, 0-1). */
+  chatTextColorR: number;
+  /** Word colour (G, 0-1). */
+  chatTextColorG: number;
+  /** Word colour (B, 0-1). */
+  chatTextColorB: number;
+  /** Word shininess (1 - roughness). */
+  chatTextShine: number;
+  /** Word metalness. */
+  chatTextMetalness: number;
+  /** Word emissive glow. */
+  chatTextGlow: number;
+  /** Word glow while hovered. */
+  chatTextHoverGlow: number;
+  /** Word glow pulse amount. */
+  chatTextGlowPulse: number;
+  /** Word opacity. */
+  chatTextOpacity: number;
+  /** Per-lantern light brightness on the cabin porch, x the shared Lantern
+   *  intensity. 0 = that lantern's light off (its flame still burns). */
+  cabinLantern1Light: number;
+  cabinLantern2Light: number;
+  cabinLantern3Light: number;
+  cabinLantern4Light: number;
+  /** Gramophone record turns per second. */
+  gramophoneRecordSpeed: number;
+  /** Gramophone crank turns per second. */
+  gramophoneCrankSpeed: number;
+  /** Gramophone beat (horn pump, bounce, notes), per minute. */
+  gramophoneBpm: number;
+  /** Gramophone horn squash-and-stretch, 0 = still. */
+  gramophonePump: number;
+  /** Gramophone bob on the beat, 0 = still. */
+  gramophoneBounce: number;
+  /** Music notes from the horn: 0 = none, 1 = every beat. */
+  gramophoneNotes: number;
   /** OnlyBears gag: cartoon easing strength. 0 = even smoothstep (the old,
    *  polite version), 1 = full pop / wind-up / slam. */
   onlyBearsSnap: number;
   /** OnlyBears gag: wobble after the paw hits the glass. 0 = dead stop. */
   onlyBearsImpact: number;
+  onlyBearsLanternBoost: number;
+  onlyBearsKeyLight: number;
+  /** OnlyBears: how far past the bear his key light carries (x its distance to his head). */
+  onlyBearsKeyReach: number;
+  /** OnlyBears: brightness of every other light (and the sky) while the gag plays. 1 = unchanged. */
+  onlyBearsSceneLight: number;
   /** Rigid offset applied to the whole arcade set inside scene 2 - CRTs,
    *  cubs, consoles, picnic table, snacks and the arcade fire. Moves them as
    *  one unit without disturbing their relative layout. */
@@ -1549,7 +2106,7 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   bearDialogueLeftTiltDeg: number;
   bearDialogueRightTiltDeg: number;
   bearDialoguePreviewSide: number;
-  bearDialoguePreviewTextLength: number;
+  bearDialoguePreviewTextWords: number;
   bearDialogueWidthRem: number;
   bearDialogueMinHeightRem: number;
   bearDialogueCloudFlow: number;
@@ -1561,8 +2118,10 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   bearDialogueWaveSpeed: number;
   bearDialogueWaveSpacing: number;
   bearDialogueTextSizeRem: number;
-  bearDialogueTextPaddingXRem: number;
-  bearDialogueTextPaddingYRem: number;
+  bearDialogueTextPadTopRem: number;
+  bearDialogueTextPadRightRem: number;
+  bearDialogueTextPadBottomRem: number;
+  bearDialogueTextPadLeftRem: number;
   bearDialogueTextColorR: number;
   bearDialogueTextColorG: number;
   bearDialogueTextColorB: number;
@@ -1600,14 +2159,12 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   bearDialogueSmokeyNameTiltDeg: number;
   bearDialogueMapleNameTiltDeg: number;
   bearDialogueSmokeyIconSizeRem: number;
-  bearDialogueSmokeyIconAnchor: number;
   bearDialogueSmokeyIconInsetXRem: number;
   bearDialogueSmokeyIconInsetYRem: number;
+  bearDialogueSmokeyIconMarginXRem: number;
+  bearDialogueSmokeyIconMarginYRem: number;
   bearDialogueSmokeyIconKeepInside: number;
-  bearDialogueSmokeyIconXRem: number;
-  bearDialogueSmokeyIconYRem: number;
   bearDialogueSmokeyIconTiltDeg: number;
-  bearDialogueSmokeyIconTextClearanceRem: number;
   bearDialogueSmokeyIconOpacity: number;
   bearDialogueSmokeyIconBorderOn: number;
   bearDialogueSmokeyIconBorderWidthPx: number;
@@ -1629,7 +2186,6 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   bearDialogueSmokeyIconGlowColorR: number;
   bearDialogueSmokeyIconGlowColorG: number;
   bearDialogueSmokeyIconGlowColorB: number;
-  bearDialogueSmokeyIconAutoClearanceOn: number;
   bearDialogueTextFloatAmount: number;
   bearDialogueTextFloatCycleSec: number;
   smokeyHatX: number;
@@ -1670,6 +2226,31 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
    fireCracklingVolume: number;
   /** Cabin ambience: the old bear's rocking chair creaking (scene 3). */
   rockingChairVolume: number;
+  /** Cabin: the gramophone's record (sound2/gramaphone_song.mp3). */
+  gramophoneSongVolume: number;
+  /** Props falling over: bags, fishing rod, logs off the pile. */
+  propSoundVolume: number;
+  leftBagSoundEarly: number;
+  rightBagSoundEarly: number;
+  rodSoundEarly: number;
+  tableShadowOn: number;
+  tableShadowStrength: number;
+  tableShadowReach: number;
+  tableShadowLantern: number;
+  tableShadowLightX: number;
+  tableShadowLightY: number;
+  tableShadowLightZ: number;
+  /** Gramophone loudness (x) while zoomed in on the cats or the computer. */
+  gramophoneCloseUpVolume: number;
+  /** Gramophone animation speed (x) and seconds into the song before the beat starts. */
+  gramophoneAnimSpeed: number;
+  gramophoneAnimDelay: number;
+  /** Axe flip: the whirr while it spins in the air. */
+  axeSpinVolume: number;
+  /** Axe flip: the thunk as it bites back into the block. */
+  axeHitVolume: number;
+  /** Wood pile: the looping rumble while a log rolls away. */
+  woodRollLoopVolume: number;
   banjoVolume: number;
   /** Axe flip (click the chopping block, scene 1): how high it goes, world metres. */
   axeFlipHeight: number;
@@ -2210,7 +2791,28 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   deskComputerAimYawDeg: 0,
   deskComputerAimPitchDeg: 0,
   deskComputerShadow: 0,
+  deskComputerCatShadow: 1,
+  catShadowStrength: 0.5,
+  catShadowSize: 1,
+  catShadowLength: 1,
+  catShadowSitStrength: 0.5,
+  catShadowSitLength: 1,
+  catShadowSitTurn: 0,
+  catShadowSitRadius: 3,
+  catShadowSitFade: 0.4,
+  catShadowSitShiftX: 0,
+  catShadowSitShiftZ: 0,
+  catShadowSitWidth: 1,
+  catShadowSleepStrength: 0.5,
+  catShadowSleepLength: 1,
+  catShadowSleepTurn: 0,
+  catShadowSleepRadius: 3,
+  catShadowSleepFade: 0.4,
+  catShadowSleepShiftX: 0,
+  catShadowSleepShiftZ: 0,
+  catShadowSleepWidth: 1,
   deskComputerGlassBrightness: 1,
+  deskComputerLidCloseDeg: 90,
   // Warm desk fill - hemisphere sky/ground tint, kept low so the lanterns and
   // computer still carry most of the light. Slightly amber sky, cool ground.
   deskCampGroundMaxY: 4.0,
@@ -2609,7 +3211,9 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   pcFocusBack: 1.43,
   pcFocusHeight: 0,
   pcSoundVolume: 0.8,
+  pcStartupVolume: 0.8,
   pcRevealBack: 8,
+  pcRevealSettle: 0.9,
   pcRevealHeight: 1.7,
   pcRevealAimUp: 0.9,
   oldBearGrey: 0.55,
@@ -2643,8 +3247,277 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   onlyBearsLean: 0,
   onlyBearsLook: 0.85,
   onlyBearsBreath: 0.3,
+  onlyBearsShake: 1,
+  cabinMoonOn: 1,
+  cabinMoonLeft: 4,
+  cabinMoonUp: 17,
+  cabinMoonDistance: 60,
+  cabinMoonSize: 19,
+  cabinMoonGlow: 0.6,
+  cabinMoonBrightness: 1,
+  cabinMoonColorR: 1,
+  cabinMoonColorG: 1,
+  cabinMoonColorB: 1,
+  cabinMoonTexture: 0,
+  cabinMoonCraters: 46,
+  cabinMoonCraterSize: 1,
+  cabinMoonMaria: 0.5,
+  cabinMoonLimb: 0,
+  cabinMoonSeed: 7,
+  cabinMoonGlowSize: 2.8,
+  cabinMoonGlowSoftness: 2,
+  cabinMoonGlowColorR: 1,
+  cabinMoonGlowColorG: 1,
+  cabinMoonGlowColorB: 1,
+  cabinCatSpeed: 1,
+  catPurrVolume: 0.8,
+  catScratchVolume: 0.5,
+  catFocusDistance: 0.38,
+  catFocusHeight: 0.07,
+  catFocusBoth: 1,
+  catFocusFit: 1.25,
+  catFocusPreview: 0,
+  catLookAtCamera: 1,
+  catLookMaxDeg: 55,
+  catGazeSitAmount: 1,
+  catGazeSitAlways: 0,
+  catGazeSitMaxLeft: 60,
+  catGazeSitMaxRight: 60,
+  catGazeSitMaxUp: 60,
+  catGazeSitMaxDown: 12,
+  catGazeSitYawGain: 1,
+  catGazeSitPitchGain: 0.7,
+  catGazeSitYawOffset: 0,
+  catGazeSitPitchOffset: 0,
+  catGazeSitDeadzone: 2,
+  catGazeSitFollow: 8,
+  catGazeSitBlend: 3,
+  catGazeSitNeckShare: 0.35,
+  catGazeSitTilt: 8,
+  catGazeSitDepth: 0.55,
+  catGazeSitOverhead: 0.35,
+  catGazeSitLean: 1,
+  catGazeSitLeanMax: 25,
+  catGazeSitReach: 0.1,
+  catGazeSitNeckUp: 0.3,
+  catGazeSitNeckDown: 1,
+  catGazeSitNeckTurn: 0.15,
+  catGazeSitHeadPin: 0.6,
+  catGazeSitNeckSlideMax: 0.02,
+  catGazeSitTwistSpread: 0.6,
+  catGazeSitLeanForward: 10,
+  catGazeSitLeanFrontWeight: 1,
+  catGazeSitLeanZoneYaw: 55,
+  catGazeSitLeanZonePitch: 25,
+  catGazeSitLeanZoneWidth: 50,
+  catGazeSleepAmount: 1,
+  catGazeSleepAlways: 0,
+  catGazeSleepMaxLeft: 60,
+  catGazeSleepMaxRight: 60,
+  catGazeSleepMaxUp: 60,
+  catGazeSleepMaxDown: 12,
+  catGazeSleepYawGain: 1,
+  catGazeSleepPitchGain: 0.7,
+  catGazeSleepYawOffset: 0,
+  catGazeSleepPitchOffset: 0,
+  catGazeSleepDeadzone: 2,
+  catGazeSleepFollow: 8,
+  catGazeSleepBlend: 3,
+  catGazeSleepNeckShare: 0.35,
+  catGazeSleepTilt: 8,
+  catGazeSleepDepth: 0.55,
+  catGazeSleepOverhead: 0.35,
+  catGazeSleepLean: 1,
+  catGazeSleepLeanMax: 25,
+  catGazeSleepReach: 0.1,
+  catGazeSleepNeckUp: 0.3,
+  catGazeSleepNeckDown: 1,
+  catGazeSleepNeckTurn: 0.15,
+  catGazeSleepHeadPin: 0.6,
+  catGazeSleepNeckSlideMax: 0.02,
+  catGazeSleepTwistSpread: 0.6,
+  catGazeSleepLeanForward: 10,
+  catGazeSleepLeanFrontWeight: 1,
+  catGazeSleepLeanZoneYaw: 55,
+  catGazeSleepLeanZonePitch: 25,
+  catGazeSleepLeanZoneWidth: 50,
+  catFocusAutoFit: 1,
+  catFocusAimHeight: 0.02,
+  catFocusSide: 0,
+  catFocusForward: 0,
+  catFocusFov: 0,
+  catFocusYaw: 18,
+  catSitFurR: 0.93,
+  catSitFurG: 0.52,
+  catSitFurB: 0.19,
+  catSitStripeR: 0.74,
+  catSitStripeG: 0.33,
+  catSitStripeB: 0.1,
+  catSleepFurR: 0.93,
+  catSleepFurG: 0.52,
+  catSleepFurB: 0.19,
+  catSleepStripeR: 0.74,
+  catSleepStripeG: 0.33,
+  catSleepStripeB: 0.1,
+  catSitStripes: 0.55,
+  catSleepStripes: 0.55,
+  catSitWhite: 1.4,
+  catSleepWhite: 0,
+  catSitFat: 0.7,
+  catSitWhiteSize: 0.55,
+  catSitWhiteEdge: 0.9,
+  catSleepFat: 0,
+  catSleepWhiteSize: 0.55,
+  catSleepWhiteEdge: 0.9,
+  catSitFatBelly: 1,
+  catSitFatWide: 1,
+  catSleepFatBelly: 1,
+  catSleepFatWide: 1,
+  catGlintLeftX: 0.34,
+  catGlintLeftY: 0.7,
+  catGlintRightX: 0.34,
+  catGlintRightY: 0.7,
+  catGlintSize: 0.13,
+  catGlintSecond: 0.45,
+  catIrisSitOn: 1,
+  catIrisSitInR: 0.65,
+  catIrisSitInG: 0.76,
+  catIrisSitInB: 0.37,
+  catIrisSitOutR: 0.65,
+  catIrisSitOutG: 0.76,
+  catIrisSitOutB: 0.37,
+  catIrisSitSize: 0.6,
+  catIrisSitX: 0,
+  catIrisSitY: 0,
+  catIrisSitPupilW: 0.72,
+  catIrisSitPupilH: 0.72,
+  catIrisSitRing: 0,
+  catIrisSitShade: 0,
+  catIrisSitGlow: 0,
+  catIrisSitBright: 1,
+  catIrisSitTrackX: 0.3,
+  catIrisSitTrackY: 0.25,
+  catIrisSitPupilSoft: 0.06,
+  catIrisSleepOn: 1,
+  catIrisSleepInR: 0.65,
+  catIrisSleepInG: 0.76,
+  catIrisSleepInB: 0.37,
+  catIrisSleepOutR: 0.65,
+  catIrisSleepOutG: 0.76,
+  catIrisSleepOutB: 0.37,
+  catIrisSleepSize: 0.6,
+  catIrisSleepX: 0,
+  catIrisSleepY: 0,
+  catIrisSleepPupilW: 0.72,
+  catIrisSleepPupilH: 0.72,
+  catIrisSleepRing: 0,
+  catIrisSleepShade: 0,
+  catIrisSleepGlow: 0,
+  catIrisSleepBright: 1,
+  catIrisSleepTrackX: 0.3,
+  catIrisSleepTrackY: 0.25,
+  catIrisSleepPupilSoft: 0.06,
+  catGlintTableOwn: 1,
+  catGlintTableLeftX: 0.34,
+  catGlintTableLeftY: 0.7,
+  catGlintTableRightX: 0.34,
+  catGlintTableRightY: 0.7,
+  catGlintTableSize: 0.13,
+  catGlintTableCount: 2,
+  catGlintTableSecondSize: 0.06,
+  catGlintTableSecondX: 0.17,
+  catGlintTableSecondY: -0.15,
+  catGlintTableBrightness: 1,
+  catGlintTableRoundness: 1,
+  catGlintTableSoftness: 0.25,
+  catGlintCount: 2,
+  catGlintSecondSize: 0.06,
+  catGlintSecondX: 0.17,
+  catGlintSecondY: -0.15,
+  catGlintBrightness: 1,
+  catGlintRoundness: 1,
+  catGlintSoftness: 0.25,
+  campfireMicHeight: 0,
+  campfireMicShine: 0.45,
+  campfireMicGloss: 0.82,
+  campfireMicMetalness: 1,
+  chatArrowsPreview: 0,
+  chatArrowScale: 1,
+  chatArrowLift: 0.32,
+  chatArrowLength: 1,
+  chatArrowLabelSize: 0.12,
+  chatArrowLabelGap: 0.08,
+  chatArrowPhoneLift: 0,
+  chatArrowMicLift: 0,
+  chatArrowTypeLift: 0,
+  chatArrowPhoneX: 0,
+  chatArrowPhoneZ: 0,
+  chatArrowMicX: 0,
+  chatArrowMicZ: 0,
+  chatArrowTypeX: 0,
+  chatArrowTypeZ: 0,
+  chatArrowHeadWidth: 0.11,
+  chatArrowHeadHeight: 0.16,
+  chatArrowShaftWidth: 0.07,
+  chatArrowSides: 4,
+  chatArrowYaw: 0,
+  chatArrowPhoneYaw: 0,
+  chatArrowMicYaw: 0,
+  chatArrowTypeYaw: 0,
+  chatArrowTiltX: 0,
+  chatArrowTiltZ: 0,
+  chatArrowSpinSpeed: 1.1,
+  chatArrowBobAmount: 0.06,
+  chatArrowBobSpeed: 2.6,
+  chatArrowStagger: 1.7,
+  chatArrowHoverGrow: 1.15,
+  chatArrowColorR: 1,
+  chatArrowColorG: 1,
+  chatArrowColorB: 1,
+  chatArrowShine: 0.5,
+  chatArrowMetalness: 0,
+  chatArrowGlow: 0.3,
+  chatArrowHoverGlow: 0.8,
+  chatArrowGlowPulse: 0.08,
+  chatArrowGlowSpeed: 5,
+  chatArrowOpacity: 1,
+  chatTextFaceCamera: 1,
+  chatTextYaw: 0,
+  chatTextTiltX: 0,
+  chatTextSpinSpeed: 0,
+  chatTextBobWithArrow: 1,
+  chatTextOffsetX: 0,
+  chatTextOffsetZ: 0,
+  chatTextSpacing: 0.08,
+  chatTextDepth: 1,
+  chatTextWave: 0,
+  chatTextWaveSpeed: 1.6,
+  chatTextWaviness: 0.6,
+  chatTextColorR: 1,
+  chatTextColorG: 1,
+  chatTextColorB: 1,
+  chatTextShine: 0.45,
+  chatTextMetalness: 0,
+  chatTextGlow: 0.3,
+  chatTextHoverGlow: 0.8,
+  chatTextGlowPulse: 0.08,
+  chatTextOpacity: 1,
+  cabinLantern1Light: 1,
+  cabinLantern2Light: 1,
+  cabinLantern3Light: 1,
+  cabinLantern4Light: 1,
+  gramophoneRecordSpeed: 0.75,
+  gramophoneCrankSpeed: 0.5,
+  gramophoneBpm: 96,
+  gramophonePump: 1,
+  gramophoneBounce: 1,
+  gramophoneNotes: 0,
   onlyBearsSnap: 0,
   onlyBearsImpact: 0,
+  onlyBearsLanternBoost: 1,
+  onlyBearsKeyLight: 2.5,
+  onlyBearsKeyReach: 1.6,
+  onlyBearsSceneLight: 0.3,
   arcadeCrtGlow: 1,
   arcadeCrtLightR: 0.475,
   arcadeCrtLightG: 0.776,
@@ -2951,7 +3824,7 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   bearDialogueLeftTiltDeg: -1.5,
   bearDialogueRightTiltDeg: 1.5,
   bearDialoguePreviewSide: 0,
-  bearDialoguePreviewTextLength: 2,
+  bearDialoguePreviewTextWords: 70,
   bearDialogueWidthRem: 34,
   bearDialogueMinHeightRem: 14,
   bearDialogueCloudFlow: 0.4,
@@ -2963,8 +3836,10 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   bearDialogueWaveSpeed: 0.12,
   bearDialogueWaveSpacing: 3,
   bearDialogueTextSizeRem: 1.5,
-  bearDialogueTextPaddingXRem: 2.5,
-  bearDialogueTextPaddingYRem: 2.5,
+  bearDialogueTextPadTopRem: 3.7,
+  bearDialogueTextPadRightRem: 2.5,
+  bearDialogueTextPadBottomRem: 2.5,
+  bearDialogueTextPadLeftRem: 2.5,
   bearDialogueTextColorR: 0.43,
   bearDialogueTextColorG: 0.42,
   bearDialogueTextColorB: 0.36,
@@ -2977,8 +3852,8 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   bearDialogueNameTagYRem: 0,
   bearDialogueNameTagScale: 1,
   bearDialogueNameTagAnchor: 1,
-  bearDialogueNameTagInsetXRem: 1.75,
-  bearDialogueNameTagInsetYRem: -0.25,
+  bearDialogueNameTagInsetXRem: 1,
+  bearDialogueNameTagInsetYRem: 1,
   bearDialogueNameTagWaveAmplitude: 1.6,
   bearDialogueNameTagWaveSpeed: 0.21,
   bearDialogueNameTagWaveSpacing: 3,
@@ -3002,14 +3877,12 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   bearDialogueSmokeyNameTiltDeg: -3,
   bearDialogueMapleNameTiltDeg: 3,
   bearDialogueSmokeyIconSizeRem: 1.75,
-  bearDialogueSmokeyIconAnchor: 1,
   bearDialogueSmokeyIconInsetXRem: 5.3,
   bearDialogueSmokeyIconInsetYRem: 5.3,
+  bearDialogueSmokeyIconMarginXRem: 0.6,
+  bearDialogueSmokeyIconMarginYRem: 0.6,
   bearDialogueSmokeyIconKeepInside: 1,
-  bearDialogueSmokeyIconXRem: 0,
-  bearDialogueSmokeyIconYRem: 0,
   bearDialogueSmokeyIconTiltDeg: 0,
-  bearDialogueSmokeyIconTextClearanceRem: 0.4,
   bearDialogueSmokeyIconOpacity: 1,
   bearDialogueSmokeyIconBorderOn: 1,
   bearDialogueSmokeyIconBorderWidthPx: 1,
@@ -3031,7 +3904,6 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   bearDialogueSmokeyIconGlowColorR: 0.95,
   bearDialogueSmokeyIconGlowColorG: 0.72,
   bearDialogueSmokeyIconGlowColorB: 0.35,
-  bearDialogueSmokeyIconAutoClearanceOn: 1,
   bearDialogueTextFloatAmount: 1,
   bearDialogueTextFloatCycleSec: 7,
   smokeyHatX: 0,
@@ -3069,6 +3941,24 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   mapleSpeechVolume: 1,
   fireCracklingVolume: 0.55,
   rockingChairVolume: 0.3,
+  gramophoneSongVolume: 0.35,
+  propSoundVolume: 0.85,
+  leftBagSoundEarly: 0,
+  rightBagSoundEarly: 0,
+  rodSoundEarly: 0,
+  tableShadowOn: 1,
+  tableShadowStrength: 0.5,
+  tableShadowReach: 2.2,
+  tableShadowLantern: 0,
+  tableShadowLightX: 0,
+  tableShadowLightY: 0,
+  tableShadowLightZ: 0,
+  gramophoneCloseUpVolume: 0.55,
+  gramophoneAnimSpeed: 1,
+  gramophoneAnimDelay: 0,
+  axeSpinVolume: 0.6,
+  axeHitVolume: 0.8,
+  woodRollLoopVolume: 0.5,
   banjoVolume: 0.32,
   axeFlipHeight: 1.2,
   axeFlipDuration: 1.4,
