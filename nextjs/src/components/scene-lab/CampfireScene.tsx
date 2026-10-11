@@ -35,6 +35,7 @@ import bearPosesRaw from "@/config/bearPoses.json";
 import { fadeOutAudio, useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
 import { applySoundTuning } from "@/components/scene-lab/soundList";
 import { locationShown } from "@/components/scene-lab/sceneActivity";
+import { perfStats } from "@/lib/perfStats";
 import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
 import { clampSpring, stepSpring } from "@/lib/bear-animation";
 import { getBanjoFingerPhase } from "@/lib/banjo-performance";
@@ -13293,6 +13294,13 @@ function PerfProbe({ onSample }: { onSample: (s: PerfSample) => void }) {
       avgMs, worstMs, dpr, w: Math.round(size.x * dpr), h: Math.round(size.y * dpr),
       gpu: gpu.current ?? "?", shadowsAuto: gl.shadowMap.autoUpdate,
     });
+    Object.assign(perfStats, {
+      calls: gl.info.render.calls, tris: gl.info.render.triangles, lights, shadowMaps,
+      shadowsThrottled: !gl.shadowMap.autoUpdate, progs: gl.info.programs?.length ?? 0,
+      geoms: gl.info.memory.geometries, textures: gl.info.memory.textures,
+      w: Math.round(size.x * dpr), h: Math.round(size.y * dpr), dpr, gpu: gpu.current ?? "?",
+      renderFps: fps, updatedAt: performance.now(),
+    });
   });
   return null;
 }
@@ -15077,8 +15085,8 @@ export default function CampfireScene({
     // TEMPORARY: on by default while we measure phones. ?noperf hides it.
     // Flip PERF_OVERLAY_DEFAULT to false once the numbers are in.
     const q = new URLSearchParams(window.location.search);
-    setPerfOn(q.has("perf") || (PERF_OVERLAY_DEFAULT && !q.has("noperf")));
-  }, []);
+    setPerfOn(q.has("perf") || (PERF_OVERLAY_DEFAULT && !q.has("noperf") && !!editing));
+  }, [editing]);
   /*
    * Both of these are resolved SYNCHRONOUSLY, on the very first render, and
    * that matters more than it looks.
@@ -15131,6 +15139,8 @@ export default function CampfireScene({
     deskComputerShadow: 0,
   } as CampfireSceneConfig : config), [config, lowGfx]);
   const maxDpr = lowGfx ? Math.min(gfxRef.current.dpr, 1.25) : gfxRef.current.dpr;
+  perfStats.gfx = lowGfx ? `LOW gfx${gfxForce ? " (forced)" : ""}` : `HIGH gfx${gfxForce ? " (forced)" : ""}`;
+  perfStats.scene = panel == null ? "lab / free" : (["campfire", "arcade", "cabin"][panel] ?? `panel ${panel}`);
   const aaOn = gfxRef.current.aa;
   // Starts at 0 on both server and client, so the first mount is never a
   // remount; only a real toggle bumps it.
@@ -15342,7 +15352,7 @@ export default function CampfireScene({
         onFishImpact={onFishImpact}
         chatChoice={chatChoice}
       />
-      {perfOn ? <PerfProbe onSample={setPerf} /> : null}
+      <PerfProbe onSample={perfOn ? setPerf : () => {}} />
     </Canvas>
     {perfOn && perf ? (
       <div className="pointer-events-none absolute left-2 top-12 z-50 max-w-[60vw] rounded bg-black/75 px-2 py-1 font-mono text-[10px] leading-tight text-lime-300">

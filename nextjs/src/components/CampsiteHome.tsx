@@ -7,6 +7,8 @@ import SceneArrow from "@/components/SceneArrow";
 import CampsiteTitleIntro from "@/components/scene-lab/CampsiteTitleIntro";
 import ForceLandscape from "@/components/ForceLandscape";
 import ViewportDebug from "@/components/ViewportDebug";
+import PerfOverlay from "@/components/PerfOverlay";
+import { useProgress } from "@react-three/drei";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
 import ConfiguredBearDialogue from "@/components/bear-dialogue/ConfiguredBearDialogue";
 import { useBearVoiceAgent } from "@/hooks/useBearVoiceAgent";
@@ -130,6 +132,26 @@ export default function CampsiteHome() {
   // visitor clicks (sound on), while the title overlay keeps rendering its
   // fade-out for another beat. Flight and letter-fade overlap = seamless.
   const [titleHeld, setTitleHeld] = useState(true);
+  /*
+   * Hold the "click to enter" until the campfire has actually loaded. Entering
+   * early started the intro flight while models were still downloading and
+   * shaders compiling - on a phone that is the stutter-fest at start-up. The
+   * title shows the loading percentage meanwhile. Sticky once reached, with a
+   * 20 s fallback so a stuck download can never trap anyone on the title.
+   */
+  const loadProgress = useProgress();
+  const [sceneReady, setSceneReady] = useState(false);
+  useEffect(() => {
+    if (sceneReady) return;
+    if (!loadProgress.active && loadProgress.total > 0 && loadProgress.progress >= 100) {
+      const t = window.setTimeout(() => setSceneReady(true), 400);   // a beat for shader compile
+      return () => window.clearTimeout(t);
+    }
+  }, [sceneReady, loadProgress.active, loadProgress.total, loadProgress.progress]);
+  useEffect(() => {
+    const t = window.setTimeout(() => setSceneReady(true), 20000);
+    return () => window.clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     try {
@@ -252,6 +274,7 @@ export default function CampsiteHome() {
     {/* TEMP: ?debug overlay. Outside the wrapper so its fixed strips pin to the
         screen, not to the rotated box. Remove once the bars are settled. */}
     <ViewportDebug />
+    <PerfOverlay />
     <ForceLandscape>
     <main className="relative h-full w-full overflow-hidden bg-[#03040a]">
         <CampfireScene
@@ -305,6 +328,8 @@ export default function CampsiteHome() {
 
       {showTitle ? (
         <CampsiteTitleIntro
+          ready={sceneReady}
+          loadingPercent={loadProgress.progress}
           onUnmute={startBearsDuringFlight}
           onEnter={() => {
             setShowTitle(false);

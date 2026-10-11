@@ -433,7 +433,12 @@ export default function CampsiteTitleIntro({
   onUnmute,
   timing,
   previewMode = false,
+  ready = true,
+  loadingPercent = 100,
 }: {
+  /** False while the scene behind is still loading: no entering yet. */
+  ready?: boolean;
+  loadingPercent?: number;
   /** Called once the letters have fully faded out. Parent unmounts here. */
   onEnter: () => void;
   /** Called the moment the visitor clicks (SOUND ON). Parent should release
@@ -580,7 +585,7 @@ export default function CampsiteTitleIntro({
   }, []);
 
   const activate = () => {
-    if (finishedRef.current || clickedAtRef.current !== null || !hintClickable) return;
+    if (finishedRef.current || clickedAtRef.current !== null || !hintClickable || !ready) return;
     clickedAtRef.current = performance.now() / 1000;
     setHintClickable(false);
 
@@ -609,7 +614,7 @@ export default function CampsiteTitleIntro({
     (onUnmute ?? onEnter)();
   };
 
-  const pointerActive = !previewMode && hintClickable && clickedAtRef.current === null;
+  const pointerActive = !previewMode && hintClickable && ready && clickedAtRef.current === null;
 
   // Preview mode: full viewport (so letters center IDENTICALLY to production)
   // but everything below the wrapper is pointer-events-none — including the
@@ -634,7 +639,7 @@ export default function CampsiteTitleIntro({
         <Canvas
           style={{ pointerEvents: "none" }}
           resize={{ offsetSize: true }}
-          dpr={[1, 2]}
+          dpr={[1, typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches ? 1.5 : 2]}
           camera={{ position: [0, 0, 17], fov: 50 }}
           gl={{ antialias: true, alpha: true }}
         >
@@ -666,6 +671,11 @@ export default function CampsiteTitleIntro({
           </FitToViewport>
         </Canvas>
       </div>
+      {!previewMode && !ready && hintClickable ? (
+        <div className="pointer-events-none absolute bottom-[12%] left-1/2 -translate-x-1/2 font-mono text-xs tracking-widest text-white/60">
+          loading the campfire… {Math.round(loadingPercent)}%
+        </div>
+      ) : null}
       {/* Painted AFTER the canvas so it stacks on top: while it's opaque, any
        *  first-frame R3F content (letters mid-material-swap, GLB pop-in) is
        *  hidden. Fades to 0 as the letters fade up, then never appears again. */}
