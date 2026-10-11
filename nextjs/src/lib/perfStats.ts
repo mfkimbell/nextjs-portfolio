@@ -9,4 +9,9 @@ export const perfStats = {
   w: 0, h: 0, dpr: 1, gpu: "",
   renderFps: 0,
   updatedAt: 0,
+  /** ms after page start when every site's shaders had been compiled (0 = not yet) */
+  prewarmedAt: 0,
 };
+
+/** Fired on window when the scene is loaded and its shaders compiled. */
+export const SCENE_READY_EVENT = "campfire-scene-ready";

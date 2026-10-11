@@ -32,30 +32,6 @@ export const LETTER_WIDTHS: Record<string, number> = {
  * `micGranted` latches on success: a rejected attempt must be retryable by a
  * later gesture, a successful one must never re-open the mic.
  */
-let micInFlight: Promise<boolean> | null = null;
-let micGranted = false;
-
-function requestMic(): Promise<boolean> {
-  if (micGranted) return Promise.resolve(true);
-  if (micInFlight) return micInFlight;
-  micInFlight = (async () => {
-    try {
-      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return false;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // We only wanted the permission - drop the mic straight away so no
-      // recording indicator sits lit in the tab.
-      stream.getTracks().forEach((track) => track.stop());
-      micGranted = true;
-      return true;
-    } catch {
-      return false;
-    } finally {
-      micInFlight = null;
-    }
-  })();
-  return micInFlight;
-}
-
 const LETTERS = Object.keys(LETTER_WIDTHS);
 const LETTER_URL = (c: string) => `/letters/${c}.glb`;
 
@@ -574,7 +550,9 @@ export default function CampsiteTitleIntro({
     // Ask for the mic as the page comes up rather than waiting for the click.
     // Not in the lab's preview, which would otherwise prompt every time the
     // intro panel re-mounts while you are tuning it.
-    if (!previewModeRef.current) void requestMic();
+    // (No mic request here any more: it popped the permission prompt over the
+    //  page before anything had loaded. The mic is asked for only when the
+    //  visitor picks "talk".)
 
     return () => {
       running = false;
@@ -594,7 +572,6 @@ export default function CampsiteTitleIntro({
     // refused for having no user gesture behind it. requestMic() is a no-op if
     // permission was already granted. Fire-and-forget so the fade-out is not
     // blocked on the answer.
-    void requestMic();
 
     // Prime any ambient audio.
     try {
@@ -673,7 +650,7 @@ export default function CampsiteTitleIntro({
       </div>
       {!previewMode && !ready && hintClickable ? (
         <div className="pointer-events-none absolute bottom-[12%] left-1/2 -translate-x-1/2 font-mono text-xs tracking-widest text-white/60">
-          loading the campfire… {Math.round(loadingPercent)}%
+          {loadingPercent >= 0 ? `loading the campfire… ${Math.round(loadingPercent)}%` : "getting the fire going…"}
         </div>
       ) : null}
       {/* Painted AFTER the canvas so it stacks on top: while it's opaque, any

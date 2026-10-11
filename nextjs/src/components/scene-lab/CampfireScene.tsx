@@ -35,7 +35,7 @@ import bearPosesRaw from "@/config/bearPoses.json";
 import { fadeOutAudio, useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
 import { applySoundTuning } from "@/components/scene-lab/soundList";
 import { locationShown } from "@/components/scene-lab/sceneActivity";
-import { perfStats } from "@/lib/perfStats";
+import { perfStats, SCENE_READY_EVENT } from "@/lib/perfStats";
 import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
 import { clampSpring, stepSpring } from "@/lib/bear-animation";
 import { getBanjoFingerPhase } from "@/lib/banjo-performance";
@@ -1115,10 +1115,13 @@ function Location({
   index,
   config,
   gate = false,
+  inFlight = false,
   children,
 }: {
   index: number;
   config: CampfireSceneConfig;
+  /** the intro flight is running (see lowGfxActive) */
+  inFlight?: boolean;
   /** Switch off whenever the camera is looking at a different site. Off during
    *  free-look and the intro flight, where "which site" has no answer. */
   gate?: boolean;
@@ -1129,6 +1132,8 @@ function Location({
   cfg.current = config;
   const gateRef = useRef(gate);
   gateRef.current = gate;
+  const flightRef = useRef(inFlight);
+  flightRef.current = inFlight;
 
   useFrame(({ camera }) => {
     if (!ref.current) return;
@@ -1149,8 +1154,12 @@ function Location({
      * passes go with them.
      */
     if (!gateRef.current) {
-      ref.current.visible = true;
-      locationShown[index] = true;
+      // Low graphics, intro flight: only the campfire. With all three sites
+      // drawn the fly-in ran ~860 draw calls and 25 lights on a phone, and
+      // needed its own set of compiled shaders on top.
+      const flightOnly = (c.lowGfxActive ?? 0) >= 0.5 && flightRef.current;
+      ref.current.visible = flightOnly ? index === 0 : true;
+      locationShown[index] = ref.current.visible;
       return;
     }
     // Where the camera stands around the ring. ringMatrix puts a site at
@@ -11748,6 +11757,8 @@ function ShaderPrewarm({ ready }: { ready: boolean }) {
           await new Promise((res) => window.setTimeout(res, 50));
         }
         console.log("[perf] shaders prewarmed for all sites");
+        perfStats.prewarmedAt = performance.now();
+        window.dispatchEvent(new Event(SCENE_READY_EVENT));
       };
       void run();
     }, 800);
@@ -14392,7 +14403,7 @@ function CampfireWorld({
         {/* Location 0 - the campfire. Everything here was already composed around the
             origin with the camera off at +Z, so it moves onto the ring untouched and
             keeps every slider meaning exactly what it did. */}
-        <Location index={LOCATION_CAMPFIRE} config={config} gate={panelled && !flying}>
+        <Location index={LOCATION_CAMPFIRE} config={config} gate={panelled && !flying} inFlight={panelled && (flying || !!titleHeld)}>
           <CampfireSceneModel config={config} onSelect={onSelect} />
           {(config.objectOverrides?.["camper"]?.hide ?? 0) < 0.5 && (
             <SafeAsset label="camper"><Camper config={config} onSelect={onSelect} /></SafeAsset>
@@ -14989,7 +15000,7 @@ function CampfireWorld({
             old_bear_camping and arcade_wooden_cabin - stayed exactly where
             they were, so both saved camera views still frame the right thing
             and cameraDefaults.json needed no change. */}
-        <Location index={LOCATION_ARCADE} config={config} gate={panelled && !flying}>
+        <Location index={LOCATION_ARCADE} config={config} gate={panelled && !flying} inFlight={panelled && (flying || !!titleHeld)}>
           {loadRest ? <SafeAsset label="arcade">
             <ArcadeSector
               config={config}
@@ -15002,7 +15013,7 @@ function CampfireWorld({
           </SafeAsset> : null}
         </Location>
 
-        <Location index={LOCATION_CABIN} config={config} gate={panelled && !flying}>
+        <Location index={LOCATION_CABIN} config={config} gate={panelled && !flying} inFlight={panelled && (flying || !!titleHeld)}>
           {loadRest ? <SafeAsset label="cabin">
             <CabinSector config={config} onSelect={onSelect} pc={pcGlass} onlyBears={onlyBearsMount} catFocus={catFocusProps} catSleepFocus={catFocusTableProps} catSleepAnchor={catSleepAnchorRef} />
           </SafeAsset> : null}
@@ -15137,6 +15148,7 @@ export default function CampfireScene({
     deskShadowMapSize: Math.min(config.deskShadowMapSize ?? 512, 256),
     deskLampVanHeadsShadow: 0, deskLampSmallAShadow: 0, deskLampSmallBShadow: 0, deskLampHoodShadow: 0,
     deskComputerShadow: 0,
+    lowGfxActive: 1,
   } as CampfireSceneConfig : config), [config, lowGfx]);
   const maxDpr = lowGfx ? Math.min(gfxRef.current.dpr, 1.25) : gfxRef.current.dpr;
   perfStats.gfx = lowGfx ? `LOW gfx${gfxForce ? " (forced)" : ""}` : `HIGH gfx${gfxForce ? " (forced)" : ""}`;

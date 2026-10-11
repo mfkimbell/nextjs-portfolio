@@ -9,6 +9,7 @@ import ForceLandscape from "@/components/ForceLandscape";
 import ViewportDebug from "@/components/ViewportDebug";
 import PerfOverlay from "@/components/PerfOverlay";
 import { useProgress } from "@react-three/drei";
+import { perfStats, SCENE_READY_EVENT } from "@/lib/perfStats";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
 import ConfiguredBearDialogue from "@/components/bear-dialogue/ConfiguredBearDialogue";
 import { useBearVoiceAgent } from "@/hooks/useBearVoiceAgent";
@@ -140,17 +141,16 @@ export default function CampsiteHome() {
    * 20 s fallback so a stuck download can never trap anyone on the title.
    */
   const loadProgress = useProgress();
+  // Ready = every site loaded AND its shaders compiled (CampfireScene's
+  // ShaderPrewarm fires SCENE_READY_EVENT). Compiling them after entering is
+  // what froze the phone for seconds at a time once the fly-in had started.
   const [sceneReady, setSceneReady] = useState(false);
   useEffect(() => {
-    if (sceneReady) return;
-    if (!loadProgress.active && loadProgress.total > 0 && loadProgress.progress >= 100) {
-      const t = window.setTimeout(() => setSceneReady(true), 400);   // a beat for shader compile
-      return () => window.clearTimeout(t);
-    }
-  }, [sceneReady, loadProgress.active, loadProgress.total, loadProgress.progress]);
-  useEffect(() => {
-    const t = window.setTimeout(() => setSceneReady(true), 20000);
-    return () => window.clearTimeout(t);
+    if (perfStats.prewarmedAt) { setSceneReady(true); return; }
+    const on = () => setSceneReady(true);
+    window.addEventListener(SCENE_READY_EVENT, on);
+    const t = window.setTimeout(on, 30000);   // never trap anyone on the title
+    return () => { window.removeEventListener(SCENE_READY_EVENT, on); window.clearTimeout(t); };
   }, []);
 
   useEffect(() => {
@@ -329,7 +329,7 @@ export default function CampsiteHome() {
       {showTitle ? (
         <CampsiteTitleIntro
           ready={sceneReady}
-          loadingPercent={loadProgress.progress}
+          loadingPercent={loadProgress.active || loadProgress.progress < 100 ? loadProgress.progress : -1}
           onUnmute={startBearsDuringFlight}
           onEnter={() => {
             setShowTitle(false);

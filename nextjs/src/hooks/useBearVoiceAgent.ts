@@ -151,9 +151,8 @@ export function useBearVoiceAgent({
     }
   }, []);
 
-  useEffect(() => {
-    void requestMicrophone();
-  }, [requestMicrophone]);
+  // (Used to ask for the mic on mount - that prompt appeared the instant the
+  //  site opened, even for visitors who only ever type. Now asked on "talk".)
 
   useEffect(() => {
     speechVolumeRef.current = {

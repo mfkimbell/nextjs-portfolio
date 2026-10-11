@@ -2232,6 +2232,8 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   propSoundVolume: number;
   /** Graphics: 0 = auto (low on phones / slow machines), 1 = always low, 2 = always high. */
   gfxQuality: number;
+  /** Internal: set to 1 by low-graphics mode (not a lab setting). */
+  lowGfxActive: number;
   /** Site only: skip pines beyond the fog from every site camera (1 = on). */
   forestFogCull: number;
   leftBagSoundEarly: number;
@@ -3948,6 +3950,7 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   gramophoneSongVolume: 0.35,
   propSoundVolume: 0.85,
   gfxQuality: 0,
+  lowGfxActive: 0,
   forestFogCull: 1,
   leftBagSoundEarly: 0,
   rightBagSoundEarly: 0,

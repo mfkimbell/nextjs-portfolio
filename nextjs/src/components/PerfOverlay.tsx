@@ -16,9 +16,7 @@ export default function PerfOverlay() {
   const [show, setShow] = useState(false);
   const [, force] = useState(0);
   const frames = useRef({ n: 0, since: 0, worst: 0, fps: 0, avg: 0, worstShown: 0, long: 0, firstFrameAt: 0 });
-  const { active, progress, loaded, total } = useProgress();
-  const loadedAt = useRef(0);
-  if (!active && progress >= 100 && !loadedAt.current && total > 0) loadedAt.current = performance.now() - T0;
+  const { progress, loaded, total } = useProgress();
 
   useEffect(() => {
     setShow(!new URLSearchParams(window.location.search).has("noperf"));
@@ -59,7 +57,7 @@ export default function PerfOverlay() {
       <div className="text-white">{p.scene || "starting"} &middot; {p.gfx || "?"} &middot; up {up.toFixed(0)}s</div>
       <div>{f.fps.toFixed(0)} fps &middot; avg {f.avg.toFixed(1)}ms &middot; worst {f.worstShown.toFixed(0)}ms</div>
       <div>{f.long} freezes over 100ms</div>
-      <div>loading {Math.round(progress)}% ({loaded}/{total}){loadedAt.current ? ` · done at ${(loadedAt.current / 1000).toFixed(1)}s` : ""}</div>
+      <div>loading {Math.round(progress)}% ({loaded}/{total}) &middot; {p.prewarmedAt ? `ready at ${((p.prewarmedAt - T0) / 1000).toFixed(1)}s` : "not ready yet"}</div>
       {fresh ? (
         <>
           <div>{p.calls} calls &middot; {(p.tris / 1000).toFixed(0)}k tris &middot; {p.progs} shaders</div>

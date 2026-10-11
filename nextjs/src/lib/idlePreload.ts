@@ -1,4 +1,5 @@
 import { useGLTF } from "@react-three/drei";
+import { SCENE_READY_EVENT } from "@/lib/perfStats";
 
 /**
  * Model preloads that wait their turn. A module-scope useGLTF.preload starts
@@ -30,8 +31,12 @@ function schedule() {
 function start() {
   if (started || typeof window === "undefined") return;
   started = true;
-  const go = () => window.setTimeout(schedule, 4000);
-  if (document.readyState === "complete") go(); else window.addEventListener("load", go, { once: true });
+  // Wait until the scene says it's loaded and its shaders are compiled, so
+  // these never hold up the title screen's "ready" (or fight for bandwidth).
+  let fired = false;
+  const go = () => { if (fired) return; fired = true; window.setTimeout(schedule, 3000); };
+  window.addEventListener(SCENE_READY_EVENT, go, { once: true });
+  window.setTimeout(go, 45000);
 }
 
 export function idlePreload(url: string) {
