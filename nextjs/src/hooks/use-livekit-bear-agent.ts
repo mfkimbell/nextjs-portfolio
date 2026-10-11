@@ -5,6 +5,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 import type { BearVoiceAgent, MicrophonePermission } from "@/hooks/useBearVoiceAgent";
 import type { BearVoiceState, BearVoiceStateRef } from "@/lib/bearVoiceState";
 import { applyLipSyncFrame, createLipSyncAnalyzer } from "@/lib/bearLipSync";
+import { getSharedAudioContext } from "@/lib/campsiteSounds";
 
 const DEFAULT_SMOKEY_PITCH_RATE = 0.9;
 const DEFAULT_MAPLE_PITCH_RATE = 1.12;
@@ -36,7 +37,11 @@ export const useLiveKitBearAgent = (
   const roomRef = useRef<Room | null>(null);
   const audioElementsRef = useRef<HTMLAudioElement[]>([]);
   const participantBearsRef = useRef(new Map<string, BearVoiceState["activeBearId"]>());
-  const audioContextsRef = useRef(new Map<string, AudioContext>());
+  // One graph per bear participant, all on the page's SHARED AudioContext.
+  // (Each bear used to get its own `new AudioContext()`: iOS caps how many a
+  //  page may hold and starts each one suspended outside a tap, and closing
+  //  them on teardown was the only cleanup.)
+  const audioContextsRef = useRef(new Map<string, { context: AudioContext; nodes: AudioNode[] }>());
   const ambienceGraphsRef = useRef(new Map<string, BearAmbienceGraph>());
   const audioFramesRef = useRef(new Map<string, number>());
   const trackStatesRef = useRef(new Map<string, { state: BearVoiceState; rms: number; lastAudibleAt: number }>());
@@ -79,7 +84,7 @@ export const useLiveKitBearAgent = (
   const cleanup = useCallback(() => {
     for (const frame of audioFramesRef.current.values()) cancelAnimationFrame(frame);
     audioFramesRef.current.clear();
-    for (const context of audioContextsRef.current.values()) void context.close();
+    for (const g of audioContextsRef.current.values()) g.nodes.forEach((n) => { try { n.disconnect(); } catch { /* already */ } });
     audioContextsRef.current.clear();
     ambienceGraphsRef.current.clear();
     trackStatesRef.current.clear();
@@ -117,7 +122,7 @@ export const useLiveKitBearAgent = (
     bearLog("creating audio graph", { participant: participantIdentity, trackSid: track.sid, graphsNow: audioContextsRef.current.size + 1 });
     const mediaTrack = track.mediaStreamTrack;
     if (!mediaTrack) return;
-    const context = new AudioContext();
+    const context = getSharedAudioContext() ?? new AudioContext();
     const analyser = context.createAnalyser();
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.25;
@@ -144,7 +149,7 @@ export const useLiveKitBearAgent = (
     convolver.connect(wet);
     dry.connect(context.destination);
     wet.connect(context.destination);
-    audioContextsRef.current.set(participantIdentity, context);
+    audioContextsRef.current.set(participantIdentity, { context, nodes: [source, analyser, filter, panner, dry, wet, convolver] });
     ambienceGraphsRef.current.set(participantIdentity, { filter, panner, dry, wet });
     const bear = participantBearsRef.current.get(participantIdentity)
       ?? (participantIdentity.includes("maple") ? "back_right_log" : "back_left_log");

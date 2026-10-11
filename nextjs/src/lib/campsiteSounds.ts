@@ -63,6 +63,16 @@ function installGestureUnlock() {
   window.addEventListener("pointerdown", unlock, { once: true });
   window.addEventListener("keydown", unlock, { once: true });
   window.addEventListener("touchstart", unlock, { once: true });
+  // iOS only counts touchEND / click as a gesture that may start audio, and it
+  // suspends ("interrupts") the context when the tab is backgrounded, a call
+  // comes in, etc. So keep nudging it back on every tap and on return.
+  const revive = () => {
+    const ctx = sharedAudioContext;
+    if (ctx && ctx.state !== "running") ctx.resume().catch(() => {});
+  };
+  window.addEventListener("touchend", () => { unlock(); revive(); }, { passive: true });
+  window.addEventListener("click", revive);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) revive(); });
 }
 
 /**
@@ -75,6 +85,13 @@ function installGestureUnlock() {
 let sharedAudioContext: AudioContext | null = null;
 function getAudioContext(): AudioContext | null {
   if (typeof window === "undefined") return null;
+  // iOS mutes Web Audio when the ring/silent switch is on (plain <audio> it
+  // lets through). Everything now goes through Web Audio on iOS, so declare
+  // this page's sound "playback", like a music app - Safari 17+ supports it.
+  try {
+    const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+    if (session && session.type !== "playback") session.type = "playback";
+  } catch { /* older Safari: nothing to do */ }
   const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) return null;
   if (!sharedAudioContext) sharedAudioContext = new Ctor();
@@ -83,6 +100,19 @@ function getAudioContext(): AudioContext | null {
   }
   return sharedAudioContext;
 }
+
+/**
+ * iOS Safari ignores HTMLMediaElement.volume - it is read-only there, always 1.
+ * So on iPhone/iPad every volume slider, every fade and every scene-change
+ * fade-out did nothing: loops kept playing at full volume until the fade
+ * "finished" and they were paused, which is the music left ringing after
+ * you'd moved to the next scene. There, all volume goes through a Web Audio
+ * GainNode instead, which iOS does honour.
+ */
+export const IS_IOS = typeof navigator !== "undefined" && (
+  /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === "MacIntel" && (navigator.maxTouchPoints ?? 0) > 1)
+);
 
 /* ------------------------------------------------------------ sound tuning */
 
@@ -223,6 +253,7 @@ export function useCampsiteAudioLoop(
 ) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pannerRef = useRef<StereoPannerNode | null>(null);
+  const loopGainRef = useRef<GainNode | null>(null);
   // 0..1, eased toward `enabled` over fadeMs. A plain ref rather than state:
   // it moves every frame a transition is running, and driving that through
   // React would mean a re-render per frame for no reason - nothing else
@@ -253,9 +284,12 @@ export function useCampsiteAudioLoop(
         try {
           const source = ctx.createMediaElementSource(a);
           const panner = ctx.createStereoPanner();
-          source.connect(panner);
+          const gain = ctx.createGain();
+          source.connect(gain);
+          gain.connect(panner);
           panner.connect(ctx.destination);
           pannerRef.current = panner;
+          loopGainRef.current = gain;
         } catch {
           // Web Audio unavailable/blocked for this element - loop still
           // plays, just centered instead of panned.
@@ -269,6 +303,7 @@ export function useCampsiteAudioLoop(
       a.src = "";
       audioRef.current = null;
       pannerRef.current = null;
+      loopGainRef.current = null;
     };
   }, [url, panRef]);
 
@@ -299,7 +334,9 @@ export function useCampsiteAudioLoop(
       const a = audioRef.current;
       if (a) {
         const target = enabled ? 1 : 0;
-        const step = fadeMs > 0 ? dt / (fadeMs / 1000) : 1;
+        // leaving: get out quickly so a scene's music doesn't trail into the next
+        const fadeNow = target === 0 ? Math.min(fadeMs, 350) : fadeMs;
+        const step = fadeNow > 0 ? dt / (fadeNow / 1000) : 1;
         gainRef.current += (target - gainRef.current) * Math.min(1, step);
         if (Math.abs(target - gainRef.current) < 0.004) gainRef.current = target;
 
@@ -322,17 +359,22 @@ export function useCampsiteAudioLoop(
           if (tune.end > tune.start && a.currentTime >= tune.end) a.currentTime = Math.max(0, tune.start);
           else if (tune.start > 0 && a.currentTime < tune.start - 0.05) a.currentTime = tune.start;
         }
-        const needGraph = tune.vol > 1 || Math.abs(tune.pan) > 0.001;
+        const needGraph = IS_IOS || tune.vol > 1 || Math.abs(tune.pan) > 0.001;
         const g = needGraph || elementGraphs.has(a) ? (panRef ? null : graphFor(a)) : null;
-        if (g) {
-          g.gain.gain.value = Math.max(1, tune.vol);
-          g.pan.pan.value = Math.max(-1, Math.min(1, tune.pan));
-        }
+        if (g) g.pan.pan.value = Math.max(-1, Math.min(1, tune.pan));
         if (timeRef) timeRef.current = Number.isFinite(a.currentTime) ? a.currentTime : 0;
         // clamped: a liveMultiplier may boost past 1 (the banjo up close),
         // and an <audio> element throws on any volume outside 0..1
         const live = liveMultiplier && Number.isFinite(liveMultiplier.current) ? liveMultiplier.current : 1;
-        a.volume = Math.max(0, Math.min(1, perceptualGain(volume) * live * gainRef.current * Math.min(1, Math.max(0, tune.vol))));
+        const level = Math.max(0, perceptualGain(volume) * live * gainRef.current);
+        const gainNode = g?.gain ?? loopGainRef.current;
+        if (gainNode && IS_IOS) {
+          // iOS: the element's volume is ignored - the whole level goes on the gain
+          gainNode.gain.value = level * Math.max(0, tune.vol);
+        } else {
+          a.volume = Math.max(0, Math.min(1, level * Math.min(1, Math.max(0, tune.vol))));
+          if (gainNode) gainNode.gain.value = Math.max(1, tune.vol);
+        }
         if (gainRef.current <= 0 && target === 0 && playingRef.current) {
           a.pause();
           playingRef.current = false;
@@ -383,9 +425,12 @@ export function useCampsiteOneShot(url: string) {
     const r = (Number.isFinite(rate) && rate > 0 ? rate : 1) * Math.max(0.05, t.rate);
     node.playbackRate = r;
     node.preservesPitch = false;
-    if (t.vol > 1 || Math.abs(t.pan) > 0.001) {
+    if (IS_IOS || t.vol > 1 || Math.abs(t.pan) > 0.001) {
       const g = graphFor(node);
-      if (g) { g.gain.gain.value = Math.max(1, t.vol); g.pan.pan.value = Math.max(-1, Math.min(1, t.pan)); }
+      if (g) {
+        g.gain.gain.value = IS_IOS ? v * Math.max(0, t.vol) : Math.max(1, t.vol);
+        g.pan.pan.value = Math.max(-1, Math.min(1, t.pan));
+      }
     }
     const go = () => {
       if ((node as AudioWithCancel).__cancelled) return;
@@ -414,11 +459,13 @@ type AudioWithCancel = HTMLAudioElement & { __cancelled?: boolean };
 export function fadeOutAudio(a: HTMLAudioElement | null | undefined, ms = 120) {
   if (!a) return;
   (a as AudioWithCancel).__cancelled = true;   // a delayed cue that hasn't started yet never will
-  const start = a.volume;
+  const g = elementGraphs.get(a);
+  const start = g ? g.gain.gain.value : a.volume;
   const t0 = performance.now();
   const step = () => {
     const u = Math.min(1, (performance.now() - t0) / Math.max(1, ms));
-    a.volume = Math.max(0, start * (1 - u));
+    if (g) g.gain.gain.value = Math.max(0, start * (1 - u));
+    else a.volume = Math.max(0, start * (1 - u));
     if (u < 1) requestAnimationFrame(step);
     else a.pause();
   };

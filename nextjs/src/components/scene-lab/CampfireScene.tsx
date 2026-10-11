@@ -11740,8 +11740,12 @@ function ShaderPrewarm({ ready }: { ready: boolean }) {
   const done = useRef(false);
   useEffect(() => {
     if (!ready || done.current) return;
-    done.current = true;
+    // (done is set when the run actually starts: setting it here meant any
+    //  re-render in the next 800 ms cancelled the timer and it never ran -
+    //  which is why the phone readout said "not ready yet" forever)
     const t = window.setTimeout(() => {
+      if (done.current) return;
+      done.current = true;
       const locs = [0, 1, 2].map((i) => scene.getObjectByName(`location_${i}`)).filter(Boolean) as THREE.Object3D[];
       if (locs.length < 3) return;
       const was = locs.map((l) => l.visible);
