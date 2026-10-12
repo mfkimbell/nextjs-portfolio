@@ -6,7 +6,8 @@ import twilio from "twilio";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const envPath = resolve(scriptDirectory, "../.env");
 const dryRun = process.argv.includes("--dry-run");
-const appEnv = process.env.APP_ENV;
+// production unless APP_ENV says development (development / dev / DEV)
+const appEnv = /^(dev|development)$/i.test((process.env.APP_ENV ?? "").trim()) ? "DEV" : "PROD";
 
 function fail(message) {
   throw new Error(message);
@@ -58,9 +59,6 @@ function replaceEnvValues(original, updates) {
   return `${lines.join("\n").replace(/\n*$/, "")}\n`;
 }
 
-if (appEnv !== "DEV" && appEnv !== "PROD") {
-  fail("APP_ENV must be supplied as exactly DEV or PROD, for example: APP_ENV=PROD pnpm twilio:setup");
-}
 if (!existsSync(envPath)) fail(`Expected ${envPath}`);
 if (lstatSync(envPath).isSymbolicLink()) fail(`Refusing to mutate symlinked env file: ${envPath}`);
 

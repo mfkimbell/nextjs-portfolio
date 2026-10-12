@@ -27,7 +27,7 @@ import DialoguePlaque from "@/components/bear-dialogue/dialogue-plaque";
 import ConfiguredBearDialogue from "@/components/bear-dialogue/ConfiguredBearDialogue";
 import type { BearVoiceAgent } from "@/hooks/useBearVoiceAgent";
 import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
-import { NO_TEXT_RESERVE, SMOKEY_ICON_CLASS, smokeyIconStyle, smokeyRgba, smokeyTextReserve, type SmokeyIconSettings } from "@/components/bear-dialogue/smokey-icon";
+import { headTextReserve, SMOKEY_ICON_CLASS, smokeyIconStyle, smokeyRgba, type SmokeyIconSettings } from "@/components/bear-dialogue/smokey-icon";
 import SmokeyTextFlow from "@/components/bear-dialogue/smokey-text-flow";
 import { useArtworkOutline } from "@/components/bear-dialogue/artwork-outline";
 import { jellyCornerFraction } from "@/components/bear-dialogue/jelly-path";
@@ -645,10 +645,12 @@ export default function SceneLabClient() {
   }), [campfireConfig]);
   const previewPlaqueCorner = useMemo(() => jellyCornerFraction(campfireConfig.bearDialogueRoundness), [campfireConfig.bearDialogueRoundness]);
   const previewSmokeyOutline = useArtworkOutline("/smokey_head.png");
-  const previewTextReserve = useMemo(() => campfireConfig.bearDialoguePreviewSide < 0.5
-    ? smokeyTextReserve(previewSmokeyIcon, { widthRem: campfireConfig.bearDialogueWidthRem, paddingRightRem: campfireConfig.bearDialogueTextPadRightRem, paddingBottomRem: campfireConfig.bearDialogueTextPadBottomRem }, previewSmokeyOutline)
-    : NO_TEXT_RESERVE,
-    [campfireConfig, previewSmokeyIcon, previewSmokeyOutline]);
+  const previewMapleOutline = useArtworkOutline("/maple-head.png");
+  // each bubble flows its text round its own bear's head (side 0 Smokey, 1 Maple)
+  // Smokey's head bottom-left, Maple's bottom-right; text flows round each
+  const previewTextReserves = useMemo(() => ([[previewSmokeyOutline, "right"], [previewMapleOutline, "right"]] as const).map(([outline, corner]) =>
+    headTextReserve(previewSmokeyIcon, { widthRem: campfireConfig.bearDialogueWidthRem, paddingRightRem: campfireConfig.bearDialogueTextPadRightRem, paddingLeftRem: campfireConfig.bearDialogueTextPadLeftRem, paddingBottomRem: campfireConfig.bearDialogueTextPadBottomRem }, outline, corner)),
+    [campfireConfig, previewSmokeyIcon, previewSmokeyOutline, previewMapleOutline]);
   // Mic / audio-file stand-in for the live bear call, so the "Bear talking"
   // knobs can be tuned in the lab.
   const talkTest = useBearTalkTest();
@@ -1273,6 +1275,15 @@ export default function SceneLabClient() {
     at(6600, { speaker: null, speaking: false, running: false });
   };
   useEffect(() => () => popDemoTimers.current.forEach((t) => window.clearTimeout(t)), []);
+  // Lab: the visitor's typing bubble, held open so it can be tuned.
+  const [typingDemo, setTypingDemo] = useState(false);
+  const typingDemoAgent: BearVoiceAgent = {
+    activeSpeakerName: null, error: null, isMuted: true, microphonePermission: "granted",
+    isRemoteSpeaking: false, remoteAudioLevel: 0, spokenText: null, dialoguePhase: "your-turn",
+    start: async () => {}, reactToFishFire: () => {}, requestMicrophone: async () => {},
+    sendTextMessage: async () => true,
+    status: "active", stop: () => {}, toggleMute: () => {}, voiceRef: popDemoVoice,
+  };
   const popDemoAgent: BearVoiceAgent = {
     activeSpeakerName: popDemo.speaking ? popDemo.speaker : null,
     error: null, isMuted: false, microphonePermission: "granted",
@@ -1355,6 +1366,8 @@ export default function SceneLabClient() {
         <CampsiteTitleIntro
           key={titlePreviewKey}
           previewMode
+          loadingPercent={-1}
+          loader={{ bottomPct: campfireConfig.titleLoaderBottomPct, leftPct: campfireConfig.titleLoaderLeftPct, sizeRem: campfireConfig.titleLoaderSizeRem, textScale: campfireConfig.titleLoaderTextScale, preview: (campfireConfig.titleLoaderPreview ?? 0) >= 0.5 }}
           onUnmute={() => setTitleHeldForPreview(false)}
           onEnter={() => setTitlePreview(false)}
           timing={{
@@ -1370,36 +1383,41 @@ export default function SceneLabClient() {
         />
       ) : null}
 
+      {activeScene === "campfire" && typingDemo && !popDemo.running ? (
+        <ConfiguredBearDialogue key="typing-demo" agent={typingDemoAgent} chatMode="type" config={campfireConfig} />
+      ) : null}
+
       {activeScene === "campfire" && popDemo.running ? (
         <ConfiguredBearDialogue agent={popDemoAgent} config={campfireConfig} />
       ) : null}
 
       {activeScene === "campfire" && !titlePreview && !popDemo.running && campfireConfig.bearDialoguePreviewOn >= 0.5 ? (
+        (campfireConfig.bearDialoguePreviewSide >= 1.5 ? [0, 1] : [campfireConfig.bearDialoguePreviewSide >= 0.5 ? 1 : 0]).map((side) => (
         <div
-          key={dialoguePreviewKey}
+          key={`${dialoguePreviewKey}:${side}`}
           aria-label="Bear dialogue preview"
           style={{
-            ...(campfireConfig.bearDialoguePreviewSide >= 0.5 ? { right: "1.25rem" } : { left: "1.25rem" }),
+            // Lab only: Maple's bubble sits in the middle of the screen - on the
+            // right (where the site puts it) the config panel covered it.
+            ...(side >= 0.5 ? { left: `calc(50% - min(82vw, ${campfireConfig.bearDialogueWidthRem}rem) / 2)` } : { left: "1.25rem" }),
             animation: campfireConfig.bearDialogueMotionOn >= 0.5
               ? `bear-dialogue-preview-pop ${Math.max(180, 760 - campfireConfig.bearDialoguePopStiffness)}ms cubic-bezier(0.2, 1.35, 0.45, 1) both`
               : "none",
-            bottom: `${campfireConfig.bearDialogueBottomRem}rem`,
+            bottom: side >= 0.5 ? "30vh" : `${campfireConfig.bearDialogueBottomRem}rem`,
             width: `min(82vw, ${campfireConfig.bearDialogueWidthRem}rem)`,
           }}
           className={(dialoguePreviewFonts[Math.round(campfireConfig.bearDialogueFont)] ?? dialoguePreviewFonts[0]).className + " pointer-events-none absolute z-20 origin-bottom"}
         >
-          <div style={{ transform: `rotate(${campfireConfig.bearDialoguePreviewSide >= 0.5 ? campfireConfig.bearDialogueRightTiltDeg : campfireConfig.bearDialogueLeftTiltDeg}deg) scale(${campfireConfig.bearDialogueScale})`, containerType: "inline-size" }} className="origin-bottom">
+          <div style={{ transform: `rotate(${side >= 0.5 ? campfireConfig.bearDialogueRightTiltDeg : campfireConfig.bearDialogueLeftTiltDeg}deg) scale(${campfireConfig.bearDialogueScale})`, containerType: "inline-size" }} className="origin-bottom">
             <DialoguePlaque opacity={campfireConfig.bearDialogueOpacity} blurPx={campfireConfig.bearDialogueBlurPx} scale={1} borderOn={campfireConfig.bearDialogueBorderOn} borderWidthPx={campfireConfig.bearDialogueBorderWidthPx} borderColor={`rgb(${campfireConfig.bearDialogueBorderColorR * 255} ${campfireConfig.bearDialogueBorderColorG * 255} ${campfireConfig.bearDialogueBorderColorB * 255})`} motionOn={campfireConfig.bearDialogueMotionOn} waveAmplitude={campfireConfig.bearDialogueWaveAmplitude} waveSpeed={campfireConfig.bearDialogueWaveSpeed} waveSpacing={campfireConfig.bearDialogueWaveSpacing} roundness={campfireConfig.bearDialogueRoundness} designWidthRem={campfireConfig.bearDialogueWidthRem} minHeight={`${campfireConfig.bearDialogueMinHeightRem}em`}>
-              <div className="absolute z-20 h-0 w-0" style={campfireConfig.bearDialoguePreviewSide >= 0.5
-                ? { right: `${(previewPlaqueCorner.x * 100).toFixed(2)}%`, top: `${(previewPlaqueCorner.y * 100).toFixed(2)}%` }
-                : { left: `${(previewPlaqueCorner.x * 100).toFixed(2)}%`, top: `${(previewPlaqueCorner.y * 100).toFixed(2)}%` }}>
+              <div className="absolute z-20 h-0 w-0" style={{ left: `${(previewPlaqueCorner.x * 100).toFixed(2)}%`, top: `${(previewPlaqueCorner.y * 100).toFixed(2)}%` }}>
               <div
-              style={{ transformOrigin: campfireConfig.bearDialoguePreviewSide >= 0.5 ? "bottom left" : "bottom right", padding: "0.375em 1.25em", fontSize: "0.875em", transform: `translate(${campfireConfig.bearDialogueNameTagXRem + campfireConfig.bearDialogueNameTagInsetXRem}em, ${campfireConfig.bearDialogueNameTagYRem + campfireConfig.bearDialogueNameTagInsetYRem}em) rotate(${campfireConfig.bearDialoguePreviewSide >= 0.5 ? campfireConfig.bearDialogueMapleNameTiltDeg : campfireConfig.bearDialogueSmokeyNameTiltDeg}deg) scale(${campfireConfig.bearDialogueNameTagScale})` }}
-              className={`absolute bottom-0 ${campfireConfig.bearDialoguePreviewSide >= 0.5 ? "left-0" : "right-0"} whitespace-nowrap font-normal text-[#fffdf4]`}
+              style={{ transformOrigin: "bottom right", padding: "0.375em 1.25em", fontSize: "0.875em", transform: side >= 0.5 ? `translate(${(campfireConfig.bearDialogueMapleNameTagXRem ?? -0.4) + (campfireConfig.bearDialogueMapleNameTagInsetXRem ?? 6)}em, ${(campfireConfig.bearDialogueMapleNameTagYRem ?? 1.6) + (campfireConfig.bearDialogueMapleNameTagInsetYRem ?? -1.55)}em) rotate(${campfireConfig.bearDialogueMapleNameTiltDeg}deg) scale(${campfireConfig.bearDialogueMapleNameTagScale ?? 1.6})` : `translate(${campfireConfig.bearDialogueNameTagXRem + campfireConfig.bearDialogueNameTagInsetXRem}em, ${campfireConfig.bearDialogueNameTagYRem + campfireConfig.bearDialogueNameTagInsetYRem}em) rotate(${campfireConfig.bearDialogueSmokeyNameTiltDeg}deg) scale(${campfireConfig.bearDialogueNameTagScale})` }}
+              className="absolute bottom-0 right-0 whitespace-nowrap font-normal text-[#fffdf4]"
               >
                 <JellyBackdrop
-                  fill={campfireConfig.bearDialoguePreviewSide >= 0.5 ? rgbFromChannels(campfireConfig.bearDialogueMapleTagColorR, campfireConfig.bearDialogueMapleTagColorG, campfireConfig.bearDialogueMapleTagColorB) : rgbFromChannels(campfireConfig.bearDialogueSmokeyTagColorR, campfireConfig.bearDialogueSmokeyTagColorG, campfireConfig.bearDialogueSmokeyTagColorB)}
-                  shadowColor={campfireConfig.bearDialoguePreviewSide >= 0.5 ? darkenedRgb(campfireConfig.bearDialogueMapleTagColorR, campfireConfig.bearDialogueMapleTagColorG, campfireConfig.bearDialogueMapleTagColorB, campfireConfig.bearDialogueNameTagShadowDarken) : darkenedRgb(campfireConfig.bearDialogueSmokeyTagColorR, campfireConfig.bearDialogueSmokeyTagColorG, campfireConfig.bearDialogueSmokeyTagColorB, campfireConfig.bearDialogueNameTagShadowDarken)}
+                  fill={side >= 0.5 ? rgbFromChannels(campfireConfig.bearDialogueMapleTagColorR, campfireConfig.bearDialogueMapleTagColorG, campfireConfig.bearDialogueMapleTagColorB) : rgbFromChannels(campfireConfig.bearDialogueSmokeyTagColorR, campfireConfig.bearDialogueSmokeyTagColorG, campfireConfig.bearDialogueSmokeyTagColorB)}
+                  shadowColor={side >= 0.5 ? darkenedRgb(campfireConfig.bearDialogueMapleTagColorR, campfireConfig.bearDialogueMapleTagColorG, campfireConfig.bearDialogueMapleTagColorB, campfireConfig.bearDialogueNameTagShadowDarken) : darkenedRgb(campfireConfig.bearDialogueSmokeyTagColorR, campfireConfig.bearDialogueSmokeyTagColorG, campfireConfig.bearDialogueSmokeyTagColorB, campfireConfig.bearDialogueNameTagShadowDarken)}
                   stroke={rgbaFromChannels(campfireConfig.bearDialogueNameTagOutlineColorR, campfireConfig.bearDialogueNameTagOutlineColorG, campfireConfig.bearDialogueNameTagOutlineColorB, campfireConfig.bearDialogueNameTagOutlineOpacity)}
                   strokeWidthPx={campfireConfig.bearDialogueNameTagOutlineOn >= 0.5 ? campfireConfig.bearDialogueNameTagOutlineWidthPx : 0}
                   shadowYPx={3}
@@ -1408,18 +1426,19 @@ export default function SceneLabClient() {
                   spacing={campfireConfig.bearDialogueNameTagWaveSpacing}
                   roundness={campfireConfig.bearDialogueNameTagRoundness}
                   motionOn={campfireConfig.bearDialogueMotionOn}
-                  phaseOffset={campfireConfig.bearDialoguePreviewSide >= 0.5 ? Math.PI : 0}
+                  phaseOffset={side >= 0.5 ? Math.PI : 0}
                 />
-                <span className="relative">{campfireConfig.bearDialoguePreviewSide >= 0.5 ? "Maple" : "Smokey"}</span>
+                <span className="relative">{side >= 0.5 ? "Maple" : "Smokey"}</span>
               </div>
               </div>
-              <img src={campfireConfig.bearDialoguePreviewSide < 0.5 ? "/smokey_head.png" : "/maple-head.png"} alt="" style={smokeyIconStyle(previewSmokeyIcon)} className={SMOKEY_ICON_CLASS} />
-              <SmokeyTextFlow className="relative" padTopRem={campfireConfig.bearDialogueTextPadTopRem} padRightRem={campfireConfig.bearDialogueTextPadRightRem} padBottomRem={campfireConfig.bearDialogueTextPadBottomRem} padLeftRem={campfireConfig.bearDialogueTextPadLeftRem} reserveWidthRem={previewTextReserve.reserveWidthRem} reserveHeightRem={previewTextReserve.reserveHeightRem} reserveShape={previewTextReserve.shape} minHeightEm={campfireConfig.bearDialogueMinHeightRem}>
+              <img src={side < 0.5 ? "/smokey_head.png" : "/maple-head.png"} alt="" style={smokeyIconStyle(previewSmokeyIcon, "right")} className={SMOKEY_ICON_CLASS} />
+              <SmokeyTextFlow className="relative" padTopRem={campfireConfig.bearDialogueTextPadTopRem} padRightRem={campfireConfig.bearDialogueTextPadRightRem} padBottomRem={campfireConfig.bearDialogueTextPadBottomRem} padLeftRem={campfireConfig.bearDialogueTextPadLeftRem} reserveWidthRem={previewTextReserves[side].reserveWidthRem} reserveHeightRem={previewTextReserves[side].reserveHeightRem} reserveShape={previewTextReserves[side].shape} side="right" minHeightEm={campfireConfig.bearDialogueMinHeightRem}>
                 <p style={{ fontSize: `${campfireConfig.bearDialogueTextSizeRem}em`, color: `rgb(${campfireConfig.bearDialogueTextColorR * 255} ${campfireConfig.bearDialogueTextColorG * 255} ${campfireConfig.bearDialogueTextColorB * 255})` }} className="leading-tight">{dialoguePreviewText(campfireConfig.bearDialoguePreviewTextWords)}</p>
               </SmokeyTextFlow>
             </DialoguePlaque>
           </div>
         </div>
+        ))
       ) : null}
 
       {activeScene === "campfire" && (selectedObject || (deletedObjects.length > 0 && !deletedDismissed)) && (
@@ -3011,6 +3030,14 @@ export default function SceneLabClient() {
                       step={0.02}
                       onChange={(value) => updateCampfire("titleLetterWaviness", value)}
                     />
+                    <SliderRow label="Loading fire: up / down (% from bottom)" value={campfireConfig.titleLoaderBottomPct ?? 7} min={0} max={60} step={0.5} onChange={(value) => updateCampfire("titleLoaderBottomPct", value)} />
+                    <SliderRow label="Loading fire: left / right (% across, 50 = centre)" value={campfireConfig.titleLoaderLeftPct ?? 50} min={0} max={100} step={0.5} onChange={(value) => updateCampfire("titleLoaderLeftPct", value)} />
+                    <SliderRow label="Loading fire: fade out when the scene is ready (0 = vanish)" value={campfireConfig.titleLoaderFadeOut ?? 1} min={0} max={1} step={1} onChange={(value) => updateCampfire("titleLoaderFadeOut", value)} />
+                    <SliderRow label="Loading fire: fade time (s)" value={campfireConfig.titleLoaderFadeSec ?? 0.8} min={0} max={5} step={0.05} onChange={(value) => updateCampfire("titleLoaderFadeSec", value)} />
+                    <SliderRow label="Loading fire: fade down to (0 = gone, 1 = stays)" value={campfireConfig.titleLoaderFadeTo ?? 0} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("titleLoaderFadeTo", value)} />
+                    <SliderRow label="Loading fire: size (rem)" value={campfireConfig.titleLoaderSizeRem ?? 7.5} min={2} max={20} step={0.1} onChange={(value) => updateCampfire("titleLoaderSizeRem", value)} />
+                    <SliderRow label="Loading text size (x)" value={campfireConfig.titleLoaderTextScale ?? 1} min={0.5} max={3} step={0.05} onChange={(value) => updateCampfire("titleLoaderTextScale", value)} />
+                    <SliderRow label="Show the loading fire in this preview (0/1)" value={campfireConfig.titleLoaderPreview ?? 0} min={0} max={1} step={1} onChange={(value) => updateCampfire("titleLoaderPreview", value)} />
                   </ControlGroup>
 
                   <ControlGroup title="1 · Bear dialogue" scope="1">
@@ -3022,7 +3049,31 @@ export default function SceneLabClient() {
                     <SliderRow label="Backdrop blur" value={campfireConfig.bearDialogueBlurPx} min={0} max={24} step={1} onChange={(value) => updateCampfire("bearDialogueBlurPx", value)} />
                     <SliderRow label="Panel scale" value={campfireConfig.bearDialogueScale} min={0.65} max={1.35} step={0.01} onChange={(value) => updateCampfire("bearDialogueScale", value)} />
                     <SliderRow label="Bottom inset" value={campfireConfig.bearDialogueBottomRem} min={0} max={12} step={0.1} onChange={(value) => updateCampfire("bearDialogueBottomRem", value)} />
-                    <SliderRow label="Preview on" value={campfireConfig.bearDialoguePreviewOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("bearDialoguePreviewOn", value)} />
+                    <div className="my-1.5">
+                      <p className="mb-1 text-[0.65rem] font-semibold text-white/70">Preview bubble</p>
+                      <div className="grid grid-cols-5 gap-1">
+                        {([["Off", -1], ["Smokey", 0], ["Maple", 1], ["Both", 2], ["Typing", 3]] as const).map(([label, side]) => {
+                          const on = side === 3 ? typingDemo
+                            : side < 0 ? !typingDemo && campfireConfig.bearDialoguePreviewOn < 0.5
+                            : !typingDemo && campfireConfig.bearDialoguePreviewOn >= 0.5 && Math.round(campfireConfig.bearDialoguePreviewSide) === side;
+                          return (
+                            <button
+                              key={label}
+                              type="button"
+                              onClick={() => {
+                                // Typing shows the visitor's live typing bubble on its own
+                                if (side === 3) { setTypingDemo(true); updateCampfire("bearDialoguePreviewOn", 0); return; }
+                                setTypingDemo(false);
+                                if (side < 0) { updateCampfire("bearDialoguePreviewOn", 0); return; }
+                                updateCampfire("bearDialoguePreviewOn", 1);
+                                updateCampfire("bearDialoguePreviewSide", side);
+                              }}
+                              className={`rounded border px-1 py-1 text-[0.7rem] font-semibold ${on ? "border-amber-300 bg-amber-300/25 text-amber-100" : "border-white/20 text-white/70 hover:bg-white/10"}`}
+                            >{label}</button>
+                          );
+                        })}
+                      </div>
+                    </div>
                     <SliderRow label="Font (0 Fredoka, 1 Fink, 2 Smash)" value={campfireConfig.bearDialogueFont} min={0} max={2} step={1} onChange={(value) => updateCampfire("bearDialogueFont", value)} />
                     <SliderRow label="Motion on" value={campfireConfig.bearDialogueMotionOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("bearDialogueMotionOn", value)} />
                     <button type="button" onClick={playPopDemo} className="my-1 w-full rounded border border-amber-300/40 bg-amber-300/10 px-2 py-1 text-[0.7rem] font-semibold text-amber-100 hover:bg-amber-300/20">
@@ -3030,7 +3081,6 @@ export default function SceneLabClient() {
                     </button>
                     <SliderRow label="Pop stiffness" value={campfireConfig.bearDialoguePopStiffness} min={80} max={700} step={10} onChange={(value) => updateCampfire("bearDialoguePopStiffness", value)} />
                     <SliderRow label="Pop damping" value={campfireConfig.bearDialoguePopDamping} min={5} max={60} step={1} onChange={(value) => updateCampfire("bearDialoguePopDamping", value)} />
-                    <SliderRow label="Preview side (0 Smokey, 1 Maple)" value={campfireConfig.bearDialoguePreviewSide} min={0} max={1} step={1} onChange={(value) => updateCampfire("bearDialoguePreviewSide", value)} />
                     <SliderRow label="Smokey left tilt" value={campfireConfig.bearDialogueLeftTiltDeg} min={-8} max={8} step={0.1} onChange={(value) => updateCampfire("bearDialogueLeftTiltDeg", value)} />
                     <SliderRow label="Maple right tilt" value={campfireConfig.bearDialogueRightTiltDeg} min={-8} max={8} step={0.1} onChange={(value) => updateCampfire("bearDialogueRightTiltDeg", value)} />
                     <SliderRow label="Bubble width" value={campfireConfig.bearDialogueWidthRem} min={16} max={44} step={0.5} onChange={(value) => updateCampfire("bearDialogueWidthRem", value)} />
@@ -3047,12 +3097,17 @@ export default function SceneLabClient() {
                     <SliderRow label="Preview text words" value={campfireConfig.bearDialoguePreviewTextWords} min={1} max={145} step={1} onChange={(value) => updateCampfire("bearDialoguePreviewTextWords", value)} />
                     <SliderRow label="Border on" value={campfireConfig.bearDialogueBorderOn} min={0} max={1} step={1} onChange={(value) => updateCampfire("bearDialogueBorderOn", value)} />
                     <SliderRow label="Border width px" value={campfireConfig.bearDialogueBorderWidthPx} min={0} max={12} step={1} onChange={(value) => updateCampfire("bearDialogueBorderWidthPx", value)} />
-                    <SliderRow label="Name tag X rem" value={campfireConfig.bearDialogueNameTagXRem} min={-4} max={4} step={0.1} onChange={(value) => updateCampfire("bearDialogueNameTagXRem", value)} />
-                    <SliderRow label="Name tag Y rem" value={campfireConfig.bearDialogueNameTagYRem} min={-4} max={4} step={0.1} onChange={(value) => updateCampfire("bearDialogueNameTagYRem", value)} />
-                    <SliderRow label="Name tag scale" value={campfireConfig.bearDialogueNameTagScale} min={0.4} max={3} step={0.05} onChange={(value) => updateCampfire("bearDialogueNameTagScale", value)} />
+                    <SliderRow label="Smokey: name tag x rem" value={campfireConfig.bearDialogueNameTagXRem} min={-4} max={4} step={0.1} onChange={(value) => updateCampfire("bearDialogueNameTagXRem", value)} />
+                    <SliderRow label="Smokey: name tag y rem" value={campfireConfig.bearDialogueNameTagYRem} min={-4} max={4} step={0.1} onChange={(value) => updateCampfire("bearDialogueNameTagYRem", value)} />
+                    <SliderRow label="Smokey: name tag scale" value={campfireConfig.bearDialogueNameTagScale} min={0.4} max={3} step={0.05} onChange={(value) => updateCampfire("bearDialogueNameTagScale", value)} />
                     <SliderRow label="Name tag anchor (0 legacy, 1 corner)" value={campfireConfig.bearDialogueNameTagAnchor} min={0} max={1} step={1} onChange={(value) => updateCampfire("bearDialogueNameTagAnchor", value)} />
-                    <SliderRow label="Name tag inset from side" value={campfireConfig.bearDialogueNameTagInsetXRem} min={-4} max={16} step={0.05} onChange={(value) => updateCampfire("bearDialogueNameTagInsetXRem", value)} />
-                    <SliderRow label="Name tag inset from top" value={campfireConfig.bearDialogueNameTagInsetYRem} min={-4} max={16} step={0.05} onChange={(value) => updateCampfire("bearDialogueNameTagInsetYRem", value)} />
+                    <SliderRow label="Smokey: name tag inset from side" value={campfireConfig.bearDialogueNameTagInsetXRem} min={-4} max={16} step={0.05} onChange={(value) => updateCampfire("bearDialogueNameTagInsetXRem", value)} />
+                    <SliderRow label="Smokey: name tag inset from top" value={campfireConfig.bearDialogueNameTagInsetYRem} min={-4} max={16} step={0.05} onChange={(value) => updateCampfire("bearDialogueNameTagInsetYRem", value)} />
+                    <SliderRow label="Maple: name tag X rem" value={campfireConfig.bearDialogueMapleNameTagXRem ?? -0.4} min={-4} max={4} step={0.1} onChange={(value) => updateCampfire("bearDialogueMapleNameTagXRem", value)} />
+                    <SliderRow label="Maple: name tag Y rem" value={campfireConfig.bearDialogueMapleNameTagYRem ?? 1.6} min={-4} max={4} step={0.1} onChange={(value) => updateCampfire("bearDialogueMapleNameTagYRem", value)} />
+                    <SliderRow label="Maple: name tag scale" value={campfireConfig.bearDialogueMapleNameTagScale ?? 1.6} min={0.4} max={3} step={0.05} onChange={(value) => updateCampfire("bearDialogueMapleNameTagScale", value)} />
+                    <SliderRow label="Maple: name tag inset from side" value={campfireConfig.bearDialogueMapleNameTagInsetXRem ?? 6} min={-4} max={16} step={0.05} onChange={(value) => updateCampfire("bearDialogueMapleNameTagInsetXRem", value)} />
+                    <SliderRow label="Maple: name tag inset from top" value={campfireConfig.bearDialogueMapleNameTagInsetYRem ?? -1.55} min={-4} max={16} step={0.05} onChange={(value) => updateCampfire("bearDialogueMapleNameTagInsetYRem", value)} />
                     <SliderRow label="Name tag jelly amount" value={campfireConfig.bearDialogueNameTagWaveAmplitude} min={0} max={6} step={0.1} onChange={(value) => updateCampfire("bearDialogueNameTagWaveAmplitude", value)} />
                     <SliderRow label="Name tag jelly speed" value={campfireConfig.bearDialogueNameTagWaveSpeed} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("bearDialogueNameTagWaveSpeed", value)} />
                     <SliderRow label="Name tag jelly waves" value={campfireConfig.bearDialogueNameTagWaveSpacing} min={1} max={8} step={0.5} onChange={(value) => updateCampfire("bearDialogueNameTagWaveSpacing", value)} />
@@ -3604,6 +3659,7 @@ export default function SceneLabClient() {
                     <SliderRow label="Rise share (higher = falls back faster)" value={campfireConfig.axeFlipApex} min={0.3} max={0.8} step={0.01} onChange={(value) => updateCampfire("axeFlipApex", value)} />
                     <SliderRow label="Bears: keep looking after it lands (s)" value={campfireConfig.axeWatchHold} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("axeWatchHold", value)} />
                     <SliderRow label="Bears: eyes catch up (s)" value={campfireConfig.axeWatchFollowTime} min={0.02} max={0.6} step={0.01} onChange={(value) => updateCampfire("axeWatchFollowTime", value)} />
+                    <SliderRow label="Maple: how high she looks (1 = right at the axe)" value={campfireConfig.axeWatchLookHeight ?? 0.85} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("axeWatchLookHeight", value)} />
                     <SliderRow label="Spin whoosh volume" value={campfireConfig.axeSpinVolume ?? 0.6} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("axeSpinVolume", value)} />
                     <SliderRow label="Hit-the-block thunk volume" value={campfireConfig.axeHitVolume ?? 0.8} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("axeHitVolume", value)} />
                   </ControlGroup>
@@ -3620,6 +3676,8 @@ export default function SceneLabClient() {
                     <SliderRow label="Roll right first (m, if not heading for the tent)" value={campfireConfig.woodRollRight} min={0} max={12} step={0.05} onChange={(value) => updateCampfire("woodRollRight", value)} />
                     <SliderRow label="Roll up to the tent first (0/1)" value={campfireConfig.woodRollToTent} min={0} max={1} step={1} onChange={(value) => updateCampfire("woodRollToTent", value)} />
                     <SliderRow label="How close to the tent (m)" value={campfireConfig.woodRollTentGap} min={0} max={5} step={0.05} onChange={(value) => updateCampfire("woodRollTentGap", value)} />
+                    <SliderRow label="Turn down once past the microphone (0/1)" value={campfireConfig.woodRollPastMic ?? 1} min={0} max={1} step={1} onChange={(value) => updateCampfire("woodRollPastMic", value)} />
+                    <SliderRow label="How far past the microphone before turning (m)" value={campfireConfig.woodRollMicPast ?? 0.35} min={-1} max={3} step={0.05} onChange={(value) => updateCampfire("woodRollMicPast", value)} />
                     <SliderRow label="Curve width (m)" value={campfireConfig.woodRollTurnRadius} min={0.05} max={3} step={0.05} onChange={(value) => updateCampfire("woodRollTurnRadius", value)} />
                     <SliderRow label="Then roll down the screen (m)" value={campfireConfig.woodRollAway} min={1} max={30} step={0.5} onChange={(value) => updateCampfire("woodRollAway", value)} />
                     <SliderRow label="Time to leave the shot (s)" value={campfireConfig.woodRollTime} min={0.5} max={8} step={0.05} onChange={(value) => updateCampfire("woodRollTime", value)} />
@@ -3845,6 +3903,31 @@ export default function SceneLabClient() {
                       Low drops the fire&apos;s point-light shadow, shrinks shadow maps, caps resolution.
                     </p>
                     <SliderRow label="Graphics (0 auto, 1 low, 2 high)" value={campfireConfig.gfxQuality ?? 0} min={0} max={2} step={1} onChange={(value) => updateCampfire("gfxQuality", value)} />
+                  </ControlGroup>
+
+                  <ControlGroup title="3 · Cabin — tea cup (shadows + steam)" scope="3">
+                    <SliderRow label="Tea cup shadow from the laptop (0/1)" value={campfireConfig.teaShadowOn ?? 1} min={0} max={1} step={1} onChange={(value) => updateCampfire("teaShadowOn", value)} />
+                    <SliderRow label="Tea shadow darkness" value={campfireConfig.teaShadowStrength ?? 0.55} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("teaShadowStrength", value)} />
+                    <SliderRow label="Tea shadow length limit (m)" value={campfireConfig.teaShadowReach ?? 0.45} min={0.05} max={2} step={0.01} onChange={(value) => updateCampfire("teaShadowReach", value)} />
+                    <SliderRow label="Tea shadow: raise light (shorter shadow)" value={campfireConfig.teaShadowLightLift ?? 0} min={-0.5} max={1} step={0.01} onChange={(value) => updateCampfire("teaShadowLightLift", value)} />
+                    <SliderRow label="Tea: shadow right under the cup (darkness)" value={campfireConfig.teaContactStrength ?? 0.6} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("teaContactStrength", value)} />
+                    <SliderRow label="Tea: under-cup shadow size" value={campfireConfig.teaContactSize ?? 0.26} min={0.05} max={0.8} step={0.01} onChange={(value) => updateCampfire("teaContactSize", value)} />
+                    <SliderRow label="Tea: under-cup shadow pushed from the laptop" value={campfireConfig.teaContactOffset ?? 0.03} min={0} max={0.2} step={0.005} onChange={(value) => updateCampfire("teaContactOffset", value)} />
+                    <SliderRow label="Cat close-up: tea shadows on (0/1)" value={campfireConfig.teaShadowCatOn ?? 1} min={0} max={1} step={1} onChange={(value) => updateCampfire("teaShadowCatOn", value)} />
+                    <SliderRow label="Cat close-up: tea shadow darkness" value={campfireConfig.teaShadowCatStrength ?? 0.55} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("teaShadowCatStrength", value)} />
+                    <SliderRow label="Cat close-up: tea shadow length limit (m)" value={campfireConfig.teaShadowCatReach ?? 0.45} min={0.05} max={2} step={0.01} onChange={(value) => updateCampfire("teaShadowCatReach", value)} />
+                    <SliderRow label="Cat close-up: raise light (shorter shadow)" value={campfireConfig.teaShadowCatLift ?? 0} min={-0.5} max={1} step={0.01} onChange={(value) => updateCampfire("teaShadowCatLift", value)} />
+                    <SliderRow label="Cat close-up: shadow under the cup (darkness)" value={campfireConfig.teaContactCatStrength ?? 0.6} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("teaContactCatStrength", value)} />
+                    <SliderRow label="Tea steam (0/1)" value={campfireConfig.teaSteamOn ?? 1} min={0} max={1} step={1} onChange={(value) => updateCampfire("teaSteamOn", value)} />
+                    <SliderRow label="Steam ribbons (1-4)" value={campfireConfig.teaSteamCount ?? 3} min={1} max={4} step={1} onChange={(value) => updateCampfire("teaSteamCount", value)} />
+                    <SliderRow label="Steam opacity" value={campfireConfig.teaSteamOpacity ?? 0.35} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("teaSteamOpacity", value)} />
+                    <SliderRow label="Steam: height (how far it rises)" value={campfireConfig.teaSteamHeight ?? 0.22} min={0.02} max={1} step={0.01} onChange={(value) => updateCampfire("teaSteamHeight", value)} />
+                    <SliderRow label="Steam: left / right" value={campfireConfig.teaSteamX ?? 0} min={-0.3} max={0.3} step={0.005} onChange={(value) => updateCampfire("teaSteamX", value)} />
+                    <SliderRow label="Steam: up / down (start height)" value={campfireConfig.teaSteamY ?? 0} min={-0.2} max={0.3} step={0.005} onChange={(value) => updateCampfire("teaSteamY", value)} />
+                    <SliderRow label="Steam: forward / back" value={campfireConfig.teaSteamZ ?? 0} min={-0.3} max={0.3} step={0.005} onChange={(value) => updateCampfire("teaSteamZ", value)} />
+                    <SliderRow label="Steam: width" value={campfireConfig.teaSteamWidth ?? 0.16} min={0.03} max={0.6} step={0.005} onChange={(value) => updateCampfire("teaSteamWidth", value)} />
+                    <SliderRow label="Steam ribbon thickness" value={campfireConfig.teaSteamSize ?? 0.035} min={0.005} max={0.12} step={0.001} onChange={(value) => updateCampfire("teaSteamSize", value)} />
+                    <SliderRow label="Steam speed" value={campfireConfig.teaSteamSpeed ?? 1} min={0.1} max={3} step={0.05} onChange={(value) => updateCampfire("teaSteamSpeed", value)} />
                   </ControlGroup>
 
                   <ControlGroup title="Desk shadow from the cabin lantern">

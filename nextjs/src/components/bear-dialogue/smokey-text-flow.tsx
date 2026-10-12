@@ -33,6 +33,8 @@ export type SmokeyTextFlowProps = {
    *  bottom, so the flow has to be at least as tall or the reserve sits above
    *  the bear whenever the copy is short. */
   minHeightEm?: number;
+  /** Which bottom corner the head (and so the reserve) sits in. */
+  side?: "left" | "right";
   className?: string;
   style?: CSSProperties;
   children: ReactNode;
@@ -47,6 +49,7 @@ export default function SmokeyTextFlow({
   reserveHeightRem,
   reserveShape,
   minHeightEm = 0,
+  side = "right",
   className,
   style,
   children,
@@ -108,12 +111,12 @@ export default function SmokeyTextFlow({
     >
       {reserving ? (
         <>
-          <div aria-hidden="true" style={{ float: "right", width: 0, height: `${pushPx}px` }} />
+          <div aria-hidden="true" style={{ float: side, width: 0, height: `${pushPx}px` }} />
           <div
             aria-hidden="true"
             style={{
-              float: "right",
-              clear: "right",
+              float: side,
+              clear: side,
               width: `${reserveWidthRem}em`,
               height: `${reserveHeightRem}em`,
               shapeOutside: reserveShape,

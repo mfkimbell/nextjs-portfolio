@@ -612,6 +612,7 @@ const OLD_BEAR_TABLE_URL = "/bear/3/Table%20by%20Hunter%20Paramore%20-%207qAyGZn
 const OLD_BEAR_CHAIR_URL = "/bear/3/Chair%20by%20Quaternius%20-%20iMNqRzPwwe.glb";
 const OLD_BEAR_COMPUTER_URL = "/laptop.glb";
 const OLD_BEAR_BOOKS_URL = "/bear/3/Book%20Stack%20by%20Danni%20Bittman%20-%201WggoIFq8tx.glb";
+const TEA_CUP_URL = "/tea.glb";
 const OLD_BEAR_MUG_URL = "/bear/3/Mug%20With%20Office%20Tool%20by%20CreativeTrio%20-%204jSgnM5WWk.glb";
 const OLD_BEAR_BOXES_URL = "/bear/3/Cardboard%20Boxes%20by%20Quaternius%20-%20V9KbWC8Vd6.glb";
 const OLD_BEAR_PAPERS_URL = "/bear/3/Small%20Stack%20of%20Paper%20by%20Jarlan%20Perez%20-%20aiBozYlPe--.glb";
@@ -659,7 +660,7 @@ function ChatChoiceArrows({ config, hover }: {
     </>
   );
 }
-const TYPEWRITER_URL = "/Typewriter%20by%20Naam%20-%202SmAWPS6_mH.glb";
+const TYPEWRITER_URL = "/Typewriter%20by%20Naam%20-%202SmAWPS6_mH.glb?v=2";   // v2: recoloured royal blue
 const OLD_BEAR_LANTERN_URL = "/bear/3/Lantern%20by%20Poly%20by%20Google%20-%209YMVn5hMiv8.glb";
 /** Rocking chair for the cabin study. Bear sits in it via ROCKING_CHAIR_BEAR,
  *  rendered as a child of the same Selectable so moving/rotating/scaling the
@@ -1938,7 +1939,24 @@ function CatFocusCamera({
       if (baseFov.current == null) baseFov.current = cam.fov;
       const wantFov = (config.catFocusFov ?? 0) > 0 ? config.catFocusFov : baseFov.current;
       if (Math.abs(cam.fov - wantFov) > 0.01) { cam.fov += (wantFov - cam.fov) * k; cam.updateProjectionMatrix(); }
-      if ((config.catFocusBoth ?? 1) >= 0.5 && sleeper) {
+      // Safety: if the cat's facing came out flat / undefined, face the camera instead
+      if (!Number.isFinite(tmp.f.x) || tmp.f.lengthSq() < 0.01) {
+        tmp.f.copy(camera.position).sub(tmp.c).setY(0);
+        if (tmp.f.lengthSq() < 1e-6) tmp.f.set(0, 0, 1);
+        tmp.f.normalize();
+      }
+      const catY = tmp.c.y;
+      // The other cat only counts if its box is somewhere sensible: a box that
+      // hasn't loaded yet sits at the world origin (or far off), and framing
+      // "between" it and the chair cat flung the camera down into the sky.
+      let sleeperOk = false;
+      if (sleeper) {
+        sleeper.updateWorldMatrix(true, false);
+        sleeper.getWorldPosition(tmp.c2);
+        const gap = tmp.c2.distanceTo(tmp.c);
+        sleeperOk = Number.isFinite(gap) && gap > 0.05 && gap < 3 && Math.abs(tmp.c2.y - tmp.c.y) < 1.2;
+      }
+      if ((config.catFocusBoth ?? 1) >= 0.5 && sleeper && sleeperOk) {
         // frame BOTH porch cats: look at the point between them, from square on
         // to the line joining them (on the chair cat's front side), far enough
         // back that the pair fits the frame's width with some room
@@ -1962,8 +1980,16 @@ function CatFocusCamera({
       tmp.c.addScaledVector(tmp.perp, config.catFocusSide ?? 0);
       tmp.aim.copy(tmp.c).addScaledVector(tmp.f, config.catFocusForward ?? 0);
       tmp.aim.y += config.catFocusAimHeight ?? 0.02;
+      dist = Math.min(3, Math.max(0.2, Number.isFinite(dist) ? dist : 0.38));
       tmp.goal.copy(tmp.c).addScaledVector(tmp.f, dist);
       tmp.goal.y += config.catFocusHeight ?? 0.15;
+      // never below the cats (that's where "all I see is stars" came from),
+      // and never craning up at a steep angle
+      tmp.goal.y = Math.max(tmp.goal.y, catY + 0.05);
+      const flat = Math.hypot(tmp.aim.x - tmp.goal.x, tmp.aim.z - tmp.goal.z);
+      tmp.aim.y = Math.min(tmp.aim.y, tmp.goal.y + flat * 0.6);
+      // anything non-finite: hold the last good shot rather than jump
+      if (![tmp.goal.x, tmp.goal.y, tmp.goal.z, tmp.aim.x, tmp.aim.y, tmp.aim.z].every(Number.isFinite)) return;
       const p = pose.current;
       p.px += (tmp.goal.x - p.px) * k; p.py += (tmp.goal.y - p.py) * k; p.pz += (tmp.goal.z - p.pz) * k;
       p.tx += (tmp.aim.x - p.tx) * k;  p.ty += (tmp.aim.y - p.ty) * k;  p.tz += (tmp.aim.z - p.tz) * k;
@@ -2239,7 +2265,7 @@ function OrbitCameraSaver({
  *  one language across the scene rather than per-prop decoration. */
 const HOVER_GLOW_COLOR = { r: 1, g: 0.86, b: 0.6 } as const;
 const HOVER_GLOW_INTENSITY = 0.22;
-const HOVER_CURSOR = "url('/cursors/pointer.svg') 14 14, pointer";
+const HOVER_CURSOR = "pointer";   // the browser's own hand (was a white ring with a dot)
 
 type GlowTarget = THREE.Object3D | RefObject<THREE.Object3D | null> | null | undefined;
 type GlowCache = {
@@ -4246,7 +4272,7 @@ function WoodPile({
     lastPlay.current = play;
   }, [play]);
 
-  const tuneKey = [config.woodRollRight, config.woodRollTurnRadius, config.woodRollAway, config.woodRollTime, config.woodRollToTent, config.woodRollTentGap].join(":");
+  const tuneKey = [config.woodRollRight, config.woodRollTurnRadius, config.woodRollAway, config.woodRollTime, config.woodRollToTent, config.woodRollTentGap, config.woodRollPastMic, config.woodRollMicPast].join(":");
   const lastTuneKey = useRef(tuneKey);
   useEffect(() => {
     if (lastTuneKey.current === tuneKey) return;
@@ -4304,6 +4330,16 @@ function WoodPile({
         if (dist > 1e-3 && toTent.dot(right) / dist > Math.cos(THREE.MathUtils.degToRad(75))) {
           right.copy(toTent).normalize();
           leg = Math.max(0.3, dist - Math.max(0, n(c.woodRollTentGap, 1.0)));
+        }
+      }
+      // ...but turn down toward the viewer once it's rolled past the
+      // microphone, so it never reaches (and hits) the tent
+      if (n(c.woodRollPastMic, 1) >= 0.5) {
+        const mic = scene.getObjectByName("campfire_microphone");
+        if (mic) {
+          const along = mic.getWorldPosition(new THREE.Vector3()).sub(from).setY(0).dot(right);
+          const stop = along + n(c.woodRollMicPast, 0.35);
+          if (along > 0 && stop < leg) leg = Math.max(0.3, stop);
         }
       }
       const axisW = lg.axis.clone().applyQuaternion(S.qm).normalize();
@@ -9269,6 +9305,7 @@ function Animal({
   // watching the flipped axe: a smoothed point on it, and how much of the
   // head it has (eases in and out so nobody snaps)
   const axeLookRef = useRef({ w: 0, init: false, target: new THREE.Vector3() });
+  const axeLookPoint = useRef(new THREE.Vector3());
   const tmpV = useMemo(() => new THREE.Vector3(), []);
   const tmpV2 = useMemo(() => new THREE.Vector3(), []);
   const fishLookEnd = useMemo(() => new THREE.Vector3(), []);
@@ -9951,15 +9988,23 @@ function Animal({
     if (!axe?.active && axeL.w < 0.001) { axeL.w = 0; axeL.init = false; }
     // the two talking bears hand straight back to their own gaze, which then
     // glides away from the axe; the rest ease their heads back
-    const watchingAxe = !reactingToFish && (isVoiceBear ? !!axe?.active : axeL.w > 0.001);
+    // only Maple (back_right_log) follows the flipped axe - Smokey and the
+    // rest of the camp leave it be
+    const axeWatcher = placement.bearId === "back_right_log";
+    const watchingAxe = axeWatcher && !reactingToFish && (isVoiceBear ? !!axe?.active : axeL.w > 0.001);
 
     if (watchingAxe) {
       g.phase = "wait"; g.t = 0; g.w = 0; g.target = "";
+      // Maple looked a touch too high following the axe: aim 15% lower,
+      // measured as height above her own head (axeWatchLookHeight, 1 = exact)
+      const axeLook = axeLookPoint.current.copy(axeL.target);
+      const lookScale = Number.isFinite(configRef.current.axeWatchLookHeight) ? configRef.current.axeWatchLookHeight : 0.85;
+      axeLook.y = entry.position.y + (axeLook.y - entry.position.y) * lookScale;
       if (isVoiceBear) {
-        lookRef.current.target.copy(axeL.target);
+        lookRef.current.target.copy(axeLook);
         lookRef.current.init = true;
       }
-      tgt = axeL.target;
+      tgt = axeLook;
       targetWeight = isVoiceBear ? 1 : axeL.w;
     } else if (reactingToFish) {
       // The fish gag, in order: eyes follow the fish through the air, snap to
@@ -10732,7 +10777,7 @@ function FloppingFish({
   useEffect(() => {
     if (!hovered) return;
     const prev = document.body.style.cursor;
-    document.body.style.cursor = "url('/cursors/pointer.svg') 14 14, pointer";
+    document.body.style.cursor = "pointer";
     return () => { document.body.style.cursor = prev; };
   }, [hovered]);
   // Attach the mixer to the actual scene root - not a clone. THREE.Object3D.clone
@@ -11605,7 +11650,57 @@ function OnlyBearsSceneDimmer({ stateRef, level }: { stateRef: MutableRefObject<
  * projected from the lantern onto the floor plane. A stencil pass keeps
  * overlapping parts (legs, top) from stacking darker.
  */
-function LanternFloorShadow({ target, config }: { target: React.RefObject<THREE.Object3D | null>; config: CampfireSceneConfig }) {
+/**
+ * World height of whatever surface sits under an object (the desk under the
+ * tea cup), found by casting a ray straight down through its middle a couple
+ * of times a second. Shadows drawn at the object's own lowest point vanish
+ * once it is dragged a few millimetres INTO the table: from far away the
+ * depth buffer is too coarse to notice, but in a close-up (the cat petting
+ * shot) the table wins and hides them. Returns NaN until something is found.
+ */
+function useSurfaceBelow(target: React.RefObject<THREE.Object3D | null>) {
+  const scene = useThree((s) => s.scene);
+  const y = useRef(Number.NaN);
+  const at = useRef(-1e9);
+  const tmp = useMemo(() => ({ ray: new THREE.Raycaster(), box: new THREE.Box3(), c: new THREE.Vector3(), down: new THREE.Vector3(0, -1, 0) }), []);
+  useFrame(() => {
+    const root = target.current;
+    const now = performance.now();
+    if (!root || now - at.current < 500) return;
+    at.current = now;
+    tmp.box.setFromObject(root, false);
+    if (tmp.box.isEmpty()) return;
+    tmp.box.getCenter(tmp.c);
+    tmp.c.y = tmp.box.max.y + 0.05;
+    tmp.ray.set(tmp.c, tmp.down);
+    tmp.ray.far = (tmp.box.max.y - tmp.box.min.y) + 0.3;
+    const site = scene.getObjectByName("location_2") ?? scene;
+    const hits = tmp.ray.intersectObject(site, true);
+    const shown = (o: THREE.Object3D | null) => { for (let x = o; x; x = x.parent) if (!x.visible) return false; return true; };
+    const inside = (o: THREE.Object3D | null) => { for (let x = o; x; x = x.parent) if (x === root) return true; return false; };
+    for (const h of hits) {
+      const m = h.object as THREE.Mesh;
+      if (!m.isMesh || inside(m) || !shown(m)) continue;
+      const mat = m.material as THREE.Material | THREE.Material[];
+      if (!Array.isArray(mat) && (mat.transparent && mat.depthWrite === false)) continue;   // other decals / shadows
+      // ignore anything far below the object (the floor, if it overhangs the edge)
+      if (h.point.y < tmp.box.min.y - 0.05) break;
+      y.current = h.point.y;
+      return;
+    }
+    y.current = Number.NaN;
+  });
+  return y;
+}
+
+function LanternFloorShadow({ target, config, lightRef, tune }: {
+  target: React.RefObject<THREE.Object3D | null>;
+  config: CampfireSceneConfig;
+  /** cast from this light instead of the nearest cabin lantern */
+  lightRef?: React.RefObject<THREE.Light | null>;
+  /** own on/strength/reach instead of the desk-shadow sliders */
+  tune?: { on: number; strength: number; reach: number; lift?: number };
+}) {
   const scene = useThree((s) => s.scene);
   const n = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
   const u = useMemo(() => ({
@@ -11633,7 +11728,9 @@ function LanternFloorShadow({ target, config }: { target: React.RefObject<THREE.
   vec3 onPlane = uLight + (wp.xyz - uLight) * max(t, 0.0);
   onPlane.y = uPlaneY;
   vShadowW = onPlane;
-  gl_Position = projectionMatrix * viewMatrix * vec4( onPlane, 1.0 );`);
+  // keep the name three's later chunks expect (fog reads mvPosition.z)
+  vec4 mvPosition = viewMatrix * vec4( onPlane, 1.0 );
+  gl_Position = projectionMatrix * mvPosition;`);
       sh.fragmentShader = sh.fragmentShader
         .replace("void main() {", "uniform vec2 uCenter; uniform float uRadius; uniform float uOpacity; varying vec3 vShadowW;\nvoid main() {")
         .replace("#include <dithering_fragment>", `#include <dithering_fragment>
@@ -11648,9 +11745,10 @@ function LanternFloorShadow({ target, config }: { target: React.RefObject<THREE.
   const lightsAt = useRef(-1e9);
   const lightsCache = useRef<THREE.PointLight[]>([]);
   const tmp = useMemo(() => ({ box: new THREE.Box3(), c: new THREE.Vector3(), lp: new THREE.Vector3() }), []);
+  const surfaceY = useSurfaceBelow(target);
   useFrame(() => {
     const root = target.current;
-    const on = n(config.tableShadowOn, 1) >= 0.5;
+    const on = (tune ? tune.on : n(config.tableShadowOn, 1)) >= 0.5;
     if (root && built.current !== root) {
       twins.current.forEach((t) => t.parent?.remove(t));
       twins.current = [];
@@ -11658,7 +11756,7 @@ function LanternFloorShadow({ target, config }: { target: React.RefObject<THREE.
       root.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && !(m as THREE.SkinnedMesh).isSkinnedMesh && m.material !== mat) meshes.push(m); });
       for (const m of meshes) {
         const tw = new THREE.Mesh(m.geometry, mat);
-        tw.frustumCulled = false; tw.renderOrder = 1; tw.raycast = () => {};
+        tw.frustumCulled = false; tw.renderOrder = 1; tw.raycast = () => {}; tw.name = "projectedShadowTwin";
         tw.position.copy(m.position); tw.quaternion.copy(m.quaternion); tw.scale.copy(m.scale);
         m.parent?.add(tw);
         twins.current.push(tw);
@@ -11672,6 +11770,22 @@ function LanternFloorShadow({ target, config }: { target: React.RefObject<THREE.
     tmp.box.setFromObject(root, false);
     tmp.box.getCenter(tmp.c);
     // which lantern: the nearest one (or a fixed pick, 1-4)
+    if (lightRef) {
+      const L = lightRef.current;
+      if (!L) return;
+      L.getWorldPosition(u.uLight.value);
+      u.uLight.value.y += tune?.lift ?? 0;
+      // on the real desk top, not the cup's base (which may be sunk into it)
+      const sy = surfaceY.current;
+      u.uPlaneY.value = (Number.isFinite(sy) ? Math.max(sy, tmp.box.min.y) : tmp.box.min.y) + 0.002;
+      u.uCenter.value.set(tmp.c.x, tmp.c.z);
+      u.uRadius.value = tune?.reach ?? 0.5;
+      // fades with the screen (it dims when OnlyBears shuts the lid)
+      const full = (L.userData?.fullIntensity as number | undefined) ?? 0;
+      const lit = full > 0 ? Math.min(1, L.intensity / full) : 1;
+      u.uOpacity.value = (tune?.strength ?? 0.5) * lit;
+      return;
+    }
     const now = performance.now();
     if (now - lightsAt.current > 1000) {
       lightsAt.current = now;
@@ -11739,6 +11853,10 @@ function ShaderPrewarm({ ready }: { ready: boolean }) {
   const camera = useThree((s) => s.camera);
   const done = useRef(false);
   useEffect(() => {
+    // dev only: lets the browser console poke at the scene while debugging
+    if (process.env.NODE_ENV !== "production") (window as unknown as { __labThree?: unknown }).__labThree = { scene, gl, camera };
+  }, [scene, gl, camera]);
+  useEffect(() => {
     if (!ready || done.current) return;
     // (done is set when the run actually starts: setting it here meant any
     //  re-render in the next 800 ms cancelled the timer and it never ran -
@@ -11769,6 +11887,140 @@ function ShaderPrewarm({ ready }: { ready: boolean }) {
     return () => window.clearTimeout(t);
   }, [ready, gl, scene, camera]);
   return null;
+}
+
+/**
+ * Wisps of steam curling up off the tea: a handful of soft round sprites that
+ * rise, drift, swell and fade, each on its own staggered loop. Written in the
+ * cup's own (unscaled) units; the Selectable's scale shrinks it with the cup.
+ */
+function TeaSteam({ config }: { config: CampfireSceneConfig }) {
+  /*
+   * Stylised steam: a few thin wavy ribbons drawn by a shader on one upright
+   * card that turns to face the camera. Each ribbon snakes upward, gets wider
+   * and fainter as it rises, and breaks up near the top - no fuzzy blobs.
+   */
+  const n = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
+  const mesh = useRef<THREE.Mesh>(null);
+  const uniforms = useMemo(() => ({
+    uTime: { value: 0 },
+    uOpacity: { value: 0.35 },
+    uStrands: { value: 3 },
+    uWidth: { value: 0.035 },
+    uColor: { value: new THREE.Color("#f3eee6") },
+  }), []);
+  const mat = useMemo(() => new THREE.ShaderMaterial({
+    uniforms,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform float uTime; uniform float uOpacity; uniform float uStrands; uniform float uWidth; uniform vec3 uColor;
+      varying vec2 vUv;
+      float hash(float x) { return fract(sin(x * 127.1) * 43758.5453); }
+      void main() {
+        float y = vUv.y;
+        float a = 0.0;
+        for (int i = 0; i < 4; i++) {
+          if (float(i) >= uStrands) break;
+          float fi = float(i);
+          float ph = hash(fi + 1.0) * 6.283;
+          float sp = 0.7 + hash(fi + 7.0) * 0.6;
+          // snake left and right, swinging wider as it rises
+          float cx = 0.5 + (fi - (uStrands - 1.0) * 0.5) * 0.12
+                   + sin(y * 7.0 - uTime * 1.6 * sp + ph) * 0.13 * (0.25 + y)
+                   + sin(y * 15.0 - uTime * 2.3 * sp + ph * 2.0) * 0.04 * y;
+          float w = uWidth * (0.6 + y * 1.8);
+          float d = abs(vUv.x - cx);
+          float strand = smoothstep(w, w * 0.25, d);
+          // gaps travelling up the ribbon so it breaks apart near the top
+          float gaps = 0.55 + 0.45 * sin(y * 11.0 - uTime * 2.0 * sp + ph * 3.0);
+          float fade = smoothstep(0.0, 0.12, y) * (1.0 - smoothstep(0.45, 1.0, y));
+          a = max(a, strand * mix(1.0, gaps, y) * fade);
+        }
+        gl_FragColor = vec4(uColor, a * uOpacity);
+      }`,
+  }), [uniforms]);
+  useEffect(() => () => mat.dispose(), [mat]);
+  useFrame(({ clock, camera }) => {
+    if (!locationShown[2] || !mesh.current) return;
+    uniforms.uTime.value = clock.elapsedTime * Math.max(0.05, n(config.teaSteamSpeed, 1));
+    uniforms.uOpacity.value = n(config.teaSteamOpacity, 0.35);
+    uniforms.uStrands.value = Math.max(1, Math.min(4, Math.round(n(config.teaSteamCount, 3))));
+    uniforms.uWidth.value = n(config.teaSteamSize, 0.035);
+    // face the camera around the vertical axis only
+    const m = mesh.current;
+    m.parent?.updateWorldMatrix(true, false);
+    const wp = m.getWorldPosition(new THREE.Vector3());
+    const yaw = Math.atan2(camera.position.x - wp.x, camera.position.z - wp.z);
+    const pq = m.parent ? m.parent.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion();
+    const parentYaw = new THREE.Euler().setFromQuaternion(pq, "YXZ").y;
+    m.rotation.set(0, yaw - parentYaw, 0);
+  });
+  if ((config.teaSteamOn ?? 1) < 0.5) return null;
+  const h = n(config.teaSteamHeight, 0.22);
+  const w = n(config.teaSteamWidth, 0.16);
+  return (
+    <mesh
+      ref={mesh}
+      position={[0.035 + n(config.teaSteamX, 0), 0.115 + n(config.teaSteamY, 0) + h / 2, n(config.teaSteamZ, 0)]}
+      material={mat}
+      raycast={() => null}
+      renderOrder={3}
+    >
+      <planeGeometry args={[w, h]} />
+    </mesh>
+  );
+}
+
+/**
+ * A soft dark patch on the desk right under the tea cup, nudged away from the
+ * laptop's glow - so the cup always sits ON the table, whatever the projected
+ * shadow is doing.
+ */
+function TeaContactShadow({ config, lightRef, cupRef, petting = false }: { config: CampfireSceneConfig; lightRef: React.RefObject<THREE.Light | null>; cupRef: React.RefObject<THREE.Object3D | null>; petting?: boolean }) {
+  const n = (v: number | undefined, d: number) => (Number.isFinite(v) ? (v as number) : d);
+  const mesh = useRef<THREE.Mesh>(null);
+  const surfaceY = useSurfaceBelow(cupRef);
+  const tex = useMemo(() => {
+    if (typeof document === "undefined") return null;
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const g = c.getContext("2d")!;
+    const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grd.addColorStop(0, "rgba(0,0,0,1)");
+    grd.addColorStop(0.55, "rgba(0,0,0,0.6)");
+    grd.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  }, []);
+  useEffect(() => () => tex?.dispose(), [tex]);
+  useFrame(() => {
+    const m = mesh.current, L = lightRef.current;
+    if (!m || !m.parent || !L) return;
+    // push the patch away from the light, in the cup's own frame
+    const lp = m.parent.worldToLocal(L.getWorldPosition(new THREE.Vector3()));
+    const away = new THREE.Vector2(-lp.x + 0.035, -lp.z).normalize().multiplyScalar(n(config.teaContactOffset, 0.03));
+    // sit on the desk top itself (the cup may be sunk a few mm into it)
+    let localY = 0.002;
+    const sy = surfaceY.current;
+    if (Number.isFinite(sy)) {
+      const w = m.parent.localToWorld(new THREE.Vector3(0, 0, 0));
+      w.y = sy + 0.002;
+      localY = Math.max(0.002, m.parent.worldToLocal(w).y);
+    }
+    m.position.set(0.035 + away.x, localY, away.y);
+    (m.material as THREE.MeshBasicMaterial).opacity = petting ? n(config.teaContactCatStrength, 0.6) : n(config.teaContactStrength, 0.6);
+  });
+  if (!tex || (petting ? (config.teaShadowCatOn ?? 1) : (config.teaShadowOn ?? 1)) < 0.5) return null;
+  const size = n(config.teaContactSize, 0.26);
+  return (
+    <mesh ref={mesh} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} renderOrder={1}>
+      <planeGeometry args={[size, size * 0.8]} />
+      <meshBasicMaterial map={tex} transparent depthWrite={false} opacity={0.6} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
+    </mesh>
+  );
 }
 
 /**
@@ -11997,6 +12249,7 @@ function CabinSector({ config, onSelect, pc, onlyBears, catFocus, catSleepFocus,
   // land somewhere along the ray, so the 2-unit throw is arbitrary.
   const deskScreenLightRef = useRef<THREE.SpotLight>(null);
   const contactTableRef = useRef<THREE.Group>(null);
+  const teaCupRef = useRef<THREE.Group>(null);
   const oldBearTableRef = useRef<THREE.Group>(null);
   /*
    * The screen's light goes out as the lid shuts - it is the screen, after
@@ -12232,6 +12485,26 @@ function CabinSector({ config, onSelect, pc, onlyBears, catFocus, catSleepFocus,
           <GLBModel url={OLD_BEAR_BOOKS_URL} />
         </SafeAsset>
       </Selectable>
+      {/* A cup of tea beside the laptop (public/tea.glb, Kenney's cup: 14 cm
+          tall as authored, base already at y=0 - scaled to ~8 cm). Drag /
+          scale it in the lab as "cabin_tea_cup". */}
+      <Selectable name="cabin_tea_cup" onSelect={onSelect} config={config} basePosition={[0.02, TABLE_TOP_Y, 0.14]} baseRotationY={0.6} baseScale={0.6}>
+        <SafeAsset label="tea cup">
+          <group ref={teaCupRef}><GLBModel url={TEA_CUP_URL} /></group>
+          <TeaSteam config={config} />
+          <TeaContactShadow config={config} cupRef={teaCupRef} petting={!!catFocus?.active} lightRef={deskScreenLightRef as unknown as React.RefObject<THREE.Light | null>} />
+        </SafeAsset>
+      </Selectable>
+      {/* the tea cup's shadow on the desk, thrown by the laptop's screen glow */}
+      <LanternFloorShadow
+        target={teaCupRef}
+        config={config}
+        lightRef={deskScreenLightRef as unknown as React.RefObject<THREE.Light | null>}
+        // the cat close-up has its own numbers (the shadow was dropping out there)
+        tune={catFocus?.active
+          ? { on: config.teaShadowCatOn ?? 1, strength: config.teaShadowCatStrength ?? 0.55, reach: config.teaShadowCatReach ?? 0.45, lift: config.teaShadowCatLift ?? 0 }
+          : { on: config.teaShadowOn ?? 1, strength: config.teaShadowStrength ?? 0.55, reach: config.teaShadowReach ?? 0.45, lift: config.teaShadowLightLift ?? 0 }}
+      />
       <Selectable name="old_bear_mug" onSelect={onSelect} config={config} basePosition={[-0.3, TABLE_TOP_Y, 0.1]} baseRotationY={0}>
         <SafeAsset label="old-bear mug">
           <GLBModel url={OLD_BEAR_MUG_URL} />
@@ -13526,7 +13799,7 @@ function CampfireWorld({
   onFishImpact?: () => void;
   /** Site: before the bears start, arrows over the telephone, microphone and
    *  typewriter ask how the visitor wants to talk; onChoose gets the pick. */
-  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void };
+  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void; /** the telephone / mic / typewriter can be clicked to pick or switch channel (arrows or not) */ clickable?: boolean };
 }) {
   /*
    * Clicking the fire throws embers up out of it.
@@ -13661,6 +13934,9 @@ function CampfireWorld({
   // switch). While they're up, the telephone / mic / typewriter glow on hover
   // like the other props, and their arrow + word go full opacity and grow.
   const chatArrowsUp = chatChoice ? chatChoice.show : (config.chatArrowsPreview ?? 0) >= 0.5;
+  // the three props stay clickable (and glow on hover) whenever the visitor may
+  // start or switch channel - not only while the arrows are up
+  const chatPropsLive = chatChoice ? (chatChoice.clickable ?? chatChoice.show) : chatArrowsUp;
   const chatHover = useRef<ChatHover>({ phone: false, mic: false, type: false });
   const chatHoverSet = useMemo(() => ({
     phone: (h: boolean) => { chatHover.current.phone = h; },
@@ -13668,7 +13944,7 @@ function CampfireWorld({
     type: (h: boolean) => { chatHover.current.type = h; },
   }), []);
   const onSelect = useCallback((name: string) => {
-    if (chatChoice?.show && !editing) {
+    if (chatChoice && (chatChoice.clickable ?? chatChoice.show) && !editing) {
       const pick: ChatChoice | null = name === "campfire_telephone" ? "phone" : name === "campfire_microphone" ? "mic" : name === "campfire_typewriter" ? "type" : null;
       if (pick) { chatChoice.onChoose(pick); return; }
     }
@@ -14451,7 +14727,7 @@ function CampfireWorld({
           <Selectable
             name="campfire_telephone"
             onSelect={onSelect}
-            interactive={chatArrowsUp}
+            interactive={chatPropsLive}
             onHoverChange={chatHoverSet.phone}
             config={config}
             basePosition={[-1.55, 0, 1.75]}
@@ -14610,7 +14886,7 @@ function CampfireWorld({
           <Selectable
             name="campfire_typewriter"
             onSelect={onSelect}
-            interactive={chatArrowsUp}
+            interactive={chatPropsLive}
             onHoverChange={chatHoverSet.type}
             config={config}
             basePosition={[-0.98, 0.42 + 0.133 * 0.7, -1.98]}
@@ -14627,7 +14903,7 @@ function CampfireWorld({
           <Selectable
             name="campfire_microphone"
             onSelect={onSelect}
-            interactive={chatArrowsUp}
+            interactive={chatPropsLive}
             onHoverChange={chatHoverSet.mic}
             config={config}
             basePosition={[-1.3, -0.39, -2.35]}
@@ -15085,7 +15361,7 @@ export default function CampfireScene({
   onFishImpact?: () => void;
   /** Site: before the bears start, arrows over the telephone, microphone and
    *  typewriter ask how the visitor wants to talk; onChoose gets the pick. */
-  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void };
+  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void; /** the telephone / mic / typewriter can be clicked to pick or switch channel (arrows or not) */ clickable?: boolean };
 }) {
   const cameraChangeHandler = onCameraChange ?? (() => {});
   const selectHandler = onSelect ?? (() => {});
@@ -15440,6 +15716,7 @@ idlePreload(OLD_BEAR_CHAIR_URL);
 idlePreload(OLD_BEAR_COMPUTER_URL);
 idlePreload(OLD_BEAR_BOOKS_URL);
 idlePreload(OLD_BEAR_MUG_URL);
+idlePreload(TEA_CUP_URL);
 idlePreload(OLD_BEAR_BOXES_URL);
 idlePreload(OLD_BEAR_PAPERS_URL);
 idlePreload(OLD_BEAR_TOILET_URL);

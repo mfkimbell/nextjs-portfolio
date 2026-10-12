@@ -411,7 +411,14 @@ export default function CampsiteTitleIntro({
   previewMode = false,
   ready = true,
   loadingPercent = 100,
+  loader,
 }: {
+  /** Where/how big the loading fire + text sit (config: titleLoader*). */
+  loader?: {
+    bottomPct?: number; leftPct?: number; sizeRem?: number; textScale?: number; preview?: boolean;
+    /** fade out once the scene is ready (else it just vanishes), over this many seconds, down to this opacity */
+    fadeOut?: boolean; fadeSec?: number; fadeTo?: number;
+  };
   /** False while the scene behind is still loading: no entering yet. */
   ready?: boolean;
   loadingPercent?: number;
@@ -462,6 +469,7 @@ export default function CampsiteTitleIntro({
 
   const [overlayOpacity, setOverlayOpacity] = useState(1);
   const [hintClickable, setHintClickable] = useState(false);
+  const [loaderFaded, setLoaderFaded] = useState(false);
 
   const previewModeRef = useRef(previewMode);
   previewModeRef.current = previewMode;
@@ -648,17 +656,22 @@ export default function CampsiteTitleIntro({
           </FitToViewport>
         </Canvas>
       </div>
-      {!previewMode && !ready ? (
-        <div className="pointer-events-none absolute bottom-[10%] left-1/2 flex -translate-x-1/2 flex-col items-center gap-2">
-          {/* a little flickering ember with a ring of sparks going round it */}
-          <div className="relative h-9 w-9">
-            <div className="absolute inset-0 animate-spin rounded-full border-2 border-amber-300/15 border-t-amber-300/90" style={{ animationDuration: "1.1s" }} />
-            <div className="campsite-ember absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-t from-orange-500 to-yellow-200 shadow-[0_0_12px_4px_rgba(255,150,40,0.55)]" />
-          </div>
-          <div className="font-mono text-[11px] tracking-widest text-white/60">
+      {(!previewMode && (!ready || ((loader?.fadeOut ?? true) && !loaderFaded))) || loader?.preview ? (
+        <div
+          className="pointer-events-none absolute flex -translate-x-1/2 flex-col items-center gap-2"
+          style={{
+            bottom: `${loader?.bottomPct ?? 7}%`,
+            left: `${loader?.leftPct ?? 50}%`,
+            opacity: !previewMode && ready ? Math.max(0, Math.min(1, loader?.fadeTo ?? 0)) : 1,
+            transition: `opacity ${Math.max(0, loader?.fadeSec ?? 0.8)}s ease`,
+          }}
+          onTransitionEnd={() => { if (ready && (loader?.fadeTo ?? 0) <= 0) setLoaderFaded(true); }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/loading.gif" alt="" className="w-auto" style={{ height: `${loader?.sizeRem ?? 7.5}rem` }} />
+          <div className="font-mono tracking-widest text-white/60" style={{ fontSize: `${11 * (loader?.textScale ?? 1)}px` }}>
             {loadingPercent >= 0 ? `loading the campfire… ${Math.round(loadingPercent)}%` : "getting the fire going…"}
           </div>
-          <style>{`@keyframes campsite-ember { 0%,100% { transform: translate(-50%,-50%) scale(1); opacity: .95 } 40% { transform: translate(-50%,-55%) scale(1.25); opacity: 1 } 70% { transform: translate(-50%,-48%) scale(.85); opacity: .75 } } .campsite-ember { animation: campsite-ember .9s ease-in-out infinite }`}</style>
         </div>
       ) : null}
       {/* Painted AFTER the canvas so it stacks on top: while it's opaque, any

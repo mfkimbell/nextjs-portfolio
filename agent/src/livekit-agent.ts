@@ -35,12 +35,14 @@ export default defineAgent({
     const metadata = JSON.parse(ctx.job.metadata || "{}") as { pitch?: unknown };
     const pitch = typeof metadata.pitch === "number" && metadata.pitch >= 0.6 && metadata.pitch <= 1.8
       ? metadata.pitch
-      : bear === "maple" ? 1.12 : 0.9;
+      : bear === "maple" ? 0.97 : 0.9;
     const tts = new elevenlabs.TTS({
       voiceId: bear === "maple"
           ? process.env.LIVEKIT_MAPLE_ELEVENLABS_VOICE_ID?.trim() || "oubi7HGxNVjXMnWLgwBT"
           : process.env.LIVEKIT_SMOKEY_ELEVENLABS_VOICE_ID?.trim() || "oubi7HGxNVjXMnWLgwBT",
-      model: "eleven_turbo_v2_5",
+      // flash: ElevenLabs' lowest-latency model (turbo took noticeably longer
+      // to finish each line, and a line plays only once fully synthesized)
+      model: process.env.LIVEKIT_ELEVENLABS_MODEL?.trim() || "eleven_flash_v2_5",
       language: "en",
       chunkLengthSchedule: [80, 120, 180],
     });

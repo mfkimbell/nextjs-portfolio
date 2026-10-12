@@ -130,8 +130,22 @@ export const resolvedInsetsRem = (icon: SmokeyIconSettings): { x: number; y: num
 
 export const SMOKEY_ICON_CLASS = "pointer-events-none absolute z-10 object-contain";
 
-export const smokeyIconStyle = (icon: SmokeyIconSettings): CSSProperties => {
+export type HeadCorner = "left" | "right";
+
+export const smokeyIconStyle = (icon: SmokeyIconSettings, corner: HeadCorner = "right"): CSSProperties => {
   const inset = resolvedInsetsRem(icon);
+  if (corner === "left") {
+    // bottom-LEFT corner: same insets, measured from the left edge
+    return {
+      width: `${icon.sizeRem}em`,
+      height: `${icon.sizeRem}em`,
+      opacity: icon.opacity,
+      filter: smokeyIconFilter(icon),
+      left: `${round(inset.x)}em`,
+      bottom: `${round(inset.y)}em`,
+      transform: `translate(-50%, 50%) rotate(${icon.tiltDeg}deg)`,
+    };
+  }
   // right/bottom follow the plaque's real corner at any width or height, so
   // the icon keeps its distance from it instead of drifting with the centre.
   return {
@@ -260,6 +274,28 @@ export const smokeyTextReserve = (
   );
 
   return { reserveWidthRem, reserveHeightRem, shape: `polygon(${vertices.join(", ")})` };
+};
+
+/**
+ * The text reserve for a head in the bottom-LEFT corner: work it out as if the
+ * head were bottom-right with the artwork (and its tilt) mirrored, then mirror
+ * the resulting shape back.
+ */
+export const headTextReserve = (
+  icon: SmokeyIconSettings,
+  layout: { widthRem: number; paddingRightRem: number; paddingLeftRem: number; paddingBottomRem: number },
+  outline: ArtworkOutline | null | undefined,
+  corner: HeadCorner,
+): SmokeyTextReserve => {
+  if (corner === "right") {
+    return smokeyTextReserve(icon, { widthRem: layout.widthRem, paddingRightRem: layout.paddingRightRem, paddingBottomRem: layout.paddingBottomRem }, outline ?? null);
+  }
+  const mirrored = outline ? outline.map(([x, y]) => [-x, y] as const) : null;
+  const r = smokeyTextReserve({ ...icon, tiltDeg: -icon.tiltDeg }, { widthRem: layout.widthRem, paddingRightRem: layout.paddingLeftRem, paddingBottomRem: layout.paddingBottomRem }, mirrored);
+  if (!r.shape) return r;
+  const w = r.reserveWidthRem;
+  const shape = r.shape.replace(/(-?[\d.]+)em (-?[\d.]+)em/g, (_m, x: string, y: string) => `${round(w - parseFloat(x))}em ${y}em`);
+  return { ...r, shape };
 };
 
 /** @deprecated use rgbaFromChannels from ./color */

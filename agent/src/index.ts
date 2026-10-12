@@ -23,6 +23,8 @@ const portfolioContext = readFileSync(
   resolve(sourceDirectory, "../knowledge/mitchell-kimbell-context.md"),
   "utf8",
 );
+// Ready answers to the common questions - same file the LiveKit bears use
+const faq = readFileSync(resolve(sourceDirectory, "../knowledge/faq.md"), "utf8");
 
 type BearLine = { bear: "bear1" | "bear2"; text: string; speechId?: string };
 type BearSpeechEvent =
@@ -72,10 +74,10 @@ function required(name: string): string {
   return value;
 }
 
-const appEnv = required("APP_ENV");
-if (appEnv !== "DEV" && appEnv !== "PROD") {
-  throw new Error("APP_ENV must be exactly DEV or PROD");
-}
+// Production unless the .env explicitly says development
+// (APP_ENV=development / dev / DEV) - a missing APP_ENV no longer crashes, it means PROD.
+const appEnv: "DEV" | "PROD" = /^(dev|development)$/i.test(process.env.APP_ENV?.trim() ?? "") ? "DEV" : "PROD";
+console.log(`[agent] APP_ENV -> ${appEnv}`);
 
 const agentBaseUrl = required(appEnv === "DEV" ? "DEV_AGENT_BASE_URL" : "PROD_AGENT_BASE_URL").replace(/\/$/, "");
 if (!agentBaseUrl.startsWith("https://")) {
@@ -395,7 +397,7 @@ async function completePersona(
     temperature: 0.7,
     messages: [{
       role: "system",
-      content: `${system}\n\nAPPROVED MITCHELL KIMBELL PORTFOLIO CONTEXT:\n${portfolioContext}`,
+      content: `${system}\n\nAPPROVED MITCHELL KIMBELL PORTFOLIO CONTEXT:\n${portfolioContext}\n\nQUICK ANSWERS (FAQ - rephrase in character, never read out; today is ${new Date().toDateString()}):\n${faq}`,
     }, ...history],
   });
   const text = completion.choices[0]?.message.content?.trim().slice(0, 600);

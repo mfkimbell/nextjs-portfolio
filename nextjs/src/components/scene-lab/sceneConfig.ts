@@ -2094,6 +2094,14 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
    *   >π   = chaotic (adjacent letters nearly opposite)
    */
   titleLetterWaviness: number;
+  titleLoaderBottomPct: number;
+  titleLoaderSizeRem: number;
+  titleLoaderTextScale: number;
+  titleLoaderPreview: number;
+  titleLoaderLeftPct: number;
+  titleLoaderFadeOut: number;
+  titleLoaderFadeSec: number;
+  titleLoaderFadeTo: number;
   bearDialogueOpacity: number;
   bearDialogueBlurPx: number;
   bearDialogueScale: number;
@@ -2106,6 +2114,12 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   bearDialogueLeftTiltDeg: number;
   bearDialogueRightTiltDeg: number;
   bearDialoguePreviewSide: number;
+  /** Maple's name tag, separate from Smokey's (mirrored side). */
+  bearDialogueMapleNameTagXRem: number;
+  bearDialogueMapleNameTagYRem: number;
+  bearDialogueMapleNameTagScale: number;
+  bearDialogueMapleNameTagInsetXRem: number;
+  bearDialogueMapleNameTagInsetYRem: number;
   bearDialoguePreviewTextWords: number;
   bearDialogueWidthRem: number;
   bearDialogueMinHeightRem: number;
@@ -2287,6 +2301,32 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   woodRollTime: number;
   /** Loudness of the knock as each log hits the ground (x click volume). */
   woodRollSoundVolume: number;
+  woodRollPastMic: number;
+  /** Maple watching the axe: how high she looks, as a share of its height above her head (1 = exactly at it). */
+  axeWatchLookHeight: number;
+  teaShadowOn: number;
+  teaShadowCatOn: number;
+  teaShadowCatStrength: number;
+  teaShadowCatReach: number;
+  teaShadowCatLift: number;
+  teaContactCatStrength: number;
+  teaSteamX: number;
+  teaSteamY: number;
+  teaSteamZ: number;
+  teaSteamWidth: number;
+  teaContactStrength: number;
+  teaContactSize: number;
+  teaContactOffset: number;
+  teaSteamOn: number;
+  teaSteamCount: number;
+  teaSteamOpacity: number;
+  teaSteamHeight: number;
+  teaSteamSize: number;
+  teaSteamSpeed: number;
+  teaShadowStrength: number;
+  teaShadowReach: number;
+  teaShadowLightLift: number;
+  woodRollMicPast: number;
   /** Seconds the bears keep looking at the block after the axe lands. */
   axeWatchHold: number;
   /** Seconds (time constant) for the bears' eyes to catch up with the axe. */
@@ -3818,6 +3858,14 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   titleExitZDistance: 0,
   titleLetterIdleAmount: 2.2,
   titleLetterWaviness: 0.32,
+  titleLoaderBottomPct: 7,
+  titleLoaderSizeRem: 7.5,
+  titleLoaderTextScale: 1,
+  titleLoaderPreview: 0,
+  titleLoaderLeftPct: 50,
+  titleLoaderFadeOut: 1,
+  titleLoaderFadeSec: 0.8,
+  titleLoaderFadeTo: 0,
   bearDialogueOpacity: 0.98,
   bearDialogueBlurPx: 6,
   bearDialogueScale: 1,
@@ -3830,6 +3878,11 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   bearDialogueLeftTiltDeg: -1.5,
   bearDialogueRightTiltDeg: 1.5,
   bearDialoguePreviewSide: 0,
+  bearDialogueMapleNameTagXRem: -0.4,
+  bearDialogueMapleNameTagYRem: 1.6,
+  bearDialogueMapleNameTagScale: 1.6,
+  bearDialogueMapleNameTagInsetXRem: 6,
+  bearDialogueMapleNameTagInsetYRem: -1.55,
   bearDialoguePreviewTextWords: 70,
   bearDialogueWidthRem: 34,
   bearDialogueMinHeightRem: 14,
@@ -3982,6 +4035,31 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   woodRollAway: 9,
   woodRollTime: 3.6,
   woodRollSoundVolume: 0.5,
+  woodRollPastMic: 1,
+  axeWatchLookHeight: 0.85,
+  teaShadowOn: 1,
+  teaShadowCatOn: 1,
+  teaShadowCatStrength: 0.55,
+  teaShadowCatReach: 0.45,
+  teaShadowCatLift: 0,
+  teaContactCatStrength: 0.6,
+  teaSteamX: 0,
+  teaSteamY: 0,
+  teaSteamZ: 0,
+  teaSteamWidth: 0.16,
+  teaContactStrength: 0.6,
+  teaContactSize: 0.26,
+  teaContactOffset: 0.03,
+  teaSteamOn: 1,
+  teaSteamCount: 3,
+  teaSteamOpacity: 0.35,
+  teaSteamHeight: 0.22,
+  teaSteamSize: 0.035,
+  teaSteamSpeed: 1,
+  teaShadowStrength: 0.55,
+  teaShadowReach: 0.45,
+  teaShadowLightLift: 0,
+  woodRollMicPast: 0.35,
   axeWatchFollowTime: 0.08,
   banjoDistanceRolloff: 1,
   banjoMaxBoost: 1.8,

@@ -31,6 +31,8 @@ export type BearVoiceAgent = {
   isRemoteSpeaking: boolean;
   remoteAudioLevel: number;
   spokenText: string | null;
+  /** Latest line per bear (LiveKit), so each bubble shows only its own bear's words. */
+  spokenByBear?: { Smokey: string | null; Maple: string | null };
   dialoguePhase: "idle" | "playing" | "your-turn";
   start: () => Promise<void>;
   reactToFishFire: () => void;
@@ -40,6 +42,9 @@ export type BearVoiceAgent = {
   /** Turn the visitor's microphone on/off mid-conversation (the browser asks
    *  for permission the first time). Resolves false if it was refused. */
   setMicrophone?: (on: boolean) => Promise<boolean>;
+  /** Bumps each time the bears ask the page to show the channel options again
+   *  (their show_channel_options tool: "I'd like to switch to typing"...). */
+  channelRequest?: number;
   status: VoiceStatus;
   stop: () => void;
   toggleMute: () => void;
@@ -221,7 +226,7 @@ export function useBearVoiceAgent({
 
     const configuredBaseUrl = process.env.NEXT_PUBLIC_BEAR_AGENT_BASE_URL?.trim();
     const agentBaseUrl =
-      process.env.NODE_ENV === "production" ? configuredBaseUrl : DEV_AGENT_BASE_URL;
+      process.env.NEXT_PUBLIC_APP_MODE !== "DEV" ? configuredBaseUrl : DEV_AGENT_BASE_URL;
     if (!agentBaseUrl) {
       console.warn("[BearVoice] Bear event URL is not configured.");
       return;
@@ -392,7 +397,7 @@ export function useBearVoiceAgent({
     const callSid = callSidRef.current;
     if (!callSid) return;
     const configuredBaseUrl = process.env.NEXT_PUBLIC_BEAR_AGENT_BASE_URL?.trim();
-    const agentBaseUrl = process.env.NODE_ENV === "production" ? configuredBaseUrl : DEV_AGENT_BASE_URL;
+    const agentBaseUrl = process.env.NEXT_PUBLIC_APP_MODE !== "DEV" ? configuredBaseUrl : DEV_AGENT_BASE_URL;
     if (!agentBaseUrl) return;
     const url = new URL(`/fish-reaction/${encodeURIComponent(callSid)}`, agentBaseUrl);
     const eventToken = process.env.NEXT_PUBLIC_BEAR_EVENT_TOKEN?.trim();

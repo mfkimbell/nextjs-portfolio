@@ -8,6 +8,7 @@ import CampsiteTitleIntro from "@/components/scene-lab/CampsiteTitleIntro";
 import ForceLandscape from "@/components/ForceLandscape";
 import ViewportDebug from "@/components/ViewportDebug";
 import PerfOverlay from "@/components/PerfOverlay";
+import { Mic, MicOff } from "lucide-react";
 import { useProgress } from "@react-three/drei";
 import { perfStats, SCENE_READY_EVENT } from "@/lib/perfStats";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
@@ -58,6 +59,24 @@ const PANELS = [
 /** Twilio number whose Voice webhook points at /call (ConversationRelay). */
 const BEAR_PHONE_NUMBER = process.env.NEXT_PUBLIC_BEAR_PHONE_NUMBER || "+1 (855) 471-0900";
 
+/** Deterministic star dots for the phone loading cover: two layers of
+ *  radial-gradient dots, one of them twinkling. Pure CSS, no canvas. */
+function starLayer(seed: number, count: number, maxSize: number) {
+  let a = seed;
+  const rnd = () => { a = (a * 16807) % 2147483647; return a / 2147483647; };
+  const parts: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const x = (rnd() * 100).toFixed(2), y = (rnd() * 100).toFixed(2);
+    // a third of the old size: tiny pin-pricks
+    const r = ((0.6 + rnd() * maxSize) / 3).toFixed(2);
+    const o = (0.35 + rnd() * 0.65).toFixed(2);
+    parts.push(`radial-gradient(circle at ${x}% ${y}%, rgba(255,255,255,${o}) 0, rgba(255,255,255,${o}) ${r}px, transparent ${(+r + 0.35).toFixed(2)}px)`);
+  }
+  return parts.join(",");
+}
+const STARFIELD_STYLE = { backgroundImage: starLayer(7, 70, 0.9) };
+const STARFIELD_STYLE_2 = { backgroundImage: starLayer(91, 35, 1.3) };
+
 export default function CampsiteHome() {
   const [mode, setMode] = useState<Mode>("site");
   const [panel, setPanel] = useState(0);
@@ -70,7 +89,7 @@ export default function CampsiteHome() {
   const [twilioMapleVoice] = useState("u0REnIJvUgcGQYW2Ux8K");
   const [liveKitSmokeyVoice] = useState("ash");
   const [smokeyPitch] = useState(0.9);
-  const [maplePitch] = useState(1.12);
+  const [maplePitch] = useState(0.97);   // was 1.12 - Maple a touch lower
   const bearVoiceAgent = useBearVoiceAgent({
     speechVolume: config.speechVolume,
     smokeySpeechVolume: config.smokeySpeechVolume,
@@ -140,6 +159,7 @@ export default function CampsiteHome() {
    * title shows the loading percentage meanwhile. Sticky once reached, with a
    * 20 s fallback so a stuck download can never trap anyone on the title.
    */
+  const [coverGone, setCoverGone] = useState(false);
   const loadProgress = useProgress();
   // Ready = every site loaded AND its shaders compiled (CampfireScene's
   // ShaderPrewarm fires SCENE_READY_EVENT). Compiling them after entering is
@@ -185,6 +205,8 @@ export default function CampsiteHome() {
     return () => window.clearTimeout(t);
   }, [greeted, showTitle, dialogueStarted, activeBearAgent.dialoguePhase, activeBearAgent.isRemoteSpeaking]);
   const choosing = !showTitle && greeted && chatMode == null && panel === 0;
+  // (Switching channel = clicking the telephone / microphone / typewriter
+  //  again; the old "say it and the bears call a tool" route is gone.)
 
   useEffect(() => {
     if (mode !== "site" || voiceTransport !== "livekit") return;
@@ -285,35 +307,25 @@ export default function CampsiteHome() {
           titleHeld={titleHeld}
           bearVoiceRef={activeBearAgent.voiceRef}
           onFishImpact={activeBearAgent.reactToFishFire}
-          chatChoice={{ show: choosing, onChoose: chooseChatMode }}
+          chatChoice={{ show: choosing, onChoose: chooseChatMode, clickable: !showTitle && greeted && panel === 0 }}
         />
 
-        {choosing ? (
-          <div className="pointer-events-none absolute bottom-28 left-1/2 z-30 -translate-x-1/2 rounded-full border-2 border-[#96754a] bg-[#fff8df]/90 px-5 py-2 text-center text-sm font-semibold text-[#6f5839] shadow-lg">
-            How do you want to talk to the bears? Call, talk or type.
-          </div>
-        ) : null}
+        {/* (no "how do you want to talk" banner - the three arrows say it) */}
 
-        {chatMode === "phone" && panel === 0 ? (
-          <div className="pointer-events-auto absolute bottom-20 left-1/2 z-40 w-[min(22rem,90vw)] -translate-x-1/2 rounded-3xl border-2 border-[#96754a] bg-[#fff8df] p-5 text-center text-[#6f5839] shadow-xl">
-            <p className="text-sm">Give the bears a ring at</p>
-            {BEAR_PHONE_NUMBER ? (
-              <a href={`tel:${BEAR_PHONE_NUMBER.replace(/[^+\d]/g, "")}`} className="mt-1 block text-2xl font-bold tracking-wide text-[#3a2410] underline-offset-4 hover:underline">{BEAR_PHONE_NUMBER}</a>
-            ) : (
-              <p className="mt-1 text-2xl font-bold text-[#3a2410]">(number coming soon)</p>
-            )}
-            <p className="mt-2 text-xs opacity-80">Smokey and Maple pick up on the first ring.</p>
-            <button type="button" onClick={() => setChatMode(null)} className="mt-4 rounded-full border-2 border-[#96754a] bg-white px-4 py-1.5 text-sm">Back</button>
-          </div>
-        ) : null}
+        {/* the phone number now shows in a dialogue bubble (BearDialogue, chatMode "phone") */}
 
-        {(chatMode === "mic" || chatMode === "type") && panel === 0 ? (
+        {/* (to switch channel, click the telephone, microphone or typewriter) */}
+        {/* Voice chat: a plain white mic / muted-mic icon, bottom-right, to mute yourself */}
+        {!showTitle && chatMode === "mic" ? (
           <button
             type="button"
-            onClick={() => { void liveKitBearAgent.setMicrophone?.(false); setChatMode(null); }}
-            className="pointer-events-auto absolute right-4 bottom-4 z-40 rounded-full border-2 border-[#96754a] bg-[#fff8df] px-3 py-1.5 text-xs font-semibold text-[#6f5839] shadow-lg"
+            onClick={liveKitBearAgent.toggleMute}
+            aria-pressed={liveKitBearAgent.isMuted}
+            aria-label={liveKitBearAgent.isMuted ? "Unmute microphone" : "Mute microphone"}
+            title={liveKitBearAgent.isMuted ? "Unmute" : "Mute"}
+            className="pointer-events-auto absolute bottom-4 right-4 z-40 rounded-full p-2 text-white/90 drop-shadow-[0_2px_6px_rgba(0,0,0,0.75)] transition hover:scale-110 hover:text-white"
           >
-            {chatMode === "mic" ? "🎙 talking - switch" : "⌨ typing - switch"}
+            {liveKitBearAgent.isMuted ? <MicOff size={30} strokeWidth={2} /> : <Mic size={30} strokeWidth={2} />}
           </button>
         ) : null}
 
@@ -323,23 +335,36 @@ export default function CampsiteHome() {
             <button type="button" onClick={selectLiveKitTransport} className={`rounded-full px-2 py-1 ${voiceTransport === "livekit" ? "bg-amber-200 text-stone-950" : "text-white/70"}`}>LiveKit beta</button>
           </div>
         ) : null}
-        {dialogueStarted && panel === 0 && !(choosing && !activeBearAgent.isRemoteSpeaking) && chatMode !== "phone" ? <ConfiguredBearDialogue agent={activeBearAgent} chatMode={chatMode === "mic" || chatMode === "type" ? chatMode : undefined} config={config} /> : null}
+        {/* the bubbles follow you to every scene, not just the campfire */}
+        {!showTitle && (dialogueStarted || chatMode != null) && !(choosing && !activeBearAgent.isRemoteSpeaking) ? <ConfiguredBearDialogue agent={activeBearAgent} chatMode={chatMode ?? undefined} config={config} phoneNumber={BEAR_PHONE_NUMBER} onChangeChannel={() => setChatMode(null)} /> : null}
 
+
+      {/* A plain starry night covers the 3D scene while it loads and
+          compiles (it was visibly popping and flickering behind the title),
+          then fades away once it's ready, revealing the scene as normal. */}
+      {!coverGone ? (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed inset-0 z-[35] bg-black"
+          style={{ opacity: sceneReady ? 0 : 1, transition: "opacity 1.4s ease", ...STARFIELD_STYLE }}
+          onTransitionEnd={() => { if (sceneReady) setCoverGone(true); }}
+        >
+          <div className="absolute inset-0 campsite-twinkle" style={STARFIELD_STYLE_2} />
+          <style>{`@keyframes campsite-twinkle { 0%,100% { opacity: .35 } 50% { opacity: 1 } } .campsite-twinkle { animation: campsite-twinkle 3.2s ease-in-out infinite }`}</style>
+        </div>
+      ) : null}
 
       {showTitle ? (
         <CampsiteTitleIntro
           ready={sceneReady}
+          loader={{ bottomPct: config.titleLoaderBottomPct, leftPct: config.titleLoaderLeftPct, sizeRem: config.titleLoaderSizeRem, textScale: config.titleLoaderTextScale, fadeOut: (config.titleLoaderFadeOut ?? 1) >= 0.5, fadeSec: config.titleLoaderFadeSec, fadeTo: config.titleLoaderFadeTo }}
           loadingPercent={loadProgress.active || loadProgress.progress < 100 ? loadProgress.progress : -1}
           onUnmute={startBearsDuringFlight}
           onEnter={() => {
             setShowTitle(false);
             askForGreeting();
-            // Same swoosh the scene-to-scene switches use, hand-fired here
-            // because this transition doesn't change `panel` (already 0)
-            // for the panel-change effect above to catch - it's the camera
-            // pulling IN to the campfire for the first time, not moving
-            // between two already-framed locations.
-            fireSwoosh();
+            // (No swoosh on the first zoom into scene 1 any more - it played
+            //  out of step with the fly-in. Scene-to-scene switches keep theirs.)
           }}
           timing={{
             blackHoldDuration: config.titleBlackHoldDuration,
@@ -375,7 +400,7 @@ export default function CampsiteHome() {
           <button
             onClick={prev}
             aria-label={`Previous: ${PANELS[(panel - 1 + PANELS.length) % PANELS.length].title}`}
-            className="scene-arrow-drop group absolute left-[2vmin] top-[2vmin] z-20 flex h-[5vmin] w-[5vmin] items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
+            className="scene-arrow-drop group absolute left-[2vmin] top-[2vmin] z-20 flex h-[10vmin] w-[10vmin] items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
           >
             {/* Hover lives on the inner span, not the button: the button owns
                 the drop-in animation, and an animation with fill `both` keeps
@@ -388,7 +413,7 @@ export default function CampsiteHome() {
           <button
             onClick={next}
             aria-label={`Next: ${PANELS[(panel + 1) % PANELS.length].title}`}
-            className="scene-arrow-drop scene-arrow-drop-late group absolute right-[2vmin] top-[2vmin] z-20 flex h-[5vmin] w-[5vmin] items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
+            className="scene-arrow-drop scene-arrow-drop-late group absolute right-[2vmin] top-[2vmin] z-20 flex h-[10vmin] w-[10vmin] items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
           >
             <span className="block h-full w-full drop-shadow-[0_2px_7px_rgba(0,0,0,0.7)] transition-transform duration-300 group-hover:translate-x-1 group-hover:scale-110">
               <SceneArrow direction="right" />

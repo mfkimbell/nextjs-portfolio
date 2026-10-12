@@ -8,7 +8,7 @@ import { applyLipSyncFrame, createLipSyncAnalyzer } from "@/lib/bearLipSync";
 import { getSharedAudioContext } from "@/lib/campsiteSounds";
 
 const DEFAULT_SMOKEY_PITCH_RATE = 0.9;
-const DEFAULT_MAPLE_PITCH_RATE = 1.12;
+const DEFAULT_MAPLE_PITCH_RATE = 0.97;
 
 type VoiceStatus = "idle" | "connecting" | "active" | "disconnected" | "error";
 type BearAmbienceGraph = { filter: BiquadFilterNode; panner: StereoPannerNode; dry: GainNode; wet: GainNode };
@@ -36,6 +36,20 @@ export const useLiveKitBearAgent = (
 ): BearVoiceAgent => {
   const roomRef = useRef<Room | null>(null);
   const audioElementsRef = useRef<HTMLAudioElement[]>([]);
+  /*
+   * THE DOUBLED VOICE. livekit-client's room.startAudio() un-mutes every
+   * attached <audio> element (unless webAudioMix is on). Ours are muted on
+   * purpose - each bear's sound comes out through our own Web Audio graph
+   * (panning, distance, reverb) - so after startAudio ran (enabling the mic
+   * calls it) every bear played TWICE: once from the element, once from the
+   * graph. That is why it began right after the visitor first spoke.
+   * Every startAudio now goes through this, which mutes them again.
+   */
+  const startAudioSafely = async (room: Room) => {
+    try { await room.startAudio(); } finally {
+      for (const el of audioElementsRef.current) el.muted = true;
+    }
+  };
   const participantBearsRef = useRef(new Map<string, BearVoiceState["activeBearId"]>());
   // One graph per bear participant, all on the page's SHARED AudioContext.
   // (Each bear used to get its own `new AudioContext()`: iOS caps how many a
@@ -64,7 +78,12 @@ export const useLiveKitBearAgent = (
   const [isRemoteSpeaking, setIsRemoteSpeaking] = useState(false);
   const [activeSpeakerName, setActiveSpeakerName] = useState<string | null>(null);
   const [spokenText, setSpokenText] = useState<string | null>(null);
+  // the latest line PER BEAR, so a bubble only ever shows its own bear's words
+  // (bear.play for Maple arrives a beat before her voice does - showing the
+  //  shared "latest line" put her words in Smokey's bubble for a moment)
+  const [spokenByBear, setSpokenByBear] = useState<{ Smokey: string | null; Maple: string | null }>({ Smokey: null, Maple: null });
   const [dialoguePhase, setDialoguePhase] = useState<"idle" | "playing" | "your-turn">("idle");
+  const [channelRequest, setChannelRequest] = useState(0);
   const [microphonePermission, setMicrophonePermission] = useState<MicrophonePermission>("prompt");
 
   const requestMicrophone = useCallback(async () => {
@@ -99,6 +118,7 @@ export const useLiveKitBearAgent = (
     setIsRemoteSpeaking(false);
     setActiveSpeakerName(null);
     setSpokenText(null);
+    setSpokenByBear({ Smokey: null, Maple: null });
     setDialoguePhase("idle");
     setIsMuted(false);
   }, [voiceRef]);
@@ -236,7 +256,7 @@ export const useLiveKitBearAgent = (
       bearLog("start: new room", { roomTag });
       // Request browser audio unlock synchronously from the Talk button gesture
       // before network/token awaits can consume the activation window.
-      void room.startAudio().catch(() => {});
+      void startAudioSafely(room).catch(() => {});
       const response = await fetch("/api/livekit/token", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -300,9 +320,12 @@ export const useLiveKitBearAgent = (
           }
           if (event.type === "bear.play" && typeof event.text === "string") {
             setSpokenText(event.text);
+            const who = event.bear === "maple" ? "Maple" : event.bear === "smokey" ? "Smokey" : null;
+            if (who) { const text = event.text; setSpokenByBear((prev) => ({ ...prev, [who]: text })); }
             setDialoguePhase("playing");
           }
           if (event.type === "turn.completed") setDialoguePhase("your-turn");
+          if (event.type === "ui.show_channel_options") setChannelRequest((n) => n + 1);
           if (event.type !== "bear.identity" || (event.bear !== "smokey" && event.bear !== "maple")) return;
           const bear = event.bear === "maple" ? "back_right_log" : "back_left_log";
           for (const [identity, other] of participantBearsRef.current) {
@@ -332,6 +355,8 @@ export const useLiveKitBearAgent = (
       await room.connect(url, token, { autoSubscribe: true });
       if (roomRef.current !== room) { bearWarn("stale start after connect - dropping room", { roomTag }); void room.disconnect(); return; }
       const subscribeToAgentAudio = () => {
+        // belt and braces for the doubled voice: nothing may un-mute our elements
+        for (const el of audioElementsRef.current) if (!el.muted) { el.muted = true; bearWarn("re-muted a bear <audio> element (it would have doubled the voice)"); }
         for (const participant of room.remoteParticipants.values()) {
           for (const publication of participant.trackPublications.values()) {
             if (publication.kind === Track.Kind.Audio && !publication.isSubscribed) {
@@ -388,7 +413,7 @@ export const useLiveKitBearAgent = (
     readyRequestedRef.current = true;
     const withMic = opts?.microphone !== false;   // typewriter visitors talk by text only
     try {
-      await room.startAudio();
+      await startAudioSafely(room);
       await room.localParticipant.setMicrophoneEnabled(withMic);
       if (withMic) setMicrophonePermission("granted");
     } catch (activationError) {
@@ -424,7 +449,7 @@ export const useLiveKitBearAgent = (
     const room = roomRef.current;
     if (!room) return false;
     try {
-      await room.startAudio();
+      await startAudioSafely(room);
       await room.localParticipant.setMicrophoneEnabled(on);
       setIsMuted(!on);
       setError(null);
@@ -447,12 +472,14 @@ export const useLiveKitBearAgent = (
     isRemoteSpeaking,
     remoteAudioLevel: 0,
     spokenText,
+    spokenByBear,
     dialoguePhase,
     reactToFishFire: () => {},
     requestMicrophone,
     beginConversation,
     sendTextMessage,
     setMicrophone,
+    channelRequest,
     start,
     status,
     stop,

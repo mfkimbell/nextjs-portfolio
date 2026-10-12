@@ -31,12 +31,12 @@ export const SOUND_LIST: readonly SoundEntry[] = [
   { id: "banjo", label: "Banjo (loop)", url: "/sound/banjo.mp3", loop: true, where: "Campfire" },
   { id: "fireWhoosh", label: "Fire whoosh (fish / click the fire)", url: "/sound/fire whoosh.mp3", where: "Campfire" },
   { id: "fishFlop", label: "Fish flop", url: "/sound/fish_flop.wav", where: "Campfire" },
-  { id: "leftBag", label: "Left bag falls", url: "/sound/left-bag-fall.mp3", where: "Campfire" },
-  { id: "rightBag", label: "Right bag falls", url: "/sound/right-bag-fall.mp3", where: "Campfire" },
-  { id: "rodFall", label: "Fishing rod falls / log knock", url: "/sound/fishing-rod-fall-sound.mp3", where: "Campfire" },
+  { id: "leftBag", label: "Left bag falls", url: "/sound/left-bag-fall.mp3", where: "Campfire", defaults: { pan: -0.6 } },
+  { id: "rightBag", label: "Right bag falls", url: "/sound/right-bag-fall.mp3", where: "Campfire", defaults: { pan: 0.6 } },
+  { id: "rodFall", label: "Fishing rod falls / log knock", url: "/sound/fishing-rod-fall-sound.mp3", where: "Campfire", defaults: { pan: 0.6 } },
   // the spin file is 2.7 s of silence, a 0.6 s whoosh, then silence again
-  { id: "axeSpin", label: "Axe spinning in the air", url: "/sound2/axe-spinning-in-air-sound.mp3", where: "Campfire", defaults: { start: 2.62, vol: 2.5 } },
-  { id: "axeHit", label: "Axe hits the block", url: "/sound2/axehitwood.mp3", where: "Campfire", defaults: { start: 0.24 } },
+  { id: "axeSpin", label: "Axe spinning in the air", url: "/sound2/axe-spinning-in-air-sound.mp3", where: "Campfire", defaults: { start: 2.62, vol: 2.5, pan: -0.6 } },
+  { id: "axeHit", label: "Axe hits the block", url: "/sound2/axehitwood.mp3", where: "Campfire", defaults: { start: 0.24, pan: -0.6 } },
   { id: "woodRoll", label: "Log rolling (loop)", url: "/sound2/wood-rolling-needs-to-be-looped.mp3", loop: true, where: "Campfire", defaults: { start: 0.29, end: 1.06, vol: 1.5 } },
   // scene 2 - arcade
   { id: "crtMusic", label: "Arcade music (loop)", url: "/sound/CRT music.mp3", loop: true, where: "Arcade" },

@@ -13,10 +13,13 @@ function requiredEnvironmentValue(name: string) {
   return value;
 }
 
-function appEnvironment(): AppEnvironment {
-  const value = process.env.APP_ENV;
-  if (value === "DEV" || value === "PROD") return value;
-  throw new Error("APP_ENV must be DEV or PROD");
+/**
+ * Production unless the .env explicitly says development:
+ * APP_ENV=development (or "dev" / "DEV", any case) -> DEV; anything else,
+ * including no APP_ENV at all -> PROD.
+ */
+export function appEnvironment(): AppEnvironment {
+  return /^(dev|development)$/i.test(process.env.APP_ENV?.trim() ?? "") ? "DEV" : "PROD";
 }
 
 export function getTwilioVoiceConfig(): TwilioVoiceConfig {

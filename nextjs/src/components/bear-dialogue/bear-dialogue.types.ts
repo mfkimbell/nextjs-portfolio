@@ -4,7 +4,11 @@ export type BearDialogueProps = {
   agent: BearVoiceAgent;
   /** How the visitor chose to talk (the arrows over the mic / typewriter).
    *  Set, it skips the old mic-or-pencil picker. */
-  chatMode?: "mic" | "type";
+  chatMode?: "mic" | "type" | "phone";
+  /** Shown in the "call us" bubble when chatMode is "phone". */
+  phoneNumber?: string;
+  /** "Back" from the phone bubble: put the channel choices up again. */
+  onChangeChannel?: () => void;
   opacity: number;
   blurPx: number;
   scale: number;
@@ -40,6 +44,13 @@ export type BearDialogueProps = {
   nameTagAnchor: number;
   nameTagInsetXRem: number;
   nameTagInsetYRem: number;
+  /** Maple's own name-tag placement (her tag hangs off the top-RIGHT corner,
+   *  so positive X moves it outward - it needs its own numbers). */
+  mapleNameTagXRem?: number;
+  mapleNameTagYRem?: number;
+  mapleNameTagScale?: number;
+  mapleNameTagInsetXRem?: number;
+  mapleNameTagInsetYRem?: number;
   nameTagWaveAmplitude: number;
   nameTagWaveSpeed: number;
   nameTagWaveSpacing: number;

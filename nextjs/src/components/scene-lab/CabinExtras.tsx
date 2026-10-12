@@ -448,7 +448,7 @@ const catClick = { at: -1 };
 
 const PET_CURSOR = "url('/cursors/pet_hand.svg') 15 16, grab";
 /** The site's ordinary "this does something" pointer, before the close-up. */
-const ZOOM_CURSOR = "url('/cursors/pointer.svg') 14 14, pointer";
+const ZOOM_CURSOR = "pointer";
 const PET_CURSOR_SCRATCH = "url('/cursors/pet_hand_scratch.svg') 15 16, grabbing";
 
 function makeHeartTexture() {
@@ -1057,7 +1057,7 @@ export function CabinCat({
 
   // ---- petting state
   const pet = useRef({
-    down: false, hover: false, happy: 0, shut: 0, moved: 0, lastX: 0, lastY: 0, lastScratch: 0, lastHeart: 0,
+    down: false, hover: false, happy: 0, eyeHappy: 0, shut: 0, moved: 0, lastX: 0, lastY: 0, lastScratch: 0, lastHeart: 0,
     rub: 0, rubTarget: 0, point: new THREE.Vector3(), t: 0,
   });
   const purr = useRef<Purr | null>(null);
@@ -1393,10 +1393,14 @@ export function CabinCat({
     if (face?.morphTargetInfluences && face.morphTargetDictionary) {
       // eyes shut (glints tucked behind the lids) while the hand is on, quickly;
       // after, they stay contentedly shut as long as the cat is still happy
-      p.shut += ((p.down ? 1 : happy) - p.shut) * (1 - Math.exp(-dt * (p.down ? 9 : 2.5)));
+      // the eyes open 30% faster than the rest of the contentment fades
+      // (purr, bob, tail keep the slower 0.3/s; the eyelids use 0.39/s)
+      p.eyeHappy = p.down ? p.happy : Math.max(0, Math.min(p.happy, p.eyeHappy - 0.39 * dt));
+      const eyeHappy = p.eyeHappy * p.eyeHappy * (3 - 2 * p.eyeHappy);
+      p.shut += ((p.down ? 1 : eyeHappy) - p.shut) * (1 - Math.exp(-dt * (p.down ? 9 : 2.5 * 1.3)));
       // the sleeper is asleep: eyes fully shut, no catchlights (its baked rest
       // is only 80% closed, which left the dots glinting through)
-      const shut = kind === "sleep" ? 1 : eyeBase.current + (1 - eyeBase.current) * Math.max(p.shut, happy);
+      const shut = kind === "sleep" ? 1 : eyeBase.current + (1 - eyeBase.current) * Math.max(p.shut, eyeHappy);
       for (const f of rig.faces) {
         const j = f.morphTargetDictionary?.eye_close;
         if (j !== undefined && f.morphTargetInfluences) f.morphTargetInfluences[j] = shut;
