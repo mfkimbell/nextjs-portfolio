@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallWatch } from "@/hooks/useCallWatch";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatChoice } from "@/components/scene-lab/CabinExtras";
 import CampfireScene from "@/components/scene-lab/CampfireScene";
@@ -107,6 +108,8 @@ export default function CampsiteHome() {
   // telephone (call a real Twilio number), the microphone (talk - the
   // browser asks for the mic right then) and the typewriter (type).
   const [chatMode, setChatMode] = useState<ChatChoice | null>(null);
+  // "Call us" open: wait for this visitor's call so the bears can pick up their phones
+  const { onCall } = useCallWatch(chatMode === "phone");
   const [greeted, setGreeted] = useState(false);
   const greetAskedRef = useRef(false);
   const startBearsDuringFlight = useCallback(async () => {
@@ -336,7 +339,7 @@ export default function CampsiteHome() {
           </div>
         ) : null}
         {/* the bubbles follow you to every scene, not just the campfire */}
-        {!showTitle && (dialogueStarted || chatMode != null) && !(choosing && !activeBearAgent.isRemoteSpeaking) ? <ConfiguredBearDialogue agent={activeBearAgent} chatMode={chatMode ?? undefined} config={config} phoneNumber={BEAR_PHONE_NUMBER} onChangeChannel={() => setChatMode(null)} /> : null}
+        {!showTitle && (dialogueStarted || chatMode != null) && !(choosing && !activeBearAgent.isRemoteSpeaking) ? <ConfiguredBearDialogue agent={activeBearAgent} chatMode={chatMode ?? undefined} config={config} phoneNumber={BEAR_PHONE_NUMBER} onCall={onCall} onChangeChannel={() => setChatMode(null)} /> : null}
 
 
       {/* A plain starry night covers the 3D scene while it loads and

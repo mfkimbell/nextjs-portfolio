@@ -64,6 +64,8 @@ type Session = {
   playedText: string;
   playbackWaiters: Set<() => void>;
   generation: number;
+  /** Maple has done the senior -> staff engineer correction on this call (once per call) */
+  titleGagUsed?: boolean;
   lastSeen: number;
   expiresAt: number;
 };
@@ -191,8 +193,46 @@ function publishSpeechEvent(
 }
 
 function closeEventSubscribers(session: Session): void {
-  for (const response of session.eventSubscribers) response.end();
+  for (const response of session.eventSubscribers) {
+    // a paired site hears that the call is over before its stream closes
+    if (callWatchers.has(response)) response.write(`event: call.ended\ndata: ${JSON.stringify({ callSid: session.callSid ?? null })}\n\n`);
+    response.end();
+  }
   session.eventSubscribers.clear();
+}
+
+/*
+ * Pairing a phone call with the website it came from.
+ *
+ * A call carries nothing that says which browser it belongs to, so the site
+ * says so instead: while its "Call us" bubble is open it holds a
+ * /call-watch stream open here. When a call starts, the NEWEST such site
+ * (opened within the last 3 minutes, not already paired) claims it - its
+ * stream joins that call's event subscribers, so it hears call.started, every
+ * bear line (bear.speech.*) and call.ended, and its bears pick up their
+ * phones. Two visitors opening the bubble within minutes of each other is the
+ * only way to pick the wrong one; a short code read out by the caller would
+ * close that gap if it ever matters.
+ */
+const CALL_WATCH_WINDOW_MS = 3 * 60_000;
+const callWatchers = new Map<Response, { openedAt: number; claimed: boolean }>();
+
+function claimCallWatcher(session: Session): void {
+  let best: Response | undefined;
+  let bestAt = -1;
+  const now = Date.now();
+  for (const [response, w] of callWatchers) {
+    if (w.claimed || now - w.openedAt > CALL_WATCH_WINDOW_MS) continue;
+    if (w.openedAt > bestAt) { best = response; bestAt = w.openedAt; }
+  }
+  if (!best) {
+    console.log("Call has no waiting website to pair with", { callSid: session.callSid });
+    return;
+  }
+  callWatchers.get(best)!.claimed = true;
+  session.eventSubscribers.add(best);
+  best.write(`event: call.started\ndata: ${JSON.stringify({ callSid: session.callSid ?? null })}\n\n`);
+  console.log("Call paired with a website", { callSid: session.callSid, waitingSites: callWatchers.size });
 }
 
 function matchingSession(callSid: string): Session | undefined {
@@ -354,27 +394,8 @@ function sendGreeting(ws: RelaySocket, session: Session): void {
       return;
     }
     if (session.activeSpeech?.bear === "bear2") publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
-    const apology = {
-      bear: "bear1" as const,
-      text: "And we were just talking about Mitch, our favorite senior engineer. So what would you like to know about him?",
-    };
-    sendTalkCycle(ws, session, apology, true, () => session.generation === generation);
-    const seniorPlayed = await waitForPlayedText(session, "So", playbackTimeoutMs(apology.text));
-    if (session.generation !== generation) return;
-    if (!seniorPlayed) {
-      console.warn("Greeting Smokey title playback timed out", { callSid: session.callSid });
-      return;
-    }
-    if (session.activeSpeech?.bear === "bear1") {
-      publishSpeechEvent(session, "bear.speech.interrupted", session.activeSpeech);
-    }
-    const correction = { bear: "bear2" as const, text: "Actually, Smokey, Mitchell is a staff engineer." };
-    sendTalkCycle(ws, session, correction, false, () => session.generation === generation);
-    const correctionPlayed = await waitForPlayedText(session, correction.text, playbackTimeoutMs(correction.text));
-    if (session.generation !== generation || !correctionPlayed) return;
-    if (session.activeSpeech?.bear === "bear2") publishSpeechEvent(session, "bear.speech.ended", session.activeSpeech);
-    const recovery = { bear: "bear1" as const, text: "Right, our favorite staff engineer. So what would you like to know about him?" };
-    sendTalkCycle(ws, session, recovery, false, () => session.generation === generation);
+    const ask = { bear: "bear1" as const, text: "We were just talking about Mitch in the tent over there. What would you like to know about him?" };
+    sendTalkCycle(ws, session, ask, false, () => session.generation === generation);
   })().catch((error: unknown) => {
     console.error("Greeting sequencing failed", error instanceof Error ? error.message : "unknown error");
   });
@@ -442,7 +463,9 @@ async function generateReply(session: Session, prompt: string): Promise<BearRepl
     },
     messages: [{
       role: "system",
-      content: "You are Maple, a sassy, sharp, confident Southern portfolio bear and Smokey's affectionate spouse. Return exactly one spoken line for Maple only. Never write Smokey's line, your name, his name, speaker labels, stage directions, or a multi-character script. Vary your short beat between a useful correction, playful objection, joke, aside, and agreement. Do not repeat the senior/staff engineer correction unless the topic is Mitchell's title. For interruptAfter, copy an exact phrase of at least four words from Smokey that ends before his response ends. For handoffContext, provide the short idea Smokey must explicitly acknowledge. Start with a direct, natural reaction. Never invent a factual error just to interrupt.",
+      content: `You are Maple, a sassy, sharp, confident Southern portfolio bear and Smokey's affectionate spouse. Return exactly one spoken line for Maple only. Never write Smokey's line, your name, his name, speaker labels, stage directions, or a multi-character script. Vary your short beat between a useful correction, playful objection, joke, aside, and agreement. ${session.titleGagUsed
+        ? "You ALREADY did the senior/staff engineer correction on this call - never bring up his title being wrong again."
+        : "The senior/staff engineer mix-up (Mitchell is a staff engineer, not senior) has not been used yet - save it for a natural moment when his title or role comes up."} For interruptAfter, copy an exact phrase of at least four words from Smokey that ends before his response ends. For handoffContext, provide the short idea Smokey must explicitly acknowledge. Start with a direct, natural reaction. Never invent a factual error just to interrupt.`,
     }, ...session.mapleHistory, {
       role: "user",
       content: `Visitor: ${prompt}\n\nSmokey: ${smokey}`,
@@ -470,6 +493,11 @@ async function generateReply(session: Session, prompt: string): Promise<BearRepl
     } catch {
       console.warn("Maple reply plan was invalid JSON", { callSid: session.callSid });
     }
+  }
+  // local flag: once Maple has corrected his title, she never does it again this call
+  if (!session.titleGagUsed && /staff engineer/i.test(mapleText)) {
+    session.titleGagUsed = true;
+    console.log("Title gag used", { callSid: session.callSid });
   }
   session.mapleHistory.push({ role: "user", content: `Visitor: ${prompt}\n\nSmokey: ${smokey}` });
   session.mapleHistory.push({ role: "assistant", content: mapleText });
@@ -527,6 +555,30 @@ app.get("/health", (_request, response) => response.status(200).json({
   dialogueProtocol,
   mediaStreamsMirrorEnabled,
 }));
+app.options("/call-watch", (request, response) => {
+  if (!allowPortfolioOrigin(request, response)) return response.sendStatus(403);
+  return response.sendStatus(204);
+});
+app.get("/call-watch", (request, response) => {
+  if (!allowPortfolioOrigin(request, response)) return response.sendStatus(403);
+  if (appEnv === "PROD" && request.query.token !== bearEventToken) return response.sendStatus(401);
+  response.set({
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Content-Type": "text/event-stream",
+    "X-Accel-Buffering": "no",
+  });
+  response.flushHeaders();
+  response.write(": waiting for a call\n\n");
+  callWatchers.set(response, { openedAt: Date.now(), claimed: false });
+  // keep proxies (ngrok, Railway...) from idling the stream out
+  const ping = setInterval(() => response.write(": ping\n\n"), 25_000);
+  request.on("close", () => {
+    clearInterval(ping);
+    callWatchers.delete(response);
+    for (const session of sessions.values()) session.eventSubscribers.delete(response);
+  });
+});
 app.options("/events/:callSid", (request, response) => {
   if (!allowPortfolioOrigin(request, response)) return response.sendStatus(403);
   return response.sendStatus(204);
@@ -662,6 +714,7 @@ app.ws("/conversation-relay", (ws, request) => {
       session.relaySocket = ws;
       session.lastSeen = Date.now();
       session.expiresAt = session.lastSeen + sessionTtlMs;
+      claimCallWatcher(session);
       sendGreeting(ws, session);
       return;
     }

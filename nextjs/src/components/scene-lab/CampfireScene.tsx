@@ -5,7 +5,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import type { ComponentRef, MutableRefObject, ReactNode, RefObject } from "react";
 import IntroFlight from "@/components/scene-lab/IntroFlight";
 import SafeAsset from "@/components/scene-lab/SafeAsset";
-import { CampCritters, TipOver, RACCOON2_URL, type ActName } from "@/components/scene-lab/CritterActs";
+import { CampCritters, MeasuredTipOver, TipOver, RACCOON2_URL, type ActName } from "@/components/scene-lab/CritterActs";
 import { TIP_TABLES } from "@/components/scene-lab/tipTables";
 import { useComputerPointer, useRetroDesktop, useRetroDesktopTexture, type PcSounds, type PcState } from "@/components/scene-lab/RetroDesktop";
 import { pcBeep, pcChirp, pcKey, pcMouseClick, pcPark, pcPawThud, pcSeek } from "@/lib/retroPcSounds";
@@ -32,8 +32,10 @@ import type { BugSwarmScope, BugSwarmTweak } from "@/components/scene-lab/sceneC
 import banjoBearPoseRaw from "@/config/banjoBearPose.json";
 import rockingChairBearPoseRaw from "@/config/rockingChairBearPose.json";
 import bearPosesRaw from "@/config/bearPoses.json";
-import { fadeOutAudio, type PlayingSound, useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
+import { fadeOutAudio, type LoopSpace, playGlassClink, type PlayingSound, useCampsiteAudioLoop, useCampsiteOneShot } from "@/lib/campsiteSounds";
 import { applySoundTuning } from "@/components/scene-lab/soundList";
+import { BEAR_DANCE_EVENT, bearDanceState, loadBearDanceClip } from "@/lib/bearDance";
+import { BEAR_PHONE_EVENT, bearPhoneState, loadBearPhone, PHONE_IN_HAND_AT, PHONE_TOSS_AT, type BearPhoneAssets } from "@/lib/bearPhone";
 import { locationShown } from "@/components/scene-lab/sceneActivity";
 import { perfStats, SCENE_READY_EVENT } from "@/lib/perfStats";
 import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
@@ -2402,6 +2404,69 @@ function Selectable({
   );
 }
 
+/** true on touch-first devices (phones, tablets): fingers are bigger than the cursor */
+function useCoarsePointer(): boolean {
+  const [coarse, setCoarse] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(pointer: coarse)");
+    const update = () => setCoarse(mq.matches);
+    update();
+    mq.addEventListener?.("change", update);
+    return () => mq.removeEventListener?.("change", update);
+  }, []);
+  return coarse;
+}
+
+const TAP_PAD = 0.12;    // world units added on every side of a clickable prop
+const TAP_MIN = 0.5;     // and never smaller than this across, so a bottle is hittable
+const TAP_MAT = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+/**
+ * A bigger, invisible tap target around a clickable prop, for touch screens.
+ * It is a sibling of the prop inside its Selectable group, so a tap on it
+ * bubbles to the same onClick (and hover glow) as a tap on the prop itself.
+ * Re-measured about once a second, so it follows a prop that has fallen over.
+ */
+function TapTarget({ of }: { of: React.RefObject<THREE.Object3D | null> }) {
+  const mesh = useRef<THREE.Mesh>(null);
+  const at = useRef(-1e9);
+  const tmp = useMemo(() => ({ box: new THREE.Box3(), part: new THREE.Box3(), inv: new THREE.Matrix4(), m: new THREE.Matrix4(), s: new THREE.Vector3(), c: new THREE.Vector3(), z: new THREE.Vector3() }), []);
+  useFrame(() => {
+    const now = performance.now();
+    const root = of.current, box = mesh.current;
+    if (!root || !box || !box.parent || now - at.current < 1000) return;
+    at.current = now;
+    const frame = box.parent;
+    frame.updateWorldMatrix(true, false);
+    root.updateWorldMatrix(true, true);
+    tmp.inv.copy(frame.matrixWorld).invert();
+    tmp.box.makeEmpty();
+    root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.geometry || !m.visible) return;
+      if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+      if (!m.geometry.boundingBox) return;
+      tmp.part.copy(m.geometry.boundingBox).applyMatrix4(tmp.m.multiplyMatrices(tmp.inv, m.matrixWorld));
+      tmp.box.union(tmp.part);
+    });
+    if (tmp.box.isEmpty()) { box.visible = false; return; }
+    // pad/minimum are in WORLD units: undo the group's own scale
+    frame.getWorldScale(tmp.s);
+    const k = Math.max(1e-4, (Math.abs(tmp.s.x) + Math.abs(tmp.s.y) + Math.abs(tmp.s.z)) / 3);
+    tmp.box.getSize(tmp.z);
+    tmp.box.getCenter(tmp.c);
+    const fit = (v: number) => Math.max(v + (2 * TAP_PAD) / k, TAP_MIN / k);
+    box.position.copy(tmp.c);
+    box.scale.set(fit(tmp.z.x), fit(tmp.z.y), fit(tmp.z.z));
+    box.visible = true;
+  });
+  return (
+    <mesh ref={mesh} material={TAP_MAT} visible={false} renderOrder={-1} userData={{ tapTarget: true }}>
+      <boxGeometry args={[1, 1, 1]} />
+    </mesh>
+  );
+}
+
 function SelectableInner({
   name, onSelect, config, basePosition = [0, 0, 0], baseRotationY = 0,
   baseScale = 1, hidden = false, interactive = false, onHoverChange, children,
@@ -2424,6 +2489,8 @@ function SelectableInner({
   // come back - a deliberate second visit, not an accidental twitch.
   const [glowMuted, setGlowMuted] = useState(false);
   const liftRef = useHoverLift(hovered && interactive, interactive, glowMuted);
+  // phones: give clickable props a fingertip-sized target (see TapTarget)
+  const coarsePointer = useCoarsePointer();
   // onPointerOut is unmounted along with interactivity, so without this the
   // flag would stay true forever on a prop that was clicked mid-hover.
   useEffect(() => { if (!interactive) { setHovered(false); setGlowMuted(false); onHoverChange?.(false); } }, [interactive, onHoverChange]);
@@ -2443,6 +2510,7 @@ function SelectableInner({
       onPointerOut={interactive ? (e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(false); setGlowMuted(false); onHoverChange?.(false); } : undefined}
     >
       <group ref={liftRef}>{children}</group>
+      {interactive && coarsePointer ? <TapTarget of={liftRef} /> : null}
     </group>
   );
 }
@@ -5025,6 +5093,25 @@ const DESK_CAMP_LAMP_PARTS = new Map<string, string>(
 );
 
 const WATER_MATERIALS = new Set(["Material.057"]);
+/** what a switched-off bulb or lamp lens looks like */
+const DEAD_BULB = new THREE.Color(0.16, 0.15, 0.14);
+
+/**
+ * The camper van, lifted out of the diorama as one object ("camping_van") so
+ * it can be clicked - it is the light switch for its headlights and the
+ * string of bulbs off its awning. 40 meshes: body, wheels, windows, bumper,
+ * roof rack and luggage, and the striped awning. Picked in Blender by its
+ * footprint and checked by eye. Left in the diorama on purpose: the two
+ * headlight lenses (Object_335/337 - the VanHeads lamp fixture, which the
+ * lamp code looks up there) and the string bulbs and their caps.
+ */
+const CAMP_VAN_MESHES: readonly string[] = [
+  "Object_116", "Object_117", "Object_307", "Object_314", "Object_316", "Object_318", "Object_320", "Object_333",
+  "Object_339", "Object_341", "Object_342", "Object_344", "Object_346", "Object_392", "Object_393", "Object_395",
+  "Object_405", "Object_407", "Object_409", "Object_411", "Object_413", "Object_415", "Object_417", "Object_419",
+  "Object_421", "Object_423", "Object_425", "Object_427", "Object_429", "Object_431", "Object_433", "Object_435",
+  "Object_438", "Object_440", "Object_442", "Object_477", "Object_478", "Object_479", "Object_480", "Object_482",
+];
 
 /**
  * Shadow opt-in for the desk diorama.
@@ -6320,13 +6407,28 @@ function CampingWithSelectableTrees({
   url,
   config,
   onSelect,
+  live = false,
 }: {
   url: string;
   config: CampfireSceneConfig;
   onSelect: (name: string) => void;
+  /** the main site (not the lab): clicking the van / dock lantern switches its lights */
+  live?: boolean;
 }) {
   const gltf = useGLTF(url) as unknown as { scene: THREE.Group };
-  const { base, trees, chairs, lanterns, lampAnchors, lampParts, bulbMats, bulbGlow, waterMeshes, dockShade } = useMemo(() => {
+  // Light switches. Clicking the camper van turns off its headlights AND the
+  // string of bulbs strung off its awning; clicking the dock lantern turns
+  // that lantern off. Click again for on. Site only - in the lab a click
+  // selects the object as usual.
+  const [vanLit, setVanLit] = useState(true);
+  const [dockLit, setDockLit] = useState(true);
+  const lampOn = (id: string) => (id === "VanHeads" ? vanLit : id === "SmallB" ? dockLit : true);
+  const selectOrSwitch = (name: string) => {
+    if (live && name === "camping_lantern_dock") { setDockLit((v) => !v); return; }
+    if (live && name === "camping_van") { setVanLit((v) => !v); return; }
+    onSelect(name);
+  };
+  const { base, trees, chairs, lanterns, van, lampAnchors, lampParts, bulbMats, bulbGlow, waterMeshes, dockShade } = useMemo(() => {
     const cloned = gltf.scene.clone(true);
     const treeParentPattern = /^(Cylinder|Icosphere)\.\d+_\d+$/;
 
@@ -6499,6 +6601,38 @@ function CampingWithSelectableTrees({
       for (const m of spec.meshes) lampOwner.set(m, spec.name);
       lanterns.push({ name: spec.name, lampId: spec.lampId, group, pivot });
     }
+    // --- the camper van: one object, so it can be clicked (and glows on hover)
+    let van: { group: THREE.Object3D; pivot: THREE.Vector3 } | null = null;
+    {
+      const parts = CAMP_VAN_MESHES
+        .map((n) => cloned.getObjectByName(n))
+        .filter((o): o is THREE.Object3D => !!o);
+      if (parts.length === CAMP_VAN_MESHES.length) {
+        const box = new THREE.Box3();
+        for (const p of parts) { p.updateWorldMatrix(true, true); box.expandByObject(p); }
+        const pivot = new THREE.Vector3((box.min.x + box.max.x) / 2, box.min.y, (box.min.z + box.max.z) / 2);
+        const group = new THREE.Group();
+        const toLocal = new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z);
+        // Own copies of its materials: the hover glow tints a material's
+        // emissive, and these are shared with the rest of the camp.
+        const own = new Map<string, THREE.Material>();
+        for (const p of parts) {
+          p.updateWorldMatrix(true, false);
+          const world = p.matrixWorld.clone();
+          p.parent?.remove(p);
+          group.add(p);
+          p.matrix.copy(toLocal.clone().multiply(world));
+          p.matrix.decompose(p.position, p.quaternion, p.scale);
+          const mesh = p as THREE.Mesh;
+          if (mesh.isMesh) {
+            const swap = (m: THREE.Material) => { let c = own.get(m.uuid); if (!c) { c = m.clone(); own.set(m.uuid, c); } return c; };
+            mesh.material = Array.isArray(mesh.material) ? mesh.material.map(swap) : swap(mesh.material);
+          }
+        }
+        group.updateMatrixWorld(true);
+        van = { group, pivot };
+      }
+    }
     /** Where the lamp passes look for fixture meshes: the diorama, plus every
      *  lantern just lifted out of it. */
     const lampRoots: THREE.Object3D[] = [cloned, ...lanterns.map((l) => l.group)];
@@ -6641,7 +6775,7 @@ function CampingWithSelectableTrees({
     // needs the deck's world transform, which only exists inside this memo.
     const dockShade = buildDockShade(cloned);
 
-    const bulbMats: { mat: THREE.MeshStandardMaterial; emissive: THREE.Color; intensity: number }[] = [];
+    const bulbMats: { mat: THREE.MeshStandardMaterial; emissive: THREE.Color; intensity: number; color: THREE.Color }[] = [];
     const bulbClones = new Map<string, THREE.MeshStandardMaterial>();
     /* Where each bulb hangs, for the halo sprites. Gathered in this pass
      * rather than a second traversal because this loop already knows exactly
@@ -6669,6 +6803,7 @@ function CampingWithSelectableTrees({
             mat: clone,
             emissive: clone.emissive.clone(),
             intensity: clone.emissiveIntensity,
+            color: clone.color.clone(),
           });
         }
         return clone;
@@ -6721,7 +6856,7 @@ function CampingWithSelectableTrees({
       });
     });
 
-    return { base: cloned, trees, chairs, lanterns, lampAnchors, lampParts, bulbMats, bulbGlow, waterMeshes, dockShade };
+    return { base: cloned, trees, chairs, lanterns, van, lampAnchors, lampParts, bulbMats, bulbGlow, waterMeshes, dockShade };
   }, [gltf.scene, config.deskCampGroundMaxY]);
 
   // Height and opacity are applied OUTSIDE that memo on purpose. Putting them
@@ -6740,19 +6875,22 @@ function CampingWithSelectableTrees({
   useEffect(() => {
     const w = config.deskStringBulbWarmth;
     const seeThrough = config.deskStringBulbOpacity < 0.999;
-    for (const { mat, emissive, intensity } of bulbMats) {
+    for (const { mat, emissive, intensity, color } of bulbMats) {
+      // switched off at the van: a dead bulb is dark glass, not a white ball
+      // that still reads as lit under the camp's lights
+      if (vanLit) mat.color.copy(color); else mat.color.copy(DEAD_BULB);
       mat.emissive.setRGB(
         Math.min(1, Math.max(0, 0.98 + (emissive.r - 0.98) * w)),
         Math.min(1, Math.max(0, 0.95 + (emissive.g - 0.95) * w)),
         Math.min(1, Math.max(0, 0.90 + (emissive.b - 0.90) * w)),
       );
-      mat.emissiveIntensity = intensity * config.deskStringBulbBrightness;
+      mat.emissiveIntensity = vanLit ? intensity * config.deskStringBulbBrightness : 0;
       mat.opacity = config.deskStringBulbOpacity;
       mat.transparent = seeThrough;
       mat.depthWrite = !seeThrough;
       mat.needsUpdate = true;
     }
-  }, [bulbMats, config.deskStringBulbWarmth, config.deskStringBulbBrightness, config.deskStringBulbOpacity]);
+  }, [bulbMats, config.deskStringBulbWarmth, config.deskStringBulbBrightness, config.deskStringBulbOpacity, vanLit]);
 
   const offsetSignature = DESK_CAMP_LAMPS
     .map((l) => `${cfgRec[`deskLamp${l.id}OffX`] ?? 0},${cfgRec[`deskLamp${l.id}OffY`] ?? 0},${cfgRec[`deskLamp${l.id}OffZ`] ?? 0}`)
@@ -6776,17 +6914,23 @@ function CampingWithSelectableTrees({
     .join(",");
   useEffect(() => {
     for (const { lamp, glass } of lampAnchors) {
-      const e = cfgRec[`deskLamp${lamp.id}Emissive`] ?? 4;
+      const on = lampOn(lamp.id);
+      const e = on ? (cfgRec[`deskLamp${lamp.id}Emissive`] ?? 4) : 0;
       for (const m of glass) {
         const std = m as THREE.MeshStandardMaterial;
         if (std.emissive) std.emissiveIntensity = e;
+        // the lens goes dark too when its lamp is off (remember its own colour)
+        if (std.color) {
+          if (!std.userData.litColor) std.userData.litColor = std.color.clone();
+          std.color.copy(on ? (std.userData.litColor as THREE.Color) : DEAD_BULB);
+        }
       }
     }
     // Keys are read dynamically, so the dep is a joined signature of the five
     // values rather than a spread - a spread would make the dep array change
     // length if the table ever did, which React forbids.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lampAnchors, emissiveSignature]);
+  }, [lampAnchors, emissiveSignature, vanLit, dockLit]);
 
   useEffect(() => {
     for (const { mesh, baseY, scaleY } of waterMeshes) {
@@ -6867,23 +7011,36 @@ function CampingWithSelectableTrees({
   return (
     <>
       <primitive object={base} />
+      {van ? (
+        <Selectable
+          name="camping_van"
+          onSelect={selectOrSwitch}
+          config={config}
+          interactive={live}
+          basePosition={[van.pivot.x, van.pivot.y, van.pivot.z]}
+          baseRotationY={0}
+          baseScale={1}
+        >
+          <primitive object={van.group} />
+        </Selectable>
+      ) : null}
       {/* Halos on the string bulbs. Inside the camp's own frame, so they ride
           the diorama's transform; the sprite size is in world units either
           way, since three writes gl_PointSize from the uniform and only then
           divides by view depth - no model matrix ever reaches it. */}
-      <StringBulbBloom positions={bulbGlow} config={config} />
+      {vanLit ? <StringBulbBloom positions={bulbGlow} config={config} /> : null}
       {/* Fixtures still IN the diorama. The lanterns' own lights are rendered
           inside their Selectables below, so they travel with them. */}
-      {config.deskCampLampEnabled >= 0.5 && lampAnchors.filter((a) => !a.owner).map(({ lamp, mesh, position }) => (
+      {config.deskCampLampEnabled >= 0.5 && lampAnchors.filter((a) => !a.owner && lampOn(a.lamp.id)).map(({ lamp, mesh, position }) => (
         <DeskCampLampLight key={`${lamp.id}-${mesh}`} lamp={lamp} position={position} config={config} />
       ))}
       {/* Sits in the camp's own frame alongside the lamps, so it tracks the
           diorama when that is dragged, spun or resized. baseScale on the
           camping Selectable is 1, so the accumulated scale IS its override. */}
-      <DeskStringLight
+      {vanLit ? <DeskStringLight
         config={config}
         campScale={config.objectOverrides?.["old_bear_camping"]?.scale ?? 1}
-      />
+      /> : null}
       {/* Fish under the river surface. Camp-local like the lamps, so they
           stay in the water when the diorama is moved. They swim BELOW y
           0.561 (the surface), so they only read once deskWaterOpacity is
@@ -6915,15 +7072,16 @@ function CampingWithSelectableTrees({
         <Selectable
           key={l.name}
           name={l.name}
-          onSelect={onSelect}
+          onSelect={selectOrSwitch}
           config={config}
+          interactive={live && l.name === "camping_lantern_dock"}
           basePosition={[l.pivot.x, l.pivot.y, l.pivot.z]}
           baseRotationY={0}
           baseScale={1}
         >
           <primitive object={l.group} />
           {config.deskCampLampEnabled >= 0.5 && lampAnchors
-            .filter((a) => a.owner === l.name)
+            .filter((a) => a.owner === l.name && lampOn(a.lamp.id))
             .map(({ lamp, mesh, position }) => (
               <DeskCampLampLight key={`${lamp.id}-${mesh}`} lamp={lamp} position={position} config={config} />
             ))}
@@ -8690,8 +8848,15 @@ function BearAccessory({
 
     attached.current = obj;
     if (kind === "hat") {
+      // A real child of the head bone (like the glasses), so it rides along
+      // with anything that moves the head AFTER this component's frame runs -
+      // the dance overlay above all. It used to be placed from the head's
+      // world matrix each frame, read before the dance had posed the bones,
+      // so during the dance it hovered where his head would be sitting down.
+      parent.add(obj);
       setHatPortal({ object: obj, parent });
       return () => {
+        parent.remove(obj);
         setHatPortal(null);
         attached.current = null;
       };
@@ -8708,19 +8873,15 @@ function BearAccessory({
     const c = cfgRef.current;
     if (kind === "hat") {
       const savedHat = BANJO_BEAR_POSE;
-      const rootObject = root.current;
       const head = hatPortal?.parent;
-      if (!rootObject || !head) return;
-      rootObject.updateWorldMatrix(true, true);
+      if (!head) return;
       const transform = hatTransform.current;
       transform.position.set(savedHat.hatX ?? c.smokeyHatX, savedHat.hatY ?? c.smokeyHatY, savedHat.hatZ ?? c.smokeyHatZ);
       transform.rotation.setFromEuler(new THREE.Euler(savedHat.hatRotX ?? c.smokeyHatRotX, savedHat.hatRotY ?? c.smokeyHatRotY, savedHat.hatRotZ ?? c.smokeyHatRotZ));
       transform.scale.setScalar(savedHat.hatScale ?? c.smokeyHatScale);
       transform.local.compose(transform.position, transform.rotation, transform.scale);
-      transform.parentInverse.copy(rootObject.matrixWorld).invert();
-      obj.matrix
-        .multiplyMatrices(transform.parentInverse, head.matrixWorld)
-        .multiply(transform.local);
+      // local to the head bone - three composes it with the head's final pose at render
+      obj.matrix.copy(transform.local);
       obj.matrixWorldNeedsUpdate = true;
       for (const mesh of (obj.userData.hatBrimMeshes as THREE.Mesh[] | undefined) ?? []) {
         mesh.scale.set((savedHat.hatBrimWidth ?? 1) * (savedHat.hatDiscWidth ?? 1) * (savedHat.hatDiscSize ?? 1), (savedHat.hatBrimRoundness ?? 1) * (savedHat.hatDiscRoundness ?? 1), (savedHat.hatBrimDiameter ?? 1) * (savedHat.hatDiscDiameter ?? 1) * (savedHat.hatDiscSize ?? 1));
@@ -8783,8 +8944,14 @@ function BearAccessory({
     });
   }, [tie]);
 
-  return hatPortal ? <primitive object={hatPortal.object} /> : null;
+  return null;
 }
+
+/** the axis a tossed banjo / fish stick tumbles about (its socket's local X) */
+const DANCE_SPIN_AXIS = new THREE.Vector3(1, 0, 0);
+
+/** KeyframeTrack.createInterpolant exists at runtime (set per interpolation mode) but isn't in three's types. */
+const interpolantOf = (track: THREE.KeyframeTrack) => (track as unknown as { createInterpolant: () => THREE.Interpolant }).createInterpolant();
 
 function Animal({
   placement,
@@ -10302,6 +10469,187 @@ function Animal({
     }
   });
 
+  /*
+   * The dance (the voice agent's "can you dance?" tool, or the lab preview).
+   * Smokey and Maple get up off their logs and do it in step, from the clip in
+   * bear_dance.glb, keyframed on this same rig.
+   *
+   * It is an OVERLAY, run after everything above has posed the bones this
+   * frame (sit_log, banjo arms, gazes, talking nods): each body bone is
+   * blended toward the dance pose by the dance weight, which eases in and
+   * out. The face bones are left alone so the bears still talk and blink, and
+   * the prop on the Food socket (banjo, fish stick) is shrunk away.
+   *
+   * Everything it writes is handed back before the mixer runs next frame
+   * (priority -1): three's mixer skips bones whose clip value didn't change,
+   * so otherwise those bones would keep the dance pose after it ended.
+   */
+  const dancer = placement.bearId === "back_left_log" || placement.bearId === "back_right_log";
+  const [danceClip, setDanceClip] = useState<THREE.AnimationClip | null>(null);
+  const [phoneAssets, setPhoneAssets] = useState<BearPhoneAssets | null>(null);
+  useEffect(() => {
+    if (!dancer) return;
+    let live = true;
+    // fetched a few seconds after the scene is up, off the loading path
+    const loadDance = () => { void loadBearDanceClip().then((clip) => { if (live && clip) setDanceClip(clip); }); };
+    const loadPhone = () => { void loadBearPhone().then((a) => { if (live && a) setPhoneAssets(a); }); };
+    const id = window.setTimeout(() => { loadDance(); loadPhone(); }, 4000);
+    window.addEventListener(BEAR_DANCE_EVENT, loadDance);   // asked to dance before then
+    window.addEventListener(BEAR_PHONE_EVENT, loadPhone);   // a call came in before then
+    return () => {
+      live = false; window.clearTimeout(id);
+      window.removeEventListener(BEAR_DANCE_EVENT, loadDance);
+      window.removeEventListener(BEAR_PHONE_EVENT, loadPhone);
+    };
+  }, [dancer]);
+  /** A clip's tracks, bound to this bear's bones. `only` limits it to some bones. */
+  const bindClip = useCallback((clip: THREE.AnimationClip, only?: RegExp) => {
+    const bones = new Map<string, THREE.Object3D>();
+    model.traverse((o) => { if ((o as THREE.Bone).isBone && !bones.has(o.name)) bones.set(o.name, o); });
+    const FACE = /^(jaw|lip_|mouth|eye_|ear01_|Food$)/;
+    const rots: { bone: THREE.Object3D; interp: THREE.Interpolant }[] = [];
+    // scale: the clips stretch the arms 25% (paws kept their size) so the moves read
+    const scales: { bone: THREE.Object3D; interp: THREE.Interpolant }[] = [];
+    let centerPos: { bone: THREE.Object3D; interp: THREE.Interpolant; sitStart: THREE.Vector3 } | null = null;
+    const sitClip = gltf.animations.find((c) => c.name === "sit_log");
+    for (const track of clip.tracks) {
+      const dot = track.name.lastIndexOf(".");
+      const boneName = track.name.slice(0, dot), prop = track.name.slice(dot + 1);
+      const bone = bones.get(boneName);
+      if (!bone || FACE.test(boneName) || (only && !only.test(boneName))) continue;
+      if (prop === "quaternion") rots.push({ bone, interp: interpolantOf(track) });
+      if (prop === "scale") {
+        const v = track.values;
+        let flat = true;
+        for (let i = 0; i < v.length; i++) if (Math.abs(v[i] - 1) > 1e-3) { flat = false; break; }
+        if (!flat) scales.push({ bone, interp: interpolantOf(track) });
+      }
+      if (prop === "position" && boneName === "center") {
+        // move by how far the clip carries "center" from the sitting pose,
+        // so a bear whose rig sits a little differently still stands right
+        const sitTrack = sitClip?.tracks.find((t) => t.name === "center.position");
+        const sitStart = sitTrack ? new THREE.Vector3().fromArray(sitTrack.values, 0) : new THREE.Vector3().fromArray(track.values, 0);
+        centerPos = { bone, interp: interpolantOf(track), sitStart };
+      }
+    }
+    return { clip, rots, scales, centerPos: centerPos as typeof centerPos, food: bones.get("Food") ?? null, handR: bones.get("hand_R") ?? null };
+  }, [model, gltf.animations]);
+  const danceRig = useMemo(() => (dancer && danceClip ? bindClip(danceClip) : null), [dancer, danceClip, bindClip]);
+  // the phone call only moves the arms and the head - they stay sitting on their logs
+  const phoneRig = useMemo(() => (dancer && phoneAssets ? bindClip(phoneAssets.clip, /^(shoulder_|upperarm_|arm_|hand_|fingers_|head$)/) : null), [dancer, phoneAssets, bindClip]);
+  // each bear gets its own smartphone, on its right paw where Blender put it
+  const phoneMesh = useMemo(() => {
+    if (!phoneRig?.handR || !phoneAssets) return null;
+    const m = phoneAssets.phone.clone(true);
+    m.visible = false;
+    m.traverse((o) => { const mm = o as THREE.Mesh; if (mm.isMesh) { mm.castShadow = true; o.raycast = () => {}; } });
+    phoneRig.handR.add(m);
+    return m;
+  }, [phoneRig, phoneAssets]);
+  useEffect(() => () => { phoneMesh?.removeFromParent(); }, [phoneMesh]);
+
+  /** what the overlay changed this frame, handed back before the mixer runs next frame */
+  const overlay = useRef({ saved: new Map<THREE.Object3D, { q: THREE.Quaternion; p: THREE.Vector3; s: THREE.Vector3; stamp: number }>(), touched: false, stamp: 0 });
+  useFrame(() => {
+    const ov = overlay.current;
+    if (!ov.touched) return;
+    for (const [bone, v] of ov.saved) { bone.quaternion.copy(v.q); bone.position.copy(v.p); bone.scale.copy(v.s); }
+    ov.touched = false;
+  }, -1);
+  const danceQ = useMemo(() => new THREE.Quaternion(), []);
+  const danceV = useMemo(() => new THREE.Vector3(), []);
+  useFrame(() => {
+    if (!danceRig && !phoneRig) return;
+    const c = configRef.current;
+    const dance = danceRig
+      ? bearDanceState(danceRig.clip.duration, c.danceLoops ?? 2, c.danceSpeed ?? 1, c.danceFade ?? 0.6, c.danceLead ?? 0.5)
+      : null;
+    const phone = !dance?.active && phoneRig ? bearPhoneState(phoneRig.clip.duration) : null;
+    if (phoneMesh) phoneMesh.visible = !!phone?.active && phone.t >= PHONE_IN_HAND_AT;
+    const rig = dance?.active ? danceRig : phone?.active ? phoneRig : null;
+    if (!rig) return;
+    const ov = overlay.current;
+    ov.stamp += 1;
+    // remember each bone's own pose once per frame, BEFORE the overlay touches it
+    const save = (bone: THREE.Object3D) => {
+      let v = ov.saved.get(bone);
+      if (!v) { v = { q: new THREE.Quaternion(), p: new THREE.Vector3(), s: new THREE.Vector3(), stamp: -1 }; ov.saved.set(bone, v); }
+      if (v.stamp === ov.stamp) return;
+      v.stamp = ov.stamp;
+      v.q.copy(bone.quaternion); v.p.copy(bone.position); v.s.copy(bone.scale);
+    };
+    // the phone clip starts and ends on the sitting pose, so it plays at full weight
+    const w = dance?.active ? dance.w : 1;
+    const t = dance?.active ? dance.t : phone!.t;
+    for (const { bone, interp } of rig.rots) {
+      save(bone);
+      if (w <= 0.0005) continue;
+      danceQ.fromArray(interp.evaluate(t) as unknown as number[]);
+      bone.quaternion.slerp(danceQ, w);
+    }
+    for (const { bone, interp } of rig.scales) {
+      save(bone);
+      if (w <= 0.0005) continue;
+      danceV.fromArray(interp.evaluate(t) as unknown as number[]);
+      bone.scale.lerp(danceV, w);
+    }
+    if (rig.centerPos && w > 0.0005) {
+      const { bone, interp, sitStart } = rig.centerPos;
+      danceV.fromArray(interp.evaluate(t) as unknown as number[]).sub(sitStart).multiplyScalar(w * (c.danceLift ?? 1));
+      bone.position.add(danceV);
+    }
+    if (rig.food && rig.food.parent) {
+      /*
+       * The banjo / fish stick: tossed straight up (spinning), gone above the
+       * frame meanwhile, and dropping back into their paws at the end - plain
+       * gravity both ways, so the drop starts exactly one rise-time before
+       * the catch.
+       *  dance: tossed at the start, caught as they sit back down
+       *  phone: tossed with the paw flick, caught as the phone goes away
+       */
+      const food = rig.food;
+      save(food);
+      const g = 9.8;
+      const h = Math.max(0.5, c.danceThrowHeight ?? 5);
+      const flight = Math.sqrt(2 * h / g);
+      const spin = (c.danceThrowSpin ?? 1.5) * Math.PI * 2;
+      let up = -1;          // seconds since it left the paw (rising), or -1
+      let down = -1;        // seconds until it lands back (falling), or -1
+      let gone = false;
+      if (dance?.active) {
+        if (dance.real < flight) up = dance.real;
+        else if (dance.real > dance.end - flight) down = dance.end - dance.real;
+        else gone = true;
+      } else if (phone?.active) {
+        const tossT = PHONE_TOSS_AT;
+        if (phone.sinceEnd < 0) {
+          const k = phone.real - tossT;
+          if (k >= 0 && k < flight) up = k; else if (k >= flight) gone = true;
+        } else {
+          // lands when the reversing clip passes the toss again
+          const landIn = phone.t - tossT;
+          if (landIn > flight) gone = true;
+          else if (landIn > 0) down = landIn;
+        }
+      }
+      let lift = -1, turn = 0;
+      if (up >= 0) { lift = Math.sqrt(2 * g * h) * up - 0.5 * g * up * up; turn = spin * (up / flight); }
+      if (down >= 0) { lift = h - 0.5 * g * (flight - down) * (flight - down); turn = spin * (down / flight); }
+      if (gone) {
+        food.scale.multiplyScalar(0.0001);             // up out of sight
+      } else if (lift >= 0) {
+        const socketParent = food.parent as THREE.Object3D;
+        socketParent.updateWorldMatrix(true, false);
+        danceV.copy(food.position).applyMatrix4(socketParent.matrixWorld);
+        danceV.y += lift;
+        food.position.copy(socketParent.worldToLocal(danceV));
+        danceQ.setFromAxisAngle(DANCE_SPIN_AXIS, turn);
+        food.quaternion.multiply(danceQ);
+      }
+    }
+    ov.touched = true;
+  });
+
   return (
     <group
       ref={groupRef}
@@ -10557,6 +10905,9 @@ function FloppingFish({
   const groupRef = useRef<THREE.Group>(null);
   const { scene } = useThree();
   const gltf = useGLTF(FISH_URL) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
+  // phones: a fingertip-sized target around the fish (see TapTarget)
+  const fishBodyRef = useRef<THREE.Group>(null);
+  const coarsePointer = useCoarsePointer();
   const [hovered, setHovered] = useState(false);
 
   /*
@@ -11084,9 +11435,10 @@ function FloppingFish({
         >
           {/* Inner group holds the "lay on side" roll so the outer group's Y-rotation
               (the wobble) stays as heading rather than mixing with the flop tilt. */}
-          <group rotation={[0, 0, config.fishRotationZ + ov.rotZ]} scale={config.fishScale}>
+          <group ref={fishBodyRef} rotation={[0, 0, config.fishRotationZ + ov.rotZ]} scale={config.fishScale}>
             <primitive object={gltf.scene} />
           </group>
+          {coarsePointer ? <TapTarget of={fishBodyRef} /> : null}
         </group>
       ) : null}
       {/* Sibling, not a child: the embers belong to the FIRE, and parenting them
@@ -11118,6 +11470,7 @@ function CampfireAnimals({
   bearVoiceRef,
   banjoPanRef,
   banjoGainRef,
+  banjoSpaceRef,
   banjoTimeRef,
   fishReactionRef,
   axeWatchRef,
@@ -11132,6 +11485,8 @@ function CampfireAnimals({
   /** Loudness multiplier for the banjo from how close the camera is to him
    *  (1 = at scene 1's normal shot). Written here, read by the audio loop. */
   banjoGainRef?: React.MutableRefObject<number>;
+  /** the banjo's distance for its outdoor sound (see LoopSpace) */
+  banjoSpaceRef?: React.MutableRefObject<LoopSpace>;
   banjoTimeRef?: React.MutableRefObject<number>;
   fishReactionRef?: MutableRefObject<FishReaction>;
   axeWatchRef?: MutableRefObject<AxeWatch>;
@@ -11179,6 +11534,7 @@ function CampfireAnimals({
       const rolloff = Number.isFinite(config.banjoDistanceRolloff) ? Math.max(0, config.banjoDistanceRolloff) : 1;
       const maxBoost = Number.isFinite(config.banjoMaxBoost) ? Math.max(1, config.banjoMaxBoost) : 1.8;
       const want = Math.min(maxBoost, Math.pow(refDist / Math.max(0.05, dist), rolloff));
+      if (banjoSpaceRef) banjoSpaceRef.current.far = dist / refDist;
       const k = 1 - Math.exp(-Math.min(delta, 0.1) / 0.15);
       banjoGainRef.current += (want - banjoGainRef.current) * k;
     }
@@ -11589,58 +11945,6 @@ function onlyBearsTune(c: CampfireSceneConfig): OnlyBearsTune {
   };
 }
 
-/**
- * OnlyBears dims the rest of the world while it plays, so the bear in his key
- * light is the only thing that reads. Every light in the scene except the ones
- * tagged userData.gagKeep (his key light) is scaled down for the duration of
- * each render and put back straight after, so whatever else animates those
- * lights (flicker, lantern swell) keeps working untouched. The background and
- * fog colours dim with them. Fades in and out with the gag.
- */
-function OnlyBearsSceneDimmer({ stateRef, level }: { stateRef: MutableRefObject<OnlyBearsState>; level: number }) {
-  const scene = useThree((s) => s.scene);
-  const lit = useRef(0);
-  const levelRef = useRef(level);
-  levelRef.current = level;
-  useFrame((_, delta) => {
-    const on = stateRef.current && stateRef.current.mode !== "off" ? 1 : 0;
-    lit.current += (on - lit.current) * (1 - Math.exp(-Math.min(delta, 0.05) * 3));
-    if (on === 0 && lit.current < 0.002) lit.current = 0;
-  });
-  useEffect(() => {
-    const saved = new Map<THREE.Light, number>();
-    const bg = new THREE.Color();
-    const fogC = new THREE.Color();
-    let bgSaved = false, fogSaved = false;
-    const prevBefore = scene.onBeforeRender;
-    const prevAfter = scene.onAfterRender;
-    scene.onBeforeRender = function (...args) {
-      prevBefore.apply(this, args);
-      const k = 1 + (Math.max(0, levelRef.current) - 1) * lit.current;
-      if (Math.abs(k - 1) < 1e-4) return;
-      scene.traverse((o) => {
-        const l = o as THREE.Light;
-        if (!l.isLight || o.userData?.gagKeep) return;
-        saved.set(l, l.intensity);
-        l.intensity *= k;
-      });
-      if (scene.background instanceof THREE.Color) { bg.copy(scene.background); scene.background.multiplyScalar(Math.min(1, k)); bgSaved = true; }
-      const fog = scene.fog as THREE.Fog | null;
-      if (fog?.color) { fogC.copy(fog.color); fog.color.multiplyScalar(Math.min(1, k)); fogSaved = true; }
-    };
-    scene.onAfterRender = function (...args) {
-      saved.forEach((v, l) => { l.intensity = v; });
-      saved.clear();
-      if (bgSaved && scene.background instanceof THREE.Color) scene.background.copy(bg);
-      const fog = scene.fog as THREE.Fog | null;
-      if (fogSaved && fog?.color) fog.color.copy(fogC);
-      bgSaved = fogSaved = false;
-      prevAfter.apply(this, args);
-    };
-    return () => { scene.onBeforeRender = prevBefore; scene.onAfterRender = prevAfter; };
-  }, [scene]);
-  return null;
-}
 
 /**
  * A soft shadow thrown onto the floor by one of the cabin's lanterns, for a
@@ -11852,10 +12156,11 @@ function ShaderPrewarm({ ready }: { ready: boolean }) {
   const scene = useThree((s) => s.scene);
   const camera = useThree((s) => s.camera);
   const done = useRef(false);
+  const raycaster = useThree((s) => s.raycaster);
   useEffect(() => {
     // dev only: lets the browser console poke at the scene while debugging
-    if (process.env.NODE_ENV !== "production") (window as unknown as { __labThree?: unknown }).__labThree = { scene, gl, camera };
-  }, [scene, gl, camera]);
+    if (process.env.NODE_ENV !== "production") (window as unknown as { __labThree?: unknown }).__labThree = { scene, gl, camera, raycaster, THREE };
+  }, [scene, gl, camera, raycaster]);
   useEffect(() => {
     if (!ready || done.current) return;
     // (done is set when the run actually starts: setting it here meant any
@@ -12117,7 +12422,7 @@ function CabinLantern({
         color={new THREE.Color(config.deskLanternColorR, config.deskLanternColorG, config.deskLanternColorB)}
         intensity={config.deskLanternIntensity * Math.max(0, config[lightKey] ?? 1)}
         distance={config.deskLanternDistance}
-        boost={Number.isFinite(config.onlyBearsLanternBoost) ? config.onlyBearsLanternBoost : 6}
+        boost={1}   // no swell during OnlyBears - the original lighting
         stateRef={stateRef}
       />
     </Selectable>
@@ -12597,8 +12902,10 @@ function CabinSector({ config, onSelect, pc, onlyBears, catFocus, catSleepFocus,
  * not a location.
  */
 
-function ArcadeSector({ config, onSelect, crtMenu, onCrtClick, onCrtHover, crtHot = false }: {
+function ArcadeSector({ config, onSelect, crtMenu, onCrtClick, onCrtHover, crtHot = false, live = false }: {
   config: CampfireSceneConfig;
+  /** the main site (not the lab): the van and dock lantern are light switches */
+  live?: boolean;
   onSelect: (n: string) => void;
   crtMenu?: CrtMenu;
   onCrtClick?: (uv: { x: number; y: number } | null) => void;
@@ -12711,7 +13018,7 @@ function ArcadeSector({ config, onSelect, crtMenu, onCrtClick, onCrtHover, crtHo
           scaled, or hidden in the object lab. */}
       <Selectable name="old_bear_camping" onSelect={onSelect} config={config} basePosition={[0, 0, -6]} baseRotationY={0} baseScale={1}>
         <SafeAsset label="old-bear camping">
-          <CampingWithSelectableTrees url={OLD_BEAR_CAMPING_URL} config={config} onSelect={onSelect} />
+          <CampingWithSelectableTrees url={OLD_BEAR_CAMPING_URL} config={config} onSelect={onSelect} live={live} />
         </SafeAsset>
       </Selectable>
       {/* The diorama's own fire was deleted from camping.glb; this is the
@@ -13725,6 +14032,7 @@ function CampfireWorld({
   crtZoomRef,
   banjoPanRef,
   banjoGainRef,
+  banjoSpaceRef,
   banjoTimeRef,
   cameraSnapSignal,
   onlyBearsPlaySignal,
@@ -13790,6 +14098,7 @@ function CampfireWorld({
   banjoPanRef?: React.MutableRefObject<number>;
   /** Banjo loudness from camera distance - see CampfireAnimals. */
   banjoGainRef?: React.MutableRefObject<number>;
+  banjoSpaceRef?: React.MutableRefObject<LoopSpace>;
   banjoTimeRef?: React.MutableRefObject<number>;
   cameraLivePoseRef?: React.MutableRefObject<
     { pos: [number, number, number]; tgt: [number, number, number] } | null
@@ -13830,6 +14139,9 @@ function CampfireWorld({
   const handleRightBagContact = useCallback(() => {}, []);
   const handleRightBagLand = useCallback(() => playRightBagFall(tipSoundVolume), [playRightBagFall, tipSoundVolume]);
   const handleRodContact = useCallback(() => playFishingRodFall(tipSoundVolume), [playFishingRodFall, tipSoundVolume]);
+  const handleSojuLand = useCallback(() => playGlassClink(tipSoundVolume * 0.8, 0.3), [tipSoundVolume]);
+  const handleOarLand = useCallback(() => playFishingRodFall(tipSoundVolume), [playFishingRodFall, tipSoundVolume]);
+  const handleSmallBagLand = useCallback(() => playLeftBagFall(tipSoundVolume), [playLeftBagFall, tipSoundVolume]);
   const fishReactionRef = useRef<FishReaction>({ phase: "idle", target: new THREE.Vector3(), phaseStartedAt: 0, flightProgress: 0 });
   // Click the chopping block: the axe flips up and back in, the bears watch.
   const axeWatchRef = useRef<AxeWatch>({ active: false, position: new THREE.Vector3() });
@@ -13925,6 +14237,10 @@ function CampfireWorld({
   const [act, setAct] = useState<ActName | null>(null);
   const [bagDown, setBagDown] = useState(false);
   const [hikeBagDown, setHikeBagDown] = useState(false);
+  // more things to knock over (site only): the soju bottle, the oar off the
+  // boat, the little bag on the left. Each goes over once and stays down.
+  const [knocked, setKnocked] = useState<ReadonlySet<string>>(() => new Set());
+  const knock = useCallback((name: string) => setKnocked((prev) => (prev.has(name) ? prev : new Set(prev).add(name))), []);
   /* A counter, not a flag: re-tuning the bag replays its fall, which fires the
    * knock again, and the rod has to go over again with it. A boolean that was
    * already true would leave the rod lying there through every replay. */
@@ -13962,6 +14278,10 @@ function CampfireWorld({
       setFishRespawn((n) => n + 1);
       return;
     }
+    // knock-overs (the site only - in the lab a click selects them to move)
+    if (!editing) {
+      if (name === "campfire_soju" || name === "campfire_backpack_q2" || /^campfire_oar(_\d+)?$/.test(name)) { knock(name); return; }
+    }
     if (crittersOn && act === null) {
       // Deliberately NOT falling through to onSelectProp: selecting an object
       // that is about to be carried away strands selectedObject on a node that
@@ -13983,7 +14303,7 @@ function CampfireWorld({
       if (name === "campfire_wood_pile" && !woodEmpty && !editing) { setWoodPlay((n) => n + 1); return; }
     }
     onSelectProp(name);
-  }, [onSelectProp, fireBurstOn, onFireWhooshSound, crittersOn, act, bagDown, hikeBagDown, woodEmpty, fishGone, config.fishReturnOn, editing, chatChoice, rodPlay]);
+  }, [onSelectProp, fireBurstOn, onFireWhooshSound, crittersOn, act, bagDown, hikeBagDown, woodEmpty, fishGone, config.fishReturnOn, editing, chatChoice, rodPlay, knock]);
 
   /*
    * Click the tube to pull the camera in; the screen's last plate lets it go.
@@ -14598,7 +14918,7 @@ function CampfireWorld({
       {/* Mounted whether or not a location owns the camera - see CrtFocusCamera. */}
       <CrtFocusCamera active={crtFocus} view={crtFocusView} config={config} handoff={panelled} zoomRef={crtZoomRef} />
       <PcFocusCamera active={pcFocus} screenRef={pcCameraAnchorRef} config={config} handoff={panelled} revealRef={obStateRef} />
-      <OnlyBearsSceneDimmer stateRef={obStateRef} level={Number.isFinite(config.onlyBearsSceneLight) ? config.onlyBearsSceneLight : 0.3} />
+      {/* (no scene dimming during OnlyBears - back to the gag's original lighting) */}
       <CatFocusCamera active={catViewOn} hold={catFocusOn && pcFocus} anchorRef={catAnchorRef} sleepAnchorRef={catSleepAnchorRef} config={config} handoff={panelled} />
       {flying ? (
         <IntroFlight
@@ -14692,7 +15012,7 @@ function CampfireWorld({
             <SafeAsset label="tent"><Tent config={config} onSelect={onSelect} /></SafeAsset>
           )}
           <Benches config={config} onSelect={onSelect} />
-          <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} banjoPanRef={banjoPanRef} banjoGainRef={banjoGainRef} banjoTimeRef={banjoTimeRef} fishReactionRef={fishReactionRef} axeWatchRef={axeWatchRef} />
+          <CampfireAnimals config={config} onSelect={onSelect} bearVoiceRef={bearVoiceRef} banjoPanRef={banjoPanRef} banjoGainRef={banjoGainRef} banjoSpaceRef={banjoSpaceRef} banjoTimeRef={banjoTimeRef} fishReactionRef={fishReactionRef} axeWatchRef={axeWatchRef} />
           {chatArrowsUp ? <ChatChoiceArrows config={config} hover={chatHover} /> : null}
           {/* Wood pile near the bonfire, as if stacked ready to feed the fire. */}
           <Selectable
@@ -14759,16 +15079,30 @@ function CampfireWorld({
               name="campfire_oar"
               onSelect={onSelect}
               config={config}
+              interactive={!editing && !knocked.has("campfire_oar")}
               basePosition={OAR_LEAN.position}
               baseScale={OAR_LEAN.scale}
             >
-              <group rotation={OAR_LEAN.rotation}>
-                <group position={[-OAR_CENTRE[0], -OAR_CENTRE[1], -OAR_CENTRE[2]]}>
-                  <SafeAsset label="oar">
-                    <GLBModel url={OAR_URL} />
-                  </SafeAsset>
+              <MeasuredTipOver
+                active={knocked.has("campfire_oar")}
+                heading={config.oarTipHeading ?? 0}
+                leaning
+                groundY={config.critterGroundY}
+                shove={config.oarTipShove ?? 1.3}
+                fall={config.oarTipFall ?? 1}
+                gravityScale={config.oarTipSpeed ?? 1}
+                restitution={config.tipRestitution}
+                onSound={handleOarLand}
+                measureKey={JSON.stringify([config.objectOverrides?.["campfire_oar"] ?? null, config.objectOverrides?.["campfire_boat"] ?? null])}
+              >
+                <group rotation={OAR_LEAN.rotation}>
+                  <group position={[-OAR_CENTRE[0], -OAR_CENTRE[1], -OAR_CENTRE[2]]}>
+                    <SafeAsset label="oar">
+                      <GLBModel url={OAR_URL} />
+                    </SafeAsset>
+                  </group>
                 </group>
-              </group>
+              </MeasuredTipOver>
             </Selectable>
             {/* Spare oars in other poses, to pick a favourite from in the lab. */}
             {config.boatOarOptions >= 0.5 && OAR_OPTIONS.map((o) => (
@@ -14777,16 +15111,30 @@ function CampfireWorld({
                 name={o.name}
                 onSelect={onSelect}
                 config={config}
+                interactive={!editing && !knocked.has(o.name)}
                 basePosition={o.pose.position}
                 baseScale={o.pose.scale}
               >
-                <group rotation={o.pose.rotation}>
-                  <group position={[-OAR_CENTRE[0], -OAR_CENTRE[1], -OAR_CENTRE[2]]}>
-                    <SafeAsset label="oar">
-                      <GLBModel url={OAR_URL} />
-                    </SafeAsset>
+                <MeasuredTipOver
+                  active={knocked.has(o.name)}
+                  heading={config.oarTipHeading ?? 0}
+                  leaning
+                  groundY={config.critterGroundY}
+                  shove={config.oarTipShove ?? 1.3}
+                  fall={config.oarTipFall ?? 1}
+                  gravityScale={config.oarTipSpeed ?? 1}
+                  restitution={config.tipRestitution}
+                  onSound={handleOarLand}
+                  measureKey={JSON.stringify([config.objectOverrides?.[o.name] ?? null, config.objectOverrides?.["campfire_boat"] ?? null])}
+                >
+                  <group rotation={o.pose.rotation}>
+                    <group position={[-OAR_CENTRE[0], -OAR_CENTRE[1], -OAR_CENTRE[2]]}>
+                      <SafeAsset label="oar">
+                        <GLBModel url={OAR_URL} />
+                      </SafeAsset>
+                    </group>
                   </group>
-                </group>
+                </MeasuredTipOver>
               </Selectable>
             ))}
           </Selectable>
@@ -14921,15 +15269,28 @@ function CampfireWorld({
             name="campfire_soju"
             onSelect={onSelect}
             config={config}
+            interactive={!editing && !knocked.has("campfire_soju")}
             basePosition={[1.05, 0.5, 1.4]}
             baseRotationY={0.6}
             baseScale={0.22}
           >
-            <group position={[0.114, 0.327, -0.012]}>
-              <SafeAsset label="soju">
-                <GLBModel url={SOJU_URL} />
-              </SafeAsset>
-            </group>
+            <MeasuredTipOver
+              active={knocked.has("campfire_soju")}
+              heading={config.sojuTipHeading ?? -1.571}
+              groundY={config.critterGroundY}
+              shove={config.sojuTipShove ?? 1.3}
+              fall={config.sojuTipFall ?? 1}
+              gravityScale={config.sojuTipSpeed ?? 1}
+              restitution={config.tipRestitution}
+              onSound={handleSojuLand}
+              measureKey={JSON.stringify(config.objectOverrides?.["campfire_soju"] ?? null)}
+            >
+              <group position={[0.114, 0.327, -0.012]}>
+                <SafeAsset label="soju">
+                  <GLBModel url={SOJU_URL} />
+                </SafeAsset>
+              </group>
+            </MeasuredTipOver>
           </Selectable>
           {/* Wooden beer mug floating just above the fish. The GLB has three
               nested matrix transforms (Sketchfab_model / BeerMug.fbx /
@@ -15040,15 +15401,29 @@ function CampfireWorld({
             name="campfire_backpack_q2"
             onSelect={onSelect}
             config={config}
+            interactive={!editing && !knocked.has("campfire_backpack_q2")}
             basePosition={[-1.7, 0, 1.2]}
             baseRotationY={-0.4}
             baseScale={0.42}
           >
-            <group position={[0, 0.475, 0]}>
-              <SafeAsset label="backpack (Quaternius v2)">
-                <GLBModel url={BACKPACK_Q2_URL} />
-              </SafeAsset>
-            </group>
+            {/* the small bag on the left: click it over (site only) */}
+            <MeasuredTipOver
+              active={knocked.has("campfire_backpack_q2")}
+              heading={config.smallBagTipHeading ?? -2.5}
+              groundY={config.critterGroundY}
+              shove={config.smallBagTipShove ?? 1.3}
+              fall={config.smallBagTipFall ?? 1}
+              gravityScale={config.smallBagTipSpeed ?? 1}
+              restitution={config.tipRestitution}
+              onSound={handleSmallBagLand}
+              measureKey={JSON.stringify(config.objectOverrides?.["campfire_backpack_q2"] ?? null)}
+            >
+              <group position={[0, 0.475, 0]}>
+                <SafeAsset label="backpack (Quaternius v2)">
+                  <GLBModel url={BACKPACK_Q2_URL} />
+                </SafeAsset>
+              </group>
+            </MeasuredTipOver>
           </Selectable>
           {/* J-Toastie backpack, already sitting on y=0. Light anchor cancels
               the tiny X/Z offset. */}
@@ -15289,6 +15664,7 @@ function CampfireWorld({
               onCrtClick={onCrtClick}
               onCrtHover={onCrtHover}
               crtHot={crtStage === 0 && !editing}
+              live={!editing}
             />
           </SafeAsset> : null}
         </Location>
@@ -15487,12 +15863,20 @@ export default function CampfireScene({
   // quiet so the fly-in swells up rather than starting at full volume.
   const banjoGainRef = useRef(0.2);
   const banjoTimeRef = useRef(0);
+  // Puts the banjo IN the scene rather than in your headphones: mono at
+  // Smokey's spot, duller with distance, and the woods' reverb around it.
+  // `far` is written every frame by CampfireAnimals; the knobs come from the lab.
+  const banjoSpaceRef = useRef<LoopSpace>({ far: 1, reverb: 0.35, toneHz: 3200, mono: 1 });
+  banjoSpaceRef.current.reverb = Number.isFinite(config.banjoReverb) ? config.banjoReverb : 0.35;
+  banjoSpaceRef.current.toneHz = Number.isFinite(config.banjoTone) ? config.banjoTone : 3200;
+  banjoSpaceRef.current.mono = Number.isFinite(config.banjoMono) ? config.banjoMono : 1;
   useCampsiteAudioLoop(BANJO_URL_SOUND, {
     volume: master * clampUnit(config.banjoVolume),
     enabled: panel === LOCATION_CAMPFIRE,
     liveMultiplier: banjoGainRef,
     panRef: banjoPanRef,
     timeRef: banjoTimeRef,
+    spaceRef: banjoSpaceRef,
   });
   const playClick = useCampsiteOneShot(CLICK_URL);
   const playHover = useCampsiteOneShot(HOVER_URL);
@@ -15635,6 +16019,7 @@ export default function CampfireScene({
         crtZoomRef={crtMusicMultiplierRef}
         banjoPanRef={banjoPanRef}
         banjoGainRef={banjoGainRef}
+        banjoSpaceRef={banjoSpaceRef}
         banjoTimeRef={banjoTimeRef}
         cameraSnapSignal={cameraSnapSignal}
         onlyBearsPlaySignal={onlyBearsPlaySignal}

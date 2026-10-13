@@ -198,6 +198,7 @@ export default function OnlyBearsBear({
   const get = useThree((s) => s.get);
   const rootRef = useRef<THREE.Group>(null);
   const frameRef = useRef<THREE.Group>(null);
+  const glowRef = useRef<THREE.PointLight>(null);
   const keyRef = useRef<THREE.SpotLight>(null);
   const keyTargetRef = useRef<THREE.Object3D>(null);
   const keyLit = useRef(0);
@@ -389,6 +390,10 @@ export default function OnlyBearsBear({
       key.intensity = (Math.max(0, tu.keyLight ?? 2.5) * keyLit.current) / falloff;
     }
 
+    if (glowRef.current) {
+      glowRef.current.intensity = 0.9 * smooth(OB_T.reachEnd - 0.4, OB_T.closeEnd, t) * (s.mode === "off" ? 0 : 1);
+    }
+
     // blinks, every few seconds
     const f = rig.face;
     const bi = f?.morphTargetDictionary?.eyeBlink;
@@ -404,7 +409,10 @@ export default function OnlyBearsBear({
   return (
     <group ref={frameRef}>
       <object3D ref={keyTargetRef} />
-      <spotLight ref={keyRef} userData={{ gagKeep: true }} color="#ffe6c8" intensity={0} angle={0.55} penumbra={0.65} decay={0} distance={0} />
+      {/* Back to the original look: no key spotlight on him (it read as a
+          hard circle on the old bear) - just the laptop screen's own soft blue
+          glow on his face, in the computer's frame, out in front of the screen. */}
+      <pointLight ref={glowRef} position={[-0.1, 0.95, 1.2]} color="#a9dcff" intensity={0} distance={0.6} decay={2} />
       <group ref={rootRef} name="onlybears_bear" position={BEAR_POSITION} scale={BEAR_SCALE * tune.scale} visible={false}>
         <primitive object={model} />
       </group>

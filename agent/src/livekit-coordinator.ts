@@ -62,6 +62,53 @@ const CHANNEL_TOOL = {
   },
 };
 
+/**
+ * "Can you dance?" -> Smokey and Maple get up off their logs and dance at the
+ * campfire (the site plays bear_dance.glb when it gets {type:"bears.dance"}).
+ */
+const DANCE_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "bears_dance",
+    description: "Make Smokey and Maple get up and dance at the campfire. Call it when the visitor asks the bears to dance or to show their moves - e.g. \"can you dance?\", \"do a dance\", \"show me your moves\", \"bust a move\". Not for questions ABOUT dancing or anything else.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+};
+
+/** Does the visitor want the bears to dance? (runs alongside the dialogue plan, so it adds no wait) */
+const wantsDance = async (prompt: string): Promise<boolean> => {
+  try {
+    const probe = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL?.trim() || "gpt-4.1-mini",
+      temperature: 0,
+      tools: [DANCE_TOOL],
+      tool_choice: "auto",
+      messages: [
+        { role: "system", content: "You route a visitor's message on a portfolio site where they chat with two bears, Smokey and Maple, at a campfire. Call bears_dance ONLY if the visitor asks the bears to dance or show their dance moves. For anything else - questions about Mitchell, small talk, greetings, thanks, questions about dancing - do NOT call it; reply with just the word: none." },
+        { role: "user", content: prompt },
+      ],
+    });
+    return Boolean(probe.choices[0]?.message.tool_calls?.some((c) => c.type === "function" && c.function.name === "bears_dance"));
+  } catch (error) {
+    console.warn("dance tool probe failed", error);
+    return false;
+  }
+};
+
+/**
+ * One visitor turn: the dialogue plan, plus the dance tool checked in
+ * parallel. If the tool fires, the plan is redone so the bears' lines fit
+ * (that extra wait only happens on a dance request).
+ */
+const planTurn = async (prompt: string, usedFacts: Set<string>): Promise<{ plan: PlannedExchange; dance: boolean }> => {
+  const [dance, plan] = await Promise.all([wantsDance(prompt), planExchange(prompt, false, usedFacts)]);
+  if (!dance) return { plan, dance: false };
+  return {
+    dance: true,
+    plan: await planExchange(`${prompt}\n\n(Smokey and Maple are getting up off their logs RIGHT NOW to dance for the visitor. Smokey says a short, delighted yes - something like "Can we dance? Partner, watch this." - and Maple adds a quick playful line about his moves. No title or employer corrections this time. Keep every beat very short.)`, false, usedFacts),
+  };
+};
+
 let channelRequested = false;
 /** True once after the model called show_channel_options; reading it clears it. */
 export const takeChannelRequest = () => { const v = channelRequested; channelRequested = false; return v; };
@@ -87,8 +134,9 @@ const wantsChannelChange = async (prompt: string): Promise<boolean> => {
 };
 
 /**
- * Each correction gag plays at most ONCE per visit. The greeting already uses
- * "current-title" (senior -> staff engineer), so it starts out spent.
+ * Each correction gag plays at most ONCE per visit. The greeting is a plain
+ * hello now, so the senior -> staff engineer mix-up ("current-title") is
+ * saved for later in the conversation like the rest.
  */
 const planExchange = async (prompt: string, allowTools = true, usedFacts: Set<string> = new Set()): Promise<PlannedExchange> => {
   const availableFacts = correctionFacts.filter((fact) => !usedFacts.has(fact.id));
@@ -159,6 +207,8 @@ const planExchange = async (prompt: string, allowTools = true, usedFacts: Set<st
   const correctionFact = pickedFact && !usedFacts.has(pickedFact.id) ? pickedFact : undefined;
   const plan = applyFactCorrection(draft, correctionFact);
   if (correctionFact) usedFacts.add(correctionFact.id);
+  // belt and braces: if Maple brings up "staff engineer" on her own, the title gag is spent too
+  if (/staff engineer/i.test(plan.mapleInterruption ?? "")) usedFacts.add("current-title");
   recentTurns.push({
     visitor: prompt.slice(0, 180),
     observation: `Smokey answered the newest request; Maple interrupted; Smokey acknowledged Maple.`,
@@ -182,13 +232,15 @@ export default defineAgent({
       smokeyStartedAt?: number;
       mapleScheduled: boolean;
       greeting: boolean;
+      /** the dance tool fired: tell the site to start the dance as Smokey starts talking */
+      dance?: boolean;
       /** when the visitor's words arrived, and when the plan came back (latency log) */
       t0?: number;
       tPlanned?: number;
     } | undefined;
     let lastFinalTranscript = { text: "", at: 0 };
-    // corrections already played to THIS visitor (the greeting does senior -> staff)
-    const usedFacts = new Set<string>(["current-title"]);
+    // corrections already played to THIS visitor (none yet - the greeting is a plain hello)
+    const usedFacts = new Set<string>();
     const session = new voice.AgentSession({
       // Streaming (realtime) transcription. With useRealtime: false the STT
       // can't stream, and an AgentSession then needs a VAD to cut the audio
@@ -216,6 +268,10 @@ export default defineAgent({
         const now = Date.now();
         transcript(ctx.room.name ?? "?", "TIMING", `heard -> plan ${turn.tPlanned - turn.t0}ms, plan -> voice ready ${now - turn.tPlanned}ms, total ${now - turn.t0}ms before Smokey speaks`);
       }
+      if (turn.dance) {
+        transcript(ctx.room.name ?? "?", "TOOL", "bears_dance -> the bears get up and dance");
+        void publish(ctx, { type: "bears.dance" });
+      }
       await playCommand(smokey);
       if (!turn.greeting) scheduleMaple(turn);
     };
@@ -238,9 +294,7 @@ export default defineAgent({
     const greetingCommands: SpeechCommand[] = [
       { turnId: greetingTurnId, sequence: 0, bear: "smokey", text: "Well howdy there, partner. I'm Smokey." },
       { turnId: greetingTurnId, sequence: 1, bear: "maple", text: "And I'm Maple.", interrupt: false },
-      { turnId: greetingTurnId, sequence: 2, bear: "smokey", text: "And we were just talking about Mitch, our favorite senior engineer. So—", interrupt: true },
-      { turnId: greetingTurnId, sequence: 3, bear: "maple", text: "Actually, Smokey, Mitchell is a staff engineer.", interrupt: true },
-      { turnId: greetingTurnId, sequence: 4, bear: "smokey", text: "Right, our favorite staff engineer. So what would you like to know about him?" },
+      { turnId: greetingTurnId, sequence: 2, bear: "smokey", text: "We were just talking about Mitch in the tent over there. What would you like to know about him?" },
     ];
     activeTurn = { turnId: greetingTurnId, commands: greetingCommands, ready: new Map(), started: false, mapleScheduled: false, greeting: true };
     await Promise.all(greetingCommands.map(prepareCommand));
@@ -259,10 +313,11 @@ export default defineAgent({
       const turnId = randomUUID();
       // (no channel-switch tool any more: visitors switch by clicking the
       //  telephone / microphone / typewriter on the site)
-      const commands = buildSpeechCommands(turnId, await planExchange(input, false, usedFacts));
+      // (the dance tool is checked alongside the plan - see planTurn)
+      const { plan, dance } = await planTurn(input, usedFacts);
+      const commands = buildSpeechCommands(turnId, plan);
       if (generation !== myGeneration) return;
-      // the model called show_channel_options: put the channel picker back up
-      activeTurn = { turnId, commands, ready: new Map(), started: false, mapleScheduled: false, greeting: false, t0, tPlanned: Date.now() };
+      activeTurn = { turnId, commands, ready: new Map(), started: false, mapleScheduled: false, greeting: false, dance, t0, tPlanned: Date.now() };
       await Promise.all(commands.map(prepareCommand));
     };
     session.on(voice.AgentSessionEventTypes.Error, (event) => {
@@ -270,6 +325,8 @@ export default defineAgent({
     });
     session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (event) => {
       console.log("[bears] heard visitor", { final: event.isFinal, text: event.transcript });
+      // live captions: the page shows the visitor's words as they say them
+      if (event.transcript.trim()) void publish(ctx, { type: "visitor.transcript", text: event.transcript.trim(), final: event.isFinal });
       if (event.isFinal && event.transcript.trim()) transcript(ctx.room.name ?? "?", "VISITOR (voice)", event.transcript);
       if (!event.isFinal || !event.transcript.trim()) return;
       const normalizedTranscript = event.transcript.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -302,15 +359,8 @@ export default defineAgent({
         }
         if (event.type === "bear.completed" && event.sequence === 1) {
           if (activeTurn.greeting) {
-            const seniorLine = activeTurn.commands.find((command) => command.sequence === 2);
-            const mapleCorrection = activeTurn.commands.find((command) => command.sequence === 3);
-            if (seniorLine && mapleCorrection) {
-              void playCommand(seniorLine);
-              const overlapMs = Math.min(500, Math.max(250, Number(process.env.LIVEKIT_MAPLE_OVERLAP_MS ?? 350)));
-              mapleTimer = setTimeout(() => {
-                if (activeTurn?.turnId === event.turnId) void playCommand(mapleCorrection);
-              }, Math.max(120, (activeTurn.ready.get(seniorLine.sequence) ?? 0) - overlapMs));
-            }
+            // greeting: Smokey -> Maple -> Smokey asks what they'd like to know
+            void playCommand(activeTurn.commands.find((command) => command.sequence === 2));
             return;
           }
           const recovery = activeTurn.commands.find((command) => command.sequence === 2);
@@ -321,9 +371,6 @@ export default defineAgent({
         }
         if (event.type === "bear.completed" && activeTurn.greeting && event.sequence === 0) {
           void playCommand(activeTurn.commands.find((command) => command.sequence === 1));
-        }
-        if (event.type === "bear.completed" && activeTurn.greeting && event.sequence === 3) {
-          void playCommand(activeTurn.commands.find((command) => command.sequence === 4));
         }
       } catch {
         // Ignore unrelated room data.

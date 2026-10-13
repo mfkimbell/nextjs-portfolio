@@ -9,6 +9,8 @@ export type BearDialogueProps = {
   phoneNumber?: string;
   /** "Back" from the phone bubble: put the channel choices up again. */
   onChangeChannel?: () => void;
+  /** this visitor's phone call is live: the call bubble says so instead of showing the number */
+  onCall?: boolean;
   opacity: number;
   blurPx: number;
   scale: number;

@@ -1075,6 +1075,21 @@ export function CabinCat({
   const setCursor = (c: string) => { if (typeof document !== "undefined") document.body.style.cursor = c; };
   const focusRef = useRef(focus);
   focusRef.current = focus;
+  /*
+   * Hover highlight, the same warm glow every other clickable prop gets - but
+   * only while the cat is something to click INTO (before the close-up). Once
+   * the camera is in, the petting cursor is the affordance and a glowing cat
+   * would just look odd under your hand.
+   */
+  const [hoverGlow, setHoverGlow] = useState(false);
+  const glowOn = hoverGlow && !!focus && !focus.active;
+  useEffect(() => {
+    for (const m of mats) {
+      const base = (m.userData.glowBase ??= { e: m.emissive.clone(), i: m.emissiveIntensity }) as { e: THREE.Color; i: number };
+      if (glowOn) { m.emissive.setRGB(1, 0.86, 0.6); m.emissiveIntensity = 0.22; }
+      else { m.emissive.copy(base.e); m.emissiveIntensity = base.i; }
+    }
+  }, [glowOn, mats]);
   /** Petting is on unless this cat zooms first and the camera is not in yet. */
   const canPet = () => !focusRef.current || focusRef.current.active;
   const focusActive = focus?.active ?? false;
@@ -1099,11 +1114,13 @@ export function CabinCat({
     onPointerOver: (e: ThreeEvent<PointerEvent>) => {
       e.stopPropagation();
       pet.current.hover = true;
+      setHoverGlow(true);
       if (!pet.current.down) setCursor(canPet() ? PET_CURSOR : ZOOM_CURSOR);
     },
     onPointerOut: (e: ThreeEvent<PointerEvent>) => {
       e.stopPropagation();
       pet.current.hover = false;
+      setHoverGlow(false);
       if (!pet.current.down) setCursor("");
     },
     onPointerDown: (e: ThreeEvent<PointerEvent>) => {

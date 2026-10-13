@@ -5,7 +5,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useAnimations, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { EMPTY_OVERRIDE, type CampfireSceneConfig } from "@/components/scene-lab/sceneConfig";
-import { tipAt, tipBarrier, type TipTable } from "@/components/scene-lab/tipTables";
+import { tipAt, tipBarrier, type TipRow, type TipTable } from "@/components/scene-lab/tipTables";
 
 /**
  * ============================================================================
@@ -1198,5 +1198,155 @@ export function CampCritters({
         radius={c.donutRadius} scale={c.donutScale}
       />
     </>
+  );
+}
+
+/* ==========================================================================
+ *  Falling props, measured on the spot
+ * ========================================================================== */
+
+/** Until a prop has been measured: a harmless table so TipOver has something to read. */
+const UNMEASURED: TipTable = Array.from({ length: 24 }, () => [0, 0, 0.6, Math.PI / 2, 10] as const);
+
+/**
+ * The same toppling table tipTables.ts holds, worked out from the prop's own
+ * mesh where it actually stands - in the Location's space, the frame TipOver
+ * works in - instead of measured once in Blender. That keeps it right if the
+ * prop is dragged or rescaled in the lab (pass a `measureKey` that changes
+ * with its override and it re-measures).
+ *
+ * For each of 24 headings (15 degrees apart, row 0 = heading 0):
+ *   hinge    the most-forward point of the whole hull along the fall
+ *   balance  how far it tips before its centre of mass passes over the hinge
+ *            (negative = already past it, e.g. something leaning that way)
+ *   rest     the first angle at which any point that starts above the ground
+ *            comes down to it
+ *   gravity  g . d / r^2 about the hinge, d = centre-of-mass distance, r^2 =
+ *            the mean squared distance of the mesh's points from the hinge
+ * The centre of mass and spread come from the vertices rather than a sampled
+ * interior - close enough for a bottle, a bag and an oar.
+ */
+export function measureTipTable(points: THREE.Vector3[], groundY: number, gravityScale = 1): TipTable {
+  const n = points.length;
+  const com = new THREE.Vector3();
+  for (const p of points) com.add(p);
+  com.multiplyScalar(1 / Math.max(1, n));
+  const rows: TipRow[] = [];
+  for (let i = 0; i < 24; i++) {
+    const h = (i / 24) * Math.PI * 2;
+    const dx = Math.sin(h), dz = Math.cos(h);
+    let best = -Infinity, px = 0, pz = 0;
+    for (const p of points) { const f = p.x * dx + p.z * dz; if (f > best) { best = f; px = p.x; pz = p.z; } }
+    const uc = (com.x - px) * dx + (com.z - pz) * dz;
+    const hc = Math.max(1e-3, com.y - groundY);
+    const balance = Math.atan2(-uc, hc);
+    let rest = Math.PI;
+    let r2 = 0;
+    for (const p of points) {
+      const u = (p.x - px) * dx + (p.z - pz) * dz;
+      const y = p.y - groundY;
+      r2 += u * u + y * y;
+      if (y > 0.01) rest = Math.min(rest, Math.PI - Math.atan2(y, Math.max(0, -u)));
+    }
+    r2 /= Math.max(1, n);
+    const gravity = (9.8 * gravityScale * Math.hypot(uc, hc)) / Math.max(1e-4, r2);
+    rows.push([px, pz, balance, rest, gravity]);
+  }
+  return rows;
+}
+
+/** Points of every mesh under `root`, in the space of `frame` (strided down to ~3000). */
+function meshPointsIn(root: THREE.Object3D, frame: THREE.Object3D): THREE.Vector3[] {
+  const inv = new THREE.Matrix4().copy(frame.matrixWorld).invert();
+  const out: THREE.Vector3[] = [];
+  let total = 0;
+  root.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && m.geometry?.attributes.position) total += m.geometry.attributes.position.count; });
+  const stride = Math.max(1, Math.floor(total / 3000));
+  const M = new THREE.Matrix4();
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    const pos = m.isMesh ? (m.geometry?.attributes.position as THREE.BufferAttribute | undefined) : undefined;
+    if (!pos) return;
+    M.multiplyMatrices(inv, m.matrixWorld);
+    for (let i = 0; i < pos.count; i += stride) out.push(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(M));
+  });
+  return out;
+}
+
+/**
+ * TipOver for a prop that has no table in tipTables.ts: it measures one off
+ * its own mesh (see measureTipTable) before it is first knocked, and again
+ * whenever `measureKey` changes while it is standing.
+ */
+export function MeasuredTipOver({
+  active, heading, groundY, shove, fall = 1, tilt = 0, lift = 0, restitution = 0.22,
+  soundEarly = 0, onSound, gravityScale = 1, measureKey = "", leaning = false, children,
+}: {
+  active: boolean;
+  heading: number;
+  groundY: number;
+  shove: number;
+  fall?: number;
+  tilt?: number;
+  lift?: number;
+  restitution?: number;
+  soundEarly?: number;
+  onSound?: () => void;
+  /** speeds the swing up (>1) or slows it (<1) on top of the measured rate */
+  gravityScale?: number;
+  /** re-measure when this changes (e.g. the prop's override in the lab) */
+  measureKey?: string;
+  /** It leans on something (an oar against the boat): `heading` becomes an
+   *  offset from "straight away from what it leans on", worked out from its
+   *  own lean, so it never falls through the thing it rests on. */
+  leaning?: boolean;
+  children: React.ReactNode;
+}) {
+  const holder = useRef<THREE.Group>(null);
+  const [table, setTable] = useState<TipTable | null>(null);
+  /* What it stands on: the ground - or, for something resting on top of
+   * something else (the bottle on the front log), the height of its own base,
+   * so it tips over where it stands instead of hinging on the dirt below. */
+  const [floor, setFloor] = useState(groundY);
+  const [awayHeading, setAwayHeading] = useState(0);
+  const measuredFor = useRef<string | null>(null);
+  const key = `${measureKey}|${groundY}|${gravityScale}`;
+  useFrame(() => {
+    if (active || measuredFor.current === key) return;
+    const root = holder.current;
+    if (!root) return;
+    let frame: THREE.Object3D | null = root.parent;
+    while (frame && !frame.name.startsWith("location_")) frame = frame.parent;
+    if (!frame) return;
+    frame.updateWorldMatrix(true, false);
+    root.updateWorldMatrix(true, true);
+    const pts = meshPointsIn(root, frame);
+    if (pts.length < 8) return;            // its GLB hasn't arrived yet
+    measuredFor.current = key;
+    let foot = pts[0];
+    const com = new THREE.Vector3();
+    for (const p of pts) { com.add(p); if (p.y < foot.y) foot = p; }
+    com.multiplyScalar(1 / pts.length);
+    const base = foot.y > groundY + 0.05 ? foot.y : groundY;
+    setFloor(base);
+    setAwayHeading(Math.atan2(-(com.x - foot.x), -(com.z - foot.z)));
+    setTable(measureTipTable(pts, base, gravityScale));
+  });
+  return (
+    <TipOver
+      active={active && !!table}
+      table={table ?? UNMEASURED}
+      heading={leaning ? awayHeading + heading : heading}
+      groundY={floor}
+      shove={shove}
+      fall={fall}
+      tilt={tilt}
+      lift={lift}
+      restitution={restitution}
+      soundEarly={soundEarly}
+      onSound={onSound}
+    >
+      <group ref={holder}>{children}</group>
+    </TipOver>
   );
 }

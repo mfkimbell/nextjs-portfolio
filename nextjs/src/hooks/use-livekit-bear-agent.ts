@@ -1,5 +1,6 @@
 "use client";
 
+import { startBearDance } from "@/lib/bearDance";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 import type { BearVoiceAgent, MicrophonePermission } from "@/hooks/useBearVoiceAgent";
@@ -82,6 +83,7 @@ export const useLiveKitBearAgent = (
   // (bear.play for Maple arrives a beat before her voice does - showing the
   //  shared "latest line" put her words in Smokey's bubble for a moment)
   const [spokenByBear, setSpokenByBear] = useState<{ Smokey: string | null; Maple: string | null }>({ Smokey: null, Maple: null });
+  const [visitorSpeech, setVisitorSpeech] = useState<{ text: string; final: boolean } | null>(null);
   const [dialoguePhase, setDialoguePhase] = useState<"idle" | "playing" | "your-turn">("idle");
   const [channelRequest, setChannelRequest] = useState(0);
   const [microphonePermission, setMicrophonePermission] = useState<MicrophonePermission>("prompt");
@@ -314,11 +316,17 @@ export const useLiveKitBearAgent = (
       room.on(RoomEvent.DataReceived, (payload, participant) => {
         if (!participant) return;
         try {
-          const event = JSON.parse(new TextDecoder().decode(payload)) as { type?: unknown; bear?: unknown; text?: unknown };
+          const event = JSON.parse(new TextDecoder().decode(payload)) as { type?: unknown; bear?: unknown; text?: unknown; final?: unknown };
+          // live captions of the visitor's own words
+          if (event.type === "visitor.transcript" && typeof event.text === "string") {
+            setVisitorSpeech({ text: event.text, final: event.final === true });
+            return;
+          }
           if (typeof event.type === "string" && event.type.startsWith("bear.") || event.type === "turn.completed") {
             bearLog(`data ${String(event.type)}`, { roomTag, from: participant.identity, bear: event.bear, text: typeof event.text === "string" ? event.text.slice(0, 60) : undefined });
           }
           if (event.type === "bear.play" && typeof event.text === "string") {
+            setVisitorSpeech(null);   // a bear is answering: the caption has done its job
             setSpokenText(event.text);
             const who = event.bear === "maple" ? "Maple" : event.bear === "smokey" ? "Smokey" : null;
             if (who) { const text = event.text; setSpokenByBear((prev) => ({ ...prev, [who]: text })); }
@@ -326,6 +334,8 @@ export const useLiveKitBearAgent = (
           }
           if (event.type === "turn.completed") setDialoguePhase("your-turn");
           if (event.type === "ui.show_channel_options") setChannelRequest((n) => n + 1);
+          // the agent's dance tool fired ("can you dance?"): Smokey and Maple get up
+          if (event.type === "bears.dance") { bearLog("dance", { roomTag }); startBearDance(); }
           if (event.type !== "bear.identity" || (event.bear !== "smokey" && event.bear !== "maple")) return;
           const bear = event.bear === "maple" ? "back_right_log" : "back_left_log";
           for (const [identity, other] of participantBearsRef.current) {
@@ -474,6 +484,7 @@ export const useLiveKitBearAgent = (
     spokenText,
     spokenByBear,
     dialoguePhase,
+    visitorSpeech,
     reactToFishFire: () => {},
     requestMicrophone,
     beginConversation,

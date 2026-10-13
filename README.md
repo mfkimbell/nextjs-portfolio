@@ -14,3 +14,7 @@ I used threeJS and blender for the bird mouse tracking and airplane idle animati
 ## Canvas
 
 ![canvas-ezgif com-speed](https://github.com/user-attachments/assets/729e5a70-c52b-4bce-b497-07696ec9312d)
+
+## Credits
+
+- Bear dance motion: "Default dance" by photon (that one larry) ([Sketchfab](https://sketchfab.com/3d-models/default-dance-04c233a6eec14039bf5b30fad562d3c7)), licensed [CC-BY-4.0](http://creativecommons.org/licenses/by/4.0/). Retargeted onto the campfire bears in `blender/bear_dance.blend`.

@@ -1897,6 +1897,19 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   bagTipContact: number;
   rodTipHeading: number;
   hikeBagTipHeading: number;
+  /** click-to-knock-over props measured on the spot (MeasuredTipOver): fall heading, shove (x tipping point), how far over (x contact), swing speed */
+  sojuTipHeading: number;
+  sojuTipShove: number;
+  sojuTipFall: number;
+  sojuTipSpeed: number;
+  oarTipHeading: number;
+  oarTipShove: number;
+  oarTipFall: number;
+  oarTipSpeed: number;
+  smallBagTipHeading: number;
+  smallBagTipShove: number;
+  smallBagTipFall: number;
+  smallBagTipSpeed: number;
   /** How hard the bag is shoved, as a MULTIPLE of the least it takes to get
    *  over its own tipping point. 1 balances exactly on it, under 1 it rocks
    *  back upright, 1.2 goes over with a visible hesitation. A multiple rather
@@ -2306,6 +2319,19 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
   axeWatchLookHeight: number;
   teaShadowOn: number;
   teaShadowCatOn: number;
+  /** bear dance: times through the ~7 s routine, playback speed, seconds to get up / sit down, how far they rise */
+  danceLoops: number;
+  /** banjo in the scene: reverb level, air low-pass at the usual shot (Hz), 1 = mono point source */
+  banjoReverb: number;
+  banjoTone: number;
+  banjoMono: number;
+  danceSpeed: number;
+  danceFade: number;
+  danceLift: number;
+  /** the banjo / fish-stick toss: seconds before they get up, how high (m), turns in the air */
+  danceLead: number;
+  danceThrowHeight: number;
+  danceThrowSpin: number;
   teaShadowCatStrength: number;
   teaShadowCatReach: number;
   teaShadowCatLift: number;
@@ -3779,6 +3805,18 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   bagTipContact: 0.12,
   rodTipHeading: 2.0123,
   hikeBagTipHeading: 3.1416,
+  sojuTipHeading: -1.571,
+  sojuTipShove: 1.3,
+  sojuTipFall: 1,
+  sojuTipSpeed: 1,
+  oarTipHeading: 0,
+  oarTipShove: 1.3,
+  oarTipFall: 1,
+  oarTipSpeed: 1,
+  smallBagTipHeading: -2.5,
+  smallBagTipShove: 1.3,
+  smallBagTipFall: 1,
+  smallBagTipSpeed: 1,
   bagTipShove: 1.22,
   hikeBagTipShove: 1.18,
   rodTipShove: 2.12,
@@ -4039,6 +4077,16 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   axeWatchLookHeight: 0.85,
   teaShadowOn: 1,
   teaShadowCatOn: 1,
+  danceLoops: 2,
+  banjoReverb: 0.35,
+  banjoTone: 3200,
+  banjoMono: 1,
+  danceSpeed: 1,
+  danceFade: 0.6,
+  danceLift: 1,
+  danceLead: 0.5,
+  danceThrowHeight: 5,
+  danceThrowSpin: 1.5,
   teaShadowCatStrength: 0.55,
   teaShadowCatReach: 0.45,
   teaShadowCatLift: 0,

@@ -220,6 +220,61 @@ const DEFAULT_LOOP_FADE_MS = 900;
  * `liveMultiplier` changes. Does not restart the underlying <audio> element
  * when any of those wiggle - only when the URL itself changes.
  */
+/**
+ * "Out in the woods at night": a made-up impulse response for a
+ * ConvolverNode. A ground bounce a few ms after the direct sound, a couple of
+ * late slaps off the tree line, then a sparse, dark diffuse tail (~1.5 s).
+ * Generated once per AudioContext - no file to download.
+ */
+const outdoorImpulses = new WeakMap<BaseAudioContext, AudioBuffer>();
+function outdoorImpulse(ctx: BaseAudioContext): AudioBuffer {
+  const have = outdoorImpulses.get(ctx);
+  if (have) return have;
+  const rate = ctx.sampleRate;
+  const len = Math.floor(rate * 2.0);
+  const buf = ctx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    let seed = ch ? 0x9e3779b9 : 0x85ebca6b;
+    const rnd = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return ((seed >>> 0) / 4294967295) * 2 - 1; };
+    const pre = Math.floor(rate * 0.018);
+    let lp = 0;
+    for (let i = pre; i < len; i++) {
+      const t = (i - pre) / rate;
+      // sparse at first (open air), denser later; decays to -60 dB in ~1.5 s
+      const density = Math.min(1, 0.25 + t * 2.5);
+      const n = Math.abs(rnd()) < density ? rnd() : 0;
+      // one-pole low-pass: the forest swallows the highs of the tail
+      lp += (n - lp) * (0.18 + 0.25 * Math.exp(-t * 3));
+      d[i] = lp * Math.exp(-t / 0.22);
+    }
+    // discrete reflections: the ground, then the trees (a little different per ear)
+    const tap = (ms: number, amp: number) => { const i = Math.floor(rate * ms / 1000); if (i < len) d[i] += amp; };
+    tap(7 + ch * 0.6, 0.55);
+    tap(64 + ch * 9, 0.22);
+    tap(118 - ch * 7, 0.14);
+    tap(190 + ch * 13, 0.08);
+  }
+  outdoorImpulses.set(ctx, buf);
+  return buf;
+}
+
+/**
+ * Where a looping emitter sits in the scene, for `spaceRef`: how far it is
+ * (1 = the location's own saved camera shot; 2 = twice that far), and the
+ * lab knobs for how the space sounds.
+ */
+export type LoopSpace = {
+  /** distance / reference distance */
+  far: number;
+  /** reverb level at the reference distance (0 = dry) */
+  reverb: number;
+  /** low-pass cutoff (Hz) at the reference distance; closer = brighter */
+  toneHz: number;
+  /** 1 = fold the recording to mono (one instrument in one spot), 0 = keep its stereo */
+  mono: number;
+};
+
 export function useCampsiteAudioLoop(
   url: string,
   {
@@ -229,6 +284,7 @@ export function useCampsiteAudioLoop(
     fadeMs = DEFAULT_LOOP_FADE_MS,
     panRef,
     timeRef,
+    spaceRef,
   }: {
     volume: number;
     enabled: boolean;
@@ -249,11 +305,16 @@ export function useCampsiteAudioLoop(
     panRef?: MutableRefObject<number>;
     /** Optional playback position, updated from the live media element clock. */
     timeRef?: MutableRefObject<number>;
+    /** Optional: make the (panned) loop sit IN the scene - mono point
+     *  source, air absorption and outdoor reverb that follow the distance.
+     *  Only used together with panRef. */
+    spaceRef?: MutableRefObject<LoopSpace>;
   }
 ) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pannerRef = useRef<StereoPannerNode | null>(null);
   const loopGainRef = useRef<GainNode | null>(null);
+  const spaceNodesRef = useRef<{ mono: GainNode; bypass: GainNode; airLp: BiquadFilterNode; wet: GainNode; dry: GainNode } | null>(null);
   // 0..1, eased toward `enabled` over fadeMs. A plain ref rather than state:
   // it moves every frame a transition is running, and driving that through
   // React would mean a re-render per frame for no reason - nothing else
@@ -285,9 +346,48 @@ export function useCampsiteAudioLoop(
           const source = ctx.createMediaElementSource(a);
           const panner = ctx.createStereoPanner();
           const gain = ctx.createGain();
-          source.connect(gain);
-          gain.connect(panner);
-          panner.connect(ctx.destination);
+          if (spaceRef) {
+            /*
+             * source -> mono fold -> gain -+-> air low-pass -> pan -> dry -> out
+             *                              +-> reverb send -> convolver -> wet -> out
+             * The reverb isn't panned: it's the woods all around you.
+             */
+            const mono = ctx.createGain();
+            mono.channelCount = 1;
+            mono.channelCountMode = "explicit";
+            mono.channelInterpretation = "speakers";
+            const stereoBypass = ctx.createGain();
+            const airLp = ctx.createBiquadFilter();
+            airLp.type = "lowpass";
+            airLp.Q.value = 0.5;
+            airLp.frequency.value = 4000;
+            const dry = ctx.createGain();
+            const conv = ctx.createConvolver();
+            conv.buffer = outdoorImpulse(ctx);
+            const wet = ctx.createGain();
+            wet.gain.value = 0;
+            const wetTone = ctx.createBiquadFilter();
+            wetTone.type = "lowpass";
+            wetTone.frequency.value = 2600;
+            source.connect(mono);
+            mono.connect(gain);
+            source.connect(stereoBypass);
+            stereoBypass.connect(gain);
+            stereoBypass.gain.value = 0;
+            gain.connect(airLp);
+            airLp.connect(panner);
+            panner.connect(dry);
+            dry.connect(ctx.destination);
+            gain.connect(conv);
+            conv.connect(wetTone);
+            wetTone.connect(wet);
+            wet.connect(ctx.destination);
+            spaceNodesRef.current = { mono, bypass: stereoBypass, airLp, wet, dry };
+          } else {
+            source.connect(gain);
+            gain.connect(panner);
+            panner.connect(ctx.destination);
+          }
           pannerRef.current = panner;
           loopGainRef.current = gain;
         } catch {
@@ -304,8 +404,9 @@ export function useCampsiteAudioLoop(
       audioRef.current = null;
       pannerRef.current = null;
       loopGainRef.current = null;
+      spaceNodesRef.current = null;
     };
-  }, [url, panRef]);
+  }, [url, panRef, spaceRef]);
 
   // One continuous loop for the life of the hook, owning a.volume and
   // a.play()/a.pause() outright. This used to be three separate effects (set
@@ -383,6 +484,23 @@ export function useCampsiteAudioLoop(
           const p = (Number.isFinite(panRef.current) ? panRef.current : 0) + tune.pan;
           pannerRef.current.pan.value = Math.max(-1, Math.min(1, p));
         }
+        const sp = spaceNodesRef.current;
+        if (sp && spaceRef) {
+          const s = spaceRef.current;
+          const far = Math.max(0.15, Number.isFinite(s.far) ? s.far : 1);
+          const t = sp.airLp.context.currentTime;
+          // air soaks up the highs with distance (brighter up close)
+          const hz = Math.max(700, Math.min(16000, (s.toneHz > 0 ? s.toneHz : 4000) / Math.pow(far, 1.1)));
+          sp.airLp.frequency.setTargetAtTime(hz, t, 0.08);
+          // the woods' reverb stays put while the direct sound falls away, so
+          // the further off he is the more of what you hear is the echo
+          const liveNow = liveMultiplier && Number.isFinite(liveMultiplier.current) ? liveMultiplier.current : 1;
+          const wetLevel = Math.max(0, s.reverb) * Math.min(2.5, Math.pow(far, 0.6) / Math.max(0.35, liveNow));
+          sp.wet.gain.setTargetAtTime(wetLevel, t, 0.08);
+          const monoOn = (s.mono ?? 1) >= 0.5;
+          sp.mono.gain.value = monoOn ? 1 : 0;
+          sp.bypass.gain.value = monoOn ? 0 : 1;
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -391,7 +509,7 @@ export function useCampsiteAudioLoop(
       cancelAnimationFrame(raf);
       offGesture?.();
     };
-  }, [url, volume, enabled, liveMultiplier, fadeMs, panRef, timeRef]);
+  }, [url, volume, enabled, liveMultiplier, fadeMs, panRef, timeRef, spaceRef]);
 
 }
 
@@ -527,4 +645,45 @@ export function fadeOutAudio(a: HTMLAudioElement | PlayingSound | null | undefin
     else a.pause();
   };
   requestAnimationFrame(step);
+}
+
+/**
+ * A glass bottle tipping over and clinking on the ground: a couple of bright,
+ * fast-decaying partials for the hit and a quieter second clink for the
+ * bounce. Synthesized - there is no glass sample in public/sound.
+ */
+export function playGlassClink(volume: number, pan = 0) {
+  const ctx = getSharedAudioContext();
+  if (!ctx || volume <= 0) return;
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  const out = ctx.createGain();
+  out.gain.value = Math.min(1, volume);
+  const p = ctx.createStereoPanner();
+  p.pan.value = Math.max(-1, Math.min(1, pan));
+  out.connect(p); p.connect(ctx.destination);
+  const now = ctx.currentTime;
+  const hit = (at: number, level: number, base: number) => {
+    for (const [mul, amp, decay] of [[1, 1, 0.22], [2.76, 0.55, 0.12], [5.4, 0.3, 0.06]] as const) {
+      const o = ctx.createOscillator();
+      o.type = "sine";
+      o.frequency.value = base * mul;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, now + at);
+      g.gain.linearRampToValueAtTime(level * amp * 0.35, now + at + 0.003);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + at + decay * 1.6);
+      o.connect(g); g.connect(out);
+      o.start(now + at); o.stop(now + at + decay * 1.7);
+    }
+    // a little noise tick for the knock of glass on dirt
+    const len = Math.floor(ctx.sampleRate * 0.03);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (len * 0.18));
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const ng = ctx.createGain(); ng.gain.value = level * 0.25;
+    src.connect(ng); ng.connect(out); src.start(now + at);
+  };
+  hit(0, 1, 1850);
+  hit(0.13, 0.45, 1910);
+  hit(0.21, 0.18, 1880);
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { startBearDance } from "@/lib/bearDance";
+import { endBearPhone, startBearPhone } from "@/lib/bearPhone";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import localFont from "next/font/local";
 import CampfireScene from "@/components/scene-lab/CampfireScene";
@@ -3779,7 +3781,19 @@ export default function SceneLabClient() {
                     <SliderRow label="Fishing rod — rattle amount" value={campfireConfig.rodRattleAmp} min={0} max={0.15} step={0.002} onChange={(value) => updateCampfire("rodRattleAmp", value)} />
                     <SliderRow label="Fishing rod — rattle speed (Hz)" value={campfireConfig.rodRattleFreq} min={1} max={16} step={0.1} onChange={(value) => updateCampfire("rodRattleFreq", value)} />
                     <SliderRow label="Fishing rod — rattle fade" value={campfireConfig.rodRattleDamp} min={0.5} max={14} step={0.1} onChange={(value) => updateCampfire("rodRattleDamp", value)} />
-                    <SliderRow label="All three — bounce on landing" value={campfireConfig.tipRestitution} min={0} max={0.8} step={0.01} onChange={(value) => updateCampfire("tipRestitution", value)} />
+                    <SliderRow label="Bottle — FALL ANGLE" value={campfireConfig.sojuTipHeading ?? 0} min={-3.2} max={3.2} step={0.01} onChange={(value) => updateCampfire("sojuTipHeading", value)} />
+                    <SliderRow label="Bottle — shove (x tipping point)" value={campfireConfig.sojuTipShove ?? 1.3} min={0.5} max={4} step={0.01} onChange={(value) => updateCampfire("sojuTipShove", value)} />
+                    <SliderRow label="Bottle — how far it falls (x contact)" value={campfireConfig.sojuTipFall ?? 1} min={0.4} max={1.6} step={0.005} onChange={(value) => updateCampfire("sojuTipFall", value)} />
+                    <SliderRow label="Bottle — swing speed" value={campfireConfig.sojuTipSpeed ?? 1} min={0.2} max={3} step={0.05} onChange={(value) => updateCampfire("sojuTipSpeed", value)} />
+                    <SliderRow label="Oar — fall angle (0 = straight away from the boat)" value={campfireConfig.oarTipHeading ?? 0} min={-3.2} max={3.2} step={0.01} onChange={(value) => updateCampfire("oarTipHeading", value)} />
+                    <SliderRow label="Oar — shove (x tipping point)" value={campfireConfig.oarTipShove ?? 1.3} min={0.5} max={4} step={0.01} onChange={(value) => updateCampfire("oarTipShove", value)} />
+                    <SliderRow label="Oar — how far it falls (x contact)" value={campfireConfig.oarTipFall ?? 1} min={0.4} max={1.6} step={0.005} onChange={(value) => updateCampfire("oarTipFall", value)} />
+                    <SliderRow label="Oar — swing speed" value={campfireConfig.oarTipSpeed ?? 1} min={0.2} max={3} step={0.05} onChange={(value) => updateCampfire("oarTipSpeed", value)} />
+                    <SliderRow label="Small bag (left) — FALL ANGLE" value={campfireConfig.smallBagTipHeading ?? 0} min={-3.2} max={3.2} step={0.01} onChange={(value) => updateCampfire("smallBagTipHeading", value)} />
+                    <SliderRow label="Small bag (left) — shove (x tipping point)" value={campfireConfig.smallBagTipShove ?? 1.3} min={0.5} max={4} step={0.01} onChange={(value) => updateCampfire("smallBagTipShove", value)} />
+                    <SliderRow label="Small bag (left) — how far it falls (x contact)" value={campfireConfig.smallBagTipFall ?? 1} min={0.4} max={1.6} step={0.005} onChange={(value) => updateCampfire("smallBagTipFall", value)} />
+                    <SliderRow label="Small bag (left) — swing speed" value={campfireConfig.smallBagTipSpeed ?? 1} min={0.2} max={3} step={0.05} onChange={(value) => updateCampfire("smallBagTipSpeed", value)} />
+                    <SliderRow label="All of them — bounce on landing" value={campfireConfig.tipRestitution} min={0} max={0.8} step={0.01} onChange={(value) => updateCampfire("tipRestitution", value)} />
                   </ControlGroup>
 
 
@@ -3883,6 +3897,9 @@ export default function SceneLabClient() {
                     <SliderRow label="Banjo" value={campfireConfig.banjoVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("banjoVolume", value)} />
                     <SliderRow label="Banjo: fade with distance (1 = real)" value={campfireConfig.banjoDistanceRolloff} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("banjoDistanceRolloff", value)} />
                     <SliderRow label="Banjo: max boost up close" value={campfireConfig.banjoMaxBoost} min={1} max={4} step={0.05} onChange={(value) => updateCampfire("banjoMaxBoost", value)} />
+                    <SliderRow label="Banjo: woods reverb (0 = dry)" value={campfireConfig.banjoReverb ?? 0.35} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("banjoReverb", value)} />
+                    <SliderRow label="Banjo: brightness at the usual shot (Hz, lower = further off)" value={campfireConfig.banjoTone ?? 3200} min={600} max={16000} step={50} onChange={(value) => updateCampfire("banjoTone", value)} />
+                    <SliderRow label="Banjo: one spot / mono (0/1)" value={campfireConfig.banjoMono ?? 1} min={0} max={1} step={1} onChange={(value) => updateCampfire("banjoMono", value)} />
                     <SliderRow label="Swoosh (panel switch)" value={campfireConfig.swooshVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("swooshVolume", value)} />
                     <SliderRow label="Swoosh delay (ms)" value={campfireConfig.swooshDelayMs} min={0} max={1000} step={10} onChange={(value) => updateCampfire("swooshDelayMs", value)} />
                     <SliderRow label="Swoosh speed" value={campfireConfig.swooshRate} min={0.3} max={2} step={0.01} onChange={(value) => updateCampfire("swooshRate", value)} />
@@ -3903,6 +3920,43 @@ export default function SceneLabClient() {
                       Low drops the fire&apos;s point-light shadow, shrinks shadow maps, caps resolution.
                     </p>
                     <SliderRow label="Graphics (0 auto, 1 low, 2 high)" value={campfireConfig.gfxQuality ?? 0} min={0} max={2} step={1} onChange={(value) => updateCampfire("gfxQuality", value)} />
+                  </ControlGroup>
+
+                  <ControlGroup title="Campfire — bears dance / phone call">
+                    <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
+                      Smokey and Maple toss the banjo and fish stick up, get up and dance, and catch them
+                      as they sit back down, when a visitor asks &quot;can you dance?&quot;
+                      (the voice agent&apos;s dance tool). The routine is about 7 seconds, retargeted in
+                      Blender from &quot;Default dance&quot; by photon (that one larry), CC-BY-4.0.
+                    </p>
+                    <button
+                      type="button"
+                      className="mb-2 rounded-md border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/80 hover:bg-white/10"
+                      onClick={() => startBearDance()}
+                    >
+                      Preview dance
+                    </button>
+                    <button
+                      type="button"
+                      className="mb-2 ml-2 rounded-md border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/80 hover:bg-white/10"
+                      onClick={() => startBearPhone()}
+                    >
+                      Preview phone call
+                    </button>
+                    <button
+                      type="button"
+                      className="mb-2 ml-2 rounded-md border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/80 hover:bg-white/10"
+                      onClick={() => endBearPhone()}
+                    >
+                      Hang up
+                    </button>
+                    <SliderRow label="Times through the routine" value={campfireConfig.danceLoops ?? 2} min={1} max={6} step={1} onChange={(value) => updateCampfire("danceLoops", value)} />
+                    <SliderRow label="Speed" value={campfireConfig.danceSpeed ?? 1} min={0.5} max={1.6} step={0.05} onChange={(value) => updateCampfire("danceSpeed", value)} />
+                    <SliderRow label="Get up / sit down time (s)" value={campfireConfig.danceFade ?? 0.6} min={0.1} max={2} step={0.05} onChange={(value) => updateCampfire("danceFade", value)} />
+                    <SliderRow label="How far they stand up (x)" value={campfireConfig.danceLift ?? 1} min={0} max={1.5} step={0.05} onChange={(value) => updateCampfire("danceLift", value)} />
+                    <SliderRow label="Banjo / fish toss: head start before they get up (s)" value={campfireConfig.danceLead ?? 0.5} min={0} max={2} step={0.05} onChange={(value) => updateCampfire("danceLead", value)} />
+                    <SliderRow label="Toss height (m)" value={campfireConfig.danceThrowHeight ?? 5} min={0.5} max={12} step={0.1} onChange={(value) => updateCampfire("danceThrowHeight", value)} />
+                    <SliderRow label="Toss spin (turns)" value={campfireConfig.danceThrowSpin ?? 1.5} min={0} max={5} step={0.25} onChange={(value) => updateCampfire("danceThrowSpin", value)} />
                   </ControlGroup>
 
                   <ControlGroup title="3 · Cabin — tea cup (shadows + steam)" scope="3">
@@ -4037,10 +4091,6 @@ export default function SceneLabClient() {
                     <SliderRow label="Looks at you" value={campfireConfig.onlyBearsLook} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("onlyBearsLook", value)} />
                     <SliderRow label="Breathing" value={campfireConfig.onlyBearsBreath} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("onlyBearsBreath", value)} />
                     <SliderRow label="Head shake (no)" value={campfireConfig.onlyBearsShake} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("onlyBearsShake", value)} />
-                    <SliderRow label="Light on the bear during the gag" value={campfireConfig.onlyBearsKeyLight} min={0} max={10} step={0.1} onChange={(value) => updateCampfire("onlyBearsKeyLight", value)} />
-                    <SliderRow label="Lanterns during the gag (x brighter)" value={campfireConfig.onlyBearsLanternBoost} min={1} max={20} step={0.5} onChange={(value) => updateCampfire("onlyBearsLanternBoost", value)} />
-                    <SliderRow label="Everything else during the gag (brightness, 1 = normal)" value={campfireConfig.onlyBearsSceneLight ?? 0.3} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("onlyBearsSceneLight", value)} />
-                    <SliderRow label="How far the bear's light carries past him" value={campfireConfig.onlyBearsKeyReach ?? 1.6} min={1.05} max={8} step={0.05} onChange={(value) => updateCampfire("onlyBearsKeyReach", value)} />
                     <SliderRow label="Laptop lid close (deg)" value={campfireConfig.deskComputerLidCloseDeg} min={0} max={110} step={1} onChange={(value) => updateCampfire("deskComputerLidCloseDeg", value)} />
                   </ControlGroup>
 

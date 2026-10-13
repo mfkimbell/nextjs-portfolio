@@ -34,6 +34,9 @@ export type BearVoiceAgent = {
   /** Latest line per bear (LiveKit), so each bubble shows only its own bear's words. */
   spokenByBear?: { Smokey: string | null; Maple: string | null };
   dialoguePhase: "idle" | "playing" | "your-turn";
+  /** What the visitor is saying into the mic, live (LiveKit): partial words
+   *  while they talk, then the final sentence until a bear answers. */
+  visitorSpeech?: { text: string; final: boolean } | null;
   start: () => Promise<void>;
   reactToFishFire: () => void;
   requestMicrophone: () => Promise<void>;
@@ -52,7 +55,7 @@ export type BearVoiceAgent = {
 };
 
 const DEFAULT_DESTINATION = "portfolio-bears";
-const DEV_AGENT_BASE_URL = "https://mkimbell.ngrok.dev";
+export const DEV_AGENT_BASE_URL = "https://mkimbell.ngrok.dev";
 
 const bearNameForId = (bearId: BearVoiceState["activeBearId"]) =>
   bearId === "back_left_log" ? "Smokey" : "Maple";
