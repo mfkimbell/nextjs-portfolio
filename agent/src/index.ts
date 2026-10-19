@@ -613,7 +613,7 @@ app.post("/fish-reaction/:callSid", (request, response) => {
   const session = matchingSession(request.params.callSid);
   if (!session?.relaySocket || session.activeSpeech) return response.sendStatus(409);
   const generation = ++session.generation;
-  const line = { bear: "bear1" as const, text: "You owe us a fish, pal." };
+  const line = { bear: "bear1" as const, text: "You owe us a fish." };
   sendTalkCycle(session.relaySocket, session, line, false, () => session.generation === generation);
   void waitForPlayedText(session, line.text, playbackTimeoutMs(line.text)).then((played) => {
     if (!played || session.generation !== generation || session.activeSpeech?.bear !== "bear1") return;

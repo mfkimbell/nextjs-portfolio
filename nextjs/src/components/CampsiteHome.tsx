@@ -310,6 +310,7 @@ export default function CampsiteHome() {
           titleHeld={titleHeld}
           bearVoiceRef={activeBearAgent.voiceRef}
           onFishImpact={activeBearAgent.reactToFishFire}
+          onSceneEvent={activeBearAgent.notifySceneEvent}
           chatChoice={{ show: choosing, onChoose: chooseChatMode, clickable: !showTitle && greeted && panel === 0 }}
         />
 

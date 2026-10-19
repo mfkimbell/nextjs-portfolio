@@ -8,6 +8,7 @@ import { appendFile, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { correctionFactById, correctionFacts } from "./correction-facts/index.js";
+import { sceneEventById } from "./scene-events/index.js";
 import { applyFactCorrection, buildSpeechCommands, removeRepeatedSentences, type PlannedExchange, type SpeechCommand } from "./livekit-orchestrator/index.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -18,6 +19,12 @@ const faq = readFileSync(resolve(sourceDirectory, "../knowledge/faq.md"), "utf8"
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const recentTurns: Array<{ visitor: string; observation: string }> = [];
 const recentSpoken: string[] = [];
+/*
+ * Things that have happened in the camp this visit (the site's scene events),
+ * in the order they happened. Every plan after that is told about them, so
+ * the bears can bring them up - "you still owe us a fish" - in later answers.
+ */
+const sceneObservations: string[] = [];
 
 /*
  * Local transcript log for debugging: agent/logs/transcripts.txt, one line per
@@ -180,7 +187,7 @@ const planExchange = async (prompt: string, allowTools = true, usedFacts: Set<st
      */
     messages: [
       { role: "system", content: STATIC_SYSTEM_PROMPT },
-      { role: "system", content: `TODAY: ${new Date().toDateString()} (use it to work out "how many years" from the start dates).\n\nCORRECTION CATALOG (each may be used only once per visit; these are the ones left):\n${availableFacts.length ? "" : "(none left - do NOT interrupt with a correction; correctionFactId must be an empty string)\n"}${availableFacts.map((fact) => `- ${fact.id}: wrong claim "${fact.incorrectClaim}"; correction "${fact.mapleCorrection}"`).join("\n")}\n\nRECENT OBSERVATIONS:\n${recentTurns.slice(-4).map((turn) => `- Visitor: ${turn.visitor}; Observation: ${turn.observation}`).join("\n") || "None"}` },
+      { role: "system", content: `TODAY: ${new Date().toDateString()} (use it to work out "how many years" from the start dates).\n\nCORRECTION CATALOG (each may be used only once per visit; these are the ones left):\n${availableFacts.length ? "" : "(none left - do NOT interrupt with a correction; correctionFactId must be an empty string)\n"}${availableFacts.map((fact) => `- ${fact.id}: wrong claim "${fact.incorrectClaim}"; correction "${fact.mapleCorrection}"`).join("\n")}\n\nWHAT HAS HAPPENED AT THE CAMPFIRE THIS VISIT (the bears saw it; bring it up only when it fits):\n${sceneObservations.map((o) => `- ${o}`).join("\n") || "Nothing yet."}\n\nRECENT OBSERVATIONS:\n${recentTurns.slice(-4).map((turn) => `- Visitor: ${turn.visitor}; Observation: ${turn.observation}`).join("\n") || "None"}` },
       { role: "user", content: prompt },
     ],
   });
@@ -223,6 +230,8 @@ export default defineAgent({
   entry: async (ctx: JobContext) => {
     let generation = 0;
     let visitorReady = false;
+    // a visitor turn is being planned (its lines don't exist yet)
+    let planning = false;
     let mapleTimer: NodeJS.Timeout | undefined;
     let activeTurn: {
       turnId: string;
@@ -234,6 +243,10 @@ export default defineAgent({
       greeting: boolean;
       /** the dance tool fired: tell the site to start the dance as Smokey starts talking */
       dance?: boolean;
+      /** a scene event's scripted lines: played straight through, in order */
+      scripted?: boolean;
+      /** every line has played - a queued scene event may go now */
+      done?: boolean;
       /** when the visitor's words arrived, and when the plan came back (latency log) */
       t0?: number;
       tPlanned?: number;
@@ -314,11 +327,40 @@ export default defineAgent({
       // (no channel-switch tool any more: visitors switch by clicking the
       //  telephone / microphone / typewriter on the site)
       // (the dance tool is checked alongside the plan - see planTurn)
-      const { plan, dance } = await planTurn(input, usedFacts);
+      planning = true;
+      const { plan, dance } = await planTurn(input, usedFacts).finally(() => { if (generation === myGeneration) planning = false; });
       const commands = buildSpeechCommands(turnId, plan);
       if (generation !== myGeneration) return;
       activeTurn = { turnId, commands, ready: new Map(), started: false, mapleScheduled: false, greeting: false, dance, t0, tPlanned: Date.now() };
       await Promise.all(commands.map(prepareCommand));
+    };
+    /*
+     * Scene events: something happened in the camp (the fish went in the
+     * fire, the tent went quiet). The bears say their scripted line about it -
+     * after whatever they are saying now, never over it - and it joins the
+     * observations every later answer is planned with. A visitor turn arriving
+     * meanwhile still cancels it as usual.
+     */
+    const pendingSceneLines: SpeechCommand[][] = [];
+    const turnBusy = () => planning || Boolean(activeTurn && !activeTurn.done);
+    const playSceneLines = async () => {
+      if (turnBusy() || !visitorReady) return;
+      const lines = pendingSceneLines.shift();
+      if (!lines) return;
+      if (mapleTimer) clearTimeout(mapleTimer);
+      mapleTimer = undefined;
+      activeTurn = { turnId: lines[0].turnId, commands: lines, ready: new Map(), started: false, mapleScheduled: true, greeting: false, scripted: true };
+      await Promise.all(lines.map(prepareCommand));
+    };
+    const onSceneEvent = (id: unknown) => {
+      const sceneEvent = sceneEventById(id);
+      if (!sceneEvent) { console.warn("[bears] unknown scene event", id); return; }
+      transcript(ctx.room.name ?? "?", "SCENE", sceneEvent.id);
+      if (!sceneObservations.includes(sceneEvent.observation)) sceneObservations.push(sceneEvent.observation);
+      const turnId = randomUUID();
+      pendingSceneLines.push(sceneEvent.lines.map((line, sequence) => ({ turnId, sequence, bear: line.bear, text: line.text })));
+      recentSpoken.push(...sceneEvent.lines.map((line) => line.text));
+      void playSceneLines();
     };
     session.on(voice.AgentSessionEventTypes.Error, (event) => {
       console.error("[bears] coordinator session error", event);
@@ -345,6 +387,10 @@ export default defineAgent({
           void startPreparedTurn();
           return;
         }
+        if (event.type === "scene.event") {
+          onSceneEvent((event as { event?: unknown }).event);
+          return;
+        }
         if (event.type === "visitor.message" && typeof event.text === "string" && event.text.trim()) {
           transcript(ctx.room.name ?? "?", "VISITOR (typed)", event.text);
           void beginTurn(event.text.trim());
@@ -357,6 +403,15 @@ export default defineAgent({
           scheduleMaple(activeTurn);
           return;
         }
+        if (event.type === "bear.completed" && activeTurn.scripted) {
+          const after = event.sequence + 1;
+          const next = activeTurn.commands.find((command) => command.sequence === after);
+          if (next) { void playCommand(next); return; }
+          activeTurn.done = true;
+          void publish(ctx, { type: "turn.completed", exchangeId: activeTurn.turnId });
+          void playSceneLines();
+          return;
+        }
         if (event.type === "bear.completed" && event.sequence === 1) {
           if (activeTurn.greeting) {
             // greeting: Smokey -> Maple -> Smokey asks what they'd like to know
@@ -367,7 +422,9 @@ export default defineAgent({
           void playCommand(recovery);
         }
         if (event.type === "bear.completed" && activeTurn && event.sequence === activeTurn.commands.at(-1)?.sequence) {
+          activeTurn.done = true;
           void publish(ctx, { type: "turn.completed", exchangeId: activeTurn.turnId });
+          void playSceneLines();
         }
         if (event.type === "bear.completed" && activeTurn.greeting && event.sequence === 0) {
           void playCommand(activeTurn.commands.find((command) => command.sequence === 1));

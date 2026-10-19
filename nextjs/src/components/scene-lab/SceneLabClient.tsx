@@ -34,7 +34,7 @@ import SmokeyTextFlow from "@/components/bear-dialogue/smokey-text-flow";
 import { useArtworkOutline } from "@/components/bear-dialogue/artwork-outline";
 import { jellyCornerFraction } from "@/components/bear-dialogue/jelly-path";
 import JellyBackdrop from "@/components/bear-dialogue/jelly-backdrop";
-import { previewSound, SOUND_FIELDS, SOUND_LIST, sfxKey, sfxValue } from "@/components/scene-lab/soundList";
+import { previewSound, SCENE_ALL_KEY, SOUND_FIELDS, SOUND_LIST, sfxKey, sfxTune, sfxValue } from "@/components/scene-lab/soundList";
 import { darkenedRgb, rgbaFromChannels, rgbFromChannels } from "@/components/bear-dialogue/color";
 
 const dialogueCloudPaths = [
@@ -3893,13 +3893,12 @@ export default function SceneLabClient() {
                     <SliderRow label="Fire crackling" value={campfireConfig.fireCracklingVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("fireCracklingVolume", value)} />
                     <SliderRow label="Cabin: rocking chair" value={campfireConfig.rockingChairVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("rockingChairVolume", value)} />
                     <SliderRow label="Cabin: gramophone song" value={campfireConfig.gramophoneSongVolume ?? 0.35} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("gramophoneSongVolume", value)} />
+                    <SliderRow label="Cabin: gramophone interruption (click it)" value={campfireConfig.gramophoneInterruptionVolume ?? 0.8} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("gramophoneInterruptionVolume", value)} />
                     <SliderRow label="Cabin: gramophone when zoomed on cats / computer (x)" value={campfireConfig.gramophoneCloseUpVolume ?? 0.55} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("gramophoneCloseUpVolume", value)} />
                     <SliderRow label="Banjo" value={campfireConfig.banjoVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("banjoVolume", value)} />
                     <SliderRow label="Banjo: fade with distance (1 = real)" value={campfireConfig.banjoDistanceRolloff} min={0} max={3} step={0.05} onChange={(value) => updateCampfire("banjoDistanceRolloff", value)} />
                     <SliderRow label="Banjo: max boost up close" value={campfireConfig.banjoMaxBoost} min={1} max={4} step={0.05} onChange={(value) => updateCampfire("banjoMaxBoost", value)} />
-                    <SliderRow label="Banjo: woods reverb (0 = dry)" value={campfireConfig.banjoReverb ?? 0.35} min={0} max={1.5} step={0.01} onChange={(value) => updateCampfire("banjoReverb", value)} />
-                    <SliderRow label="Banjo: brightness at the usual shot (Hz, lower = further off)" value={campfireConfig.banjoTone ?? 3200} min={600} max={16000} step={50} onChange={(value) => updateCampfire("banjoTone", value)} />
-                    <SliderRow label="Banjo: one spot / mono (0/1)" value={campfireConfig.banjoMono ?? 1} min={0} max={1} step={1} onChange={(value) => updateCampfire("banjoMono", value)} />
+                    <p className="text-[0.65rem] leading-relaxed text-white/45">The banjo&apos;s mono / distance / woods-echo now live with every other sound: &quot;Every sound&quot; → Campfire → Banjo → in the scene.</p>
                     <SliderRow label="Swoosh (panel switch)" value={campfireConfig.swooshVolume} min={0} max={1} step={0.01} onChange={(value) => updateCampfire("swooshVolume", value)} />
                     <SliderRow label="Swoosh delay (ms)" value={campfireConfig.swooshDelayMs} min={0} max={1000} step={10} onChange={(value) => updateCampfire("swooshDelayMs", value)} />
                     <SliderRow label="Swoosh speed" value={campfireConfig.swooshRate} min={0.3} max={2} step={0.01} onChange={(value) => updateCampfire("swooshRate", value)} />
@@ -3994,49 +3993,67 @@ export default function SceneLabClient() {
                     <SliderRow label="nudge light z" value={campfireConfig.tableShadowLightZ ?? 0} min={-2} max={2} step={0.01} onChange={(value) => updateCampfire("tableShadowLightZ", value)} />
                   </ControlGroup>
 
-                  <ControlGroup title="Every sound – volume, speed, delay, start, pan">
+                  <ControlGroup title="Every sound – volume, speed, delay, start, pan, in the scene">
                     <p className="mb-1 text-[0.65rem] leading-relaxed text-white/45">
                       One block per sound file. Volume multiplies its slider above
                       (over 1 boosts a quiet file). Delay waits after whatever
                       triggers it. &quot;Start at&quot; skips silence at the head of the
                       file and &quot;stop at&quot; cuts the tail; on a loop, the stretch
                       between them is what repeats. Left / right pans it.
+                      &quot;In the scene&quot; puts it in the world instead of your
+                      headphones: one spot (mono), distance (the air dulls the
+                      highs), the woods&apos; echo, a small enclosed room (a tent, the
+                      cabin) and &quot;behind something&quot; (a muffle).
                     </p>
+                    {(() => {
+                      const cfg = campfireConfig as unknown as Record<string, unknown>;
+                      const allRaw = cfg[SCENE_ALL_KEY];
+                      const allOn = typeof allRaw === "number" ? allRaw >= 0.5 : true;
+                      return (
+                        <label className="mb-1 flex cursor-pointer items-center gap-2 text-[0.68rem] font-medium text-white/85">
+                          <input type="checkbox" checked={allOn} onChange={(e) => updateCampfire(SCENE_ALL_KEY, e.target.checked ? 1 : 0)} className="h-3 w-3 accent-sky-300" />
+                          <span>Every sound in the scene (untick to hear them all dry, for an A/B)</span>
+                        </label>
+                      );
+                    })()}
                     {["Campfire", "Arcade", "Cabin", "Everywhere"].map((where) => (
                       <div key={where} className="mt-2">
                         <p className="text-[0.62rem] font-semibold uppercase tracking-wide text-white/50">{where}</p>
-                        {SOUND_LIST.filter((snd) => snd.where === where).map((snd) => (
-                          <details key={snd.id} className="mt-1 rounded border border-white/10 px-2 py-1">
-                            <summary className="cursor-pointer text-[0.7rem] text-white/80">{snd.label}</summary>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const cfg = campfireConfig as unknown as Record<string, unknown>;
-                                previewSound(snd, { vol: sfxValue(cfg, snd, "vol"), rate: sfxValue(cfg, snd, "rate"), delay: sfxValue(cfg, snd, "delay"), start: sfxValue(cfg, snd, "start"), end: sfxValue(cfg, snd, "end"), pan: sfxValue(cfg, snd, "pan") });
-                              }}
-                              className="my-1 rounded border border-white/20 px-2 py-0.5 text-[0.65rem] text-white/75 hover:bg-white/10"
-                            >▶ play</button>
-                            {SOUND_FIELDS.map((f) => (
-                              <SliderRow
-                                key={f.field}
-                                label={f.label}
-                                value={sfxValue(campfireConfig as unknown as Record<string, unknown>, snd, f.field)}
-                                min={f.min}
-                                max={f.max}
-                                step={f.step}
-                                onChange={(value) => {
-                                  updateCampfire(sfxKey(snd.id, f.field), value);
-                                  // hear it straight away with the new setting
-                                  const cfg = { ...(campfireConfig as unknown as Record<string, unknown>), [sfxKey(snd.id, f.field)]: value };
-                                  previewSound(snd, {
-                                    vol: sfxValue(cfg, snd, "vol"), rate: sfxValue(cfg, snd, "rate"), delay: sfxValue(cfg, snd, "delay"),
-                                    start: sfxValue(cfg, snd, "start"), end: sfxValue(cfg, snd, "end"), pan: sfxValue(cfg, snd, "pan"),
-                                  });
-                                }}
-                              />
-                            ))}
-                          </details>
-                        ))}
+                        {SOUND_LIST.filter((snd) => snd.where === where).map((snd) => {
+                          const cfg = campfireConfig as unknown as Record<string, unknown>;
+                          const inScene = sfxValue(cfg, snd, "scene") >= 0.5;
+                          const setField = (field: (typeof SOUND_FIELDS)[number]["field"], value: number) => {
+                            updateCampfire(sfxKey(snd.id, field), value);
+                            // hear it straight away with the new setting
+                            previewSound(snd, sfxTune({ ...cfg, [sfxKey(snd.id, field)]: value }, snd));
+                          };
+                          const row = (f: (typeof SOUND_FIELDS)[number]) =>
+                            f.toggle ? (
+                              <label key={f.field} className="flex cursor-pointer items-center gap-2 py-0.5 text-[0.68rem] uppercase tracking-[0.12em] text-white/70">
+                                <input type="checkbox" checked={sfxValue(cfg, snd, f.field) >= 0.5} onChange={(e) => setField(f.field, e.target.checked ? 1 : 0)} className="h-3 w-3 accent-sky-300" />
+                                <span>{f.label}</span>
+                              </label>
+                            ) : (
+                              <SliderRow key={f.field} label={f.label} value={sfxValue(cfg, snd, f.field)} min={f.min} max={f.max} step={f.step} onChange={(value) => setField(f.field, value)} />
+                            );
+                          return (
+                            <details key={snd.id} className="mt-1 rounded border border-white/10 px-2 py-1">
+                              <summary className="cursor-pointer text-[0.7rem] text-white/80">
+                                {snd.label}
+                                {inScene ? <span className="ml-1 text-[0.58rem] uppercase tracking-wide text-sky-300/70">· in the scene</span> : null}
+                              </summary>
+                              <button
+                                type="button"
+                                onClick={() => previewSound(snd, sfxTune(cfg, snd))}
+                                className="my-1 rounded border border-white/20 px-2 py-0.5 text-[0.65rem] text-white/75 hover:bg-white/10"
+                              >▶ play</button>
+                              {SOUND_FIELDS.filter((f) => f.group !== "scene").map(row)}
+                              <p className="mt-2 text-[0.6rem] font-semibold uppercase tracking-wide text-sky-200/60">In the scene</p>
+                              {SOUND_FIELDS.filter((f) => f.field === "scene").map(row)}
+                              {inScene ? SOUND_FIELDS.filter((f) => f.group === "scene" && f.field !== "scene").map(row) : null}
+                            </details>
+                          );
+                        })}
                       </div>
                     ))}
                   </ControlGroup>

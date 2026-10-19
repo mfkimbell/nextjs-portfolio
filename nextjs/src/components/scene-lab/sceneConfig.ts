@@ -2253,8 +2253,10 @@ export interface CampfireSceneConfig extends BugSwarmTweaks {
    fireCracklingVolume: number;
   /** Cabin ambience: the old bear's rocking chair creaking (scene 3). */
   rockingChairVolume: number;
-  /** Cabin: the gramophone's record (sound2/gramaphone_song.mp3). */
+  /** Cabin: the gramophone's song: music + vocals stems (sound2/bear_necessities_track.mp3, singing_bear_lyrics.mp3). */
   gramophoneSongVolume: number;
+  /** Cabin: the clip that cuts in when the gramophone is clicked (sound2/gramaphone_interruption.mp3). */
+  gramophoneInterruptionVolume: number;
   /** Props falling over: bags, fishing rod, logs off the pile. */
   propSoundVolume: number;
   /** Graphics: 0 = auto (low on phones / slow machines), 1 = always low, 2 = always high. */
@@ -4039,6 +4041,7 @@ export const BASE_CAMPFIRE_CONFIG: CampfireSceneConfig = {
   fireCracklingVolume: 0.55,
   rockingChairVolume: 0.3,
   gramophoneSongVolume: 0.35,
+  gramophoneInterruptionVolume: 0.8,
   propSoundVolume: 0.85,
   gfxQuality: 0,
   lowGfxActive: 0,

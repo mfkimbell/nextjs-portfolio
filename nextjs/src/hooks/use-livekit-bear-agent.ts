@@ -4,7 +4,7 @@ import { startBearDance } from "@/lib/bearDance";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 import type { BearVoiceAgent, MicrophonePermission } from "@/hooks/useBearVoiceAgent";
-import type { BearVoiceState, BearVoiceStateRef } from "@/lib/bearVoiceState";
+import type { BearVoiceState, BearVoiceStateRef, SceneEventId } from "@/lib/bearVoiceState";
 import { applyLipSyncFrame, createLipSyncAnalyzer } from "@/lib/bearLipSync";
 import { getSharedAudioContext } from "@/lib/campsiteSounds";
 
@@ -417,6 +417,18 @@ export const useLiveKitBearAgent = (
     return true;
   }, []);
 
+  // Something happened in the camp (the fish burned, the tent went quiet):
+  // the coordinator has the bears react to it. Before the room is up there is
+  // no one to tell, so it is dropped.
+  const notifySceneEvent = useCallback((event: SceneEventId) => {
+    const room = roomRef.current;
+    if (!room || (room as unknown as { state?: string }).state !== "connected") { bearLog("scene event dropped - no room", { event }); return; }
+    bearLog("scene event", { event });
+    const payload = new Uint8Array(new TextEncoder().encode(JSON.stringify({ type: "scene.event", event })));
+    void room.localParticipant.publishData(payload, { reliable: true }).catch(() => {});
+  }, []);
+  const reactToFishFire = useCallback(() => notifySceneEvent("fish.burned"), [notifySceneEvent]);
+
   const beginConversation = useCallback(async (opts?: { microphone?: boolean }) => {
     const room = roomRef.current;
     if (!room) return false;
@@ -485,7 +497,8 @@ export const useLiveKitBearAgent = (
     spokenByBear,
     dialoguePhase,
     visitorSpeech,
-    reactToFishFire: () => {},
+    reactToFishFire,
+    notifySceneEvent,
     requestMicrophone,
     beginConversation,
     sendTextMessage,

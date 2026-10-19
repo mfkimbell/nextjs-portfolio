@@ -128,8 +128,23 @@ export const IS_IOS = typeof navigator !== "undefined" && (
  *  end   - seconds into the file to stop at / loop back from (0 = the end)
  *  pan   - -1 hard left .. 1 hard right
  */
-export type SoundTune = { vol: number; rate: number; delay: number; start: number; end: number; pan: number };
-const TUNE_DEFAULT: SoundTune = { vol: 1, rate: 1, delay: 0, start: 0, end: 0, pan: 0 };
+/**
+ * Per-sound tuning. The first six shape the file itself; the rest put the
+ * sound "in the scene" (see sceneChain), and only apply while `scene` is on:
+ *   scene   - 0/1 master switch for the in-the-scene treatment
+ *   mono    - 0/1 fold to mono: one source in one spot, not a stereo recording
+ *   muffle  - low-pass Hz (0 = off): heard through something (a tent, a wall)
+ *   air     - 0..1 distance: highs soaked up by the air, a little quieter
+ *   room    - 0..1 small enclosed space (a tent, a cabin): close, boxy reflections
+ *   outdoor - 0..1 the woods: ground bounce, tree-line slaps and a dark tail
+ */
+export type SoundTune = {
+  vol: number; rate: number; delay: number; start: number; end: number; pan: number;
+  scene: number; mono: number; muffle: number; air: number; room: number; outdoor: number;
+};
+const TUNE_DEFAULT: SoundTune = { vol: 1, rate: 1, delay: 0, start: 0, end: 0, pan: 0, scene: 0, mono: 0, muffle: 0, air: 0, room: 0, outdoor: 0 };
+/** The scene treatment is wanted at all (and does something). */
+export const sceneOn = (t: SoundTune) => t.scene >= 0.5 && (t.mono >= 0.5 || t.muffle > 0 || t.air > 0 || t.room > 0 || t.outdoor > 0);
 const soundTunes = new Map<string, SoundTune>();
 export function setSoundTune(url: string, t: Partial<SoundTune>) {
   soundTunes.set(url, { ...TUNE_DEFAULT, ...t });
@@ -140,7 +155,7 @@ export function getSoundTune(url: string): SoundTune {
 
 /** Route an element through gain + pan when the tuning asks for a boost or
  *  a side. Each element can only be connected once; returns the nodes. */
-type ElementGraph = { gain: GainNode; pan: StereoPannerNode };
+type ElementGraph = { gain: GainNode; pan: StereoPannerNode; chain?: SceneChain };
 const elementGraphs = new WeakMap<HTMLMediaElement, ElementGraph>();
 function graphFor(a: HTMLMediaElement): ElementGraph | null {
   const have = elementGraphs.get(a);
@@ -151,10 +166,14 @@ function graphFor(a: HTMLMediaElement): ElementGraph | null {
     const src = ctx.createMediaElementSource(a);
     const gain = ctx.createGain();
     const pan = ctx.createStereoPanner();
+    // through the in-the-scene chain (a straight wire until a tune asks for more)
+    const chain = sceneChain(ctx);
     src.connect(gain);
-    gain.connect(pan);
+    gain.connect(chain.input);
+    chain.output.connect(pan);
+    chain.wetOut.connect(ctx.destination);
     pan.connect(ctx.destination);
-    const g = { gain, pan };
+    const g = { gain, pan, chain };
     elementGraphs.set(a, g);
     return g;
   } catch {
@@ -226,6 +245,118 @@ const DEFAULT_LOOP_FADE_MS = 900;
  * late slaps off the tree line, then a sparse, dark diffuse tail (~1.5 s).
  * Generated once per AudioContext - no file to download.
  */
+/**
+ * A small enclosed space (a tent, a cupboard): dense, quick reflections off
+ * close walls, dark, gone in ~0.35 s. Generated once per AudioContext.
+ */
+const roomImpulses = new WeakMap<BaseAudioContext, AudioBuffer>();
+function roomImpulse(ctx: BaseAudioContext): AudioBuffer {
+  const have = roomImpulses.get(ctx);
+  if (have) return have;
+  const rate = ctx.sampleRate;
+  const len = Math.floor(rate * 0.45);
+  const buf = ctx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    let seed = ch ? 0x27d4eb2f : 0x165667b1;
+    const rnd = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return ((seed >>> 0) / 4294967295) * 2 - 1; };
+    let lp = 0;
+    for (let i = Math.floor(rate * 0.002); i < len; i++) {
+      const t = i / rate;
+      lp += (rnd() - lp) * 0.22;          // fabric soaks up the highs
+      d[i] = lp * Math.exp(-t / 0.07);
+    }
+    const tap = (ms: number, amp: number) => { const i = Math.floor(rate * ms / 1000); if (i < len) d[i] += amp; };
+    tap(3 + ch * 0.4, 0.5); tap(7.5 - ch * 0.6, 0.35); tap(12 + ch, 0.22); tap(19 - ch, 0.12);
+  }
+  roomImpulses.set(ctx, buf);
+  return buf;
+}
+/**
+ * The "in the scene" chain, the same for every sound (one-shots, loops, the
+ * lab preview):
+ *
+ *   input -> mono fold | stereo -> + small room -> muffle (2 x low-pass)
+ *         -> air (low-pass + level) -> output              (goes on to the pan)
+ *                                    \-> woods reverb -> wetOut  (not panned:
+ *                                                         the woods are all round you)
+ *
+ * apply() sets it from a tune every frame / every play - with `scene` off it
+ * is a straight wire. `far` (distance / reference distance) and `live` (the
+ * emitter's own proximity gain) let a moving source get duller and wetter as
+ * it goes away (the banjo).
+ */
+export type SceneChain = {
+  input: GainNode;
+  output: GainNode;
+  wetOut: GainNode;
+  apply: (t: SoundTune, opts?: { far?: number; live?: number; immediate?: boolean }) => void;
+  dispose: () => void;
+};
+export function sceneChain(ctx: BaseAudioContext): SceneChain {
+  const nyq = Math.min(20000, ctx.sampleRate / 2 - 200);
+  const input = ctx.createGain();
+  const mono = ctx.createGain();
+  mono.channelCount = 1;
+  mono.channelCountMode = "explicit";
+  mono.channelInterpretation = "speakers";
+  const stereo = ctx.createGain();
+  const sum = ctx.createGain();
+  input.connect(mono); input.connect(stereo); mono.connect(sum); stereo.connect(sum);
+  const roomConv = ctx.createConvolver();
+  roomConv.buffer = roomImpulse(ctx);
+  const roomWet = ctx.createGain();
+  const roomDry = ctx.createGain();
+  const preMuffle = ctx.createGain();
+  sum.connect(roomDry); sum.connect(roomConv); roomConv.connect(roomWet);
+  roomDry.connect(preMuffle); roomWet.connect(preMuffle);
+  const lp = (q: number) => { const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.Q.value = q; f.frequency.value = nyq; return f; };
+  const m1 = lp(0.5), m2 = lp(0.4), air = lp(0.5);
+  const output = ctx.createGain();
+  preMuffle.connect(m1); m1.connect(m2); m2.connect(air); air.connect(output);
+  const outConv = ctx.createConvolver();
+  outConv.buffer = outdoorImpulse(ctx);
+  const outTone = lp(0.5);
+  outTone.frequency.value = 2600;
+  const wetOut = ctx.createGain();
+  output.connect(outConv); outConv.connect(outTone); outTone.connect(wetOut);
+  const all: AudioNode[] = [input, mono, stereo, sum, roomConv, roomWet, roomDry, preMuffle, m1, m2, air, output, outConv, outTone, wetOut];
+  const set = (p: AudioParam, v: number, immediate: boolean) => {
+    if (immediate) p.value = v;
+    else p.setTargetAtTime(v, ctx.currentTime, 0.06);
+  };
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
+  return {
+    input, output, wetOut,
+    apply(t, opts) {
+      const im = opts?.immediate ?? false;
+      const on = t.scene >= 0.5;
+      const far = Math.max(0.15, opts?.far ?? 1);
+      const live = Math.max(0.35, opts?.live ?? 1);
+      const monoOn = on && t.mono >= 0.5;
+      set(mono.gain, monoOn ? 1 : 0, im);
+      set(stereo.gain, monoOn ? 0 : 1, im);
+      const room = on ? clamp01(t.room) : 0;
+      set(roomWet.gain, room * 0.9, im);
+      set(roomDry.gain, 1 - room * 0.35, im);
+      const muffle = on && t.muffle > 0 ? Math.max(80, t.muffle) : 0;
+      set(m1.frequency, muffle ? Math.min(nyq, muffle) : nyq, im);
+      set(m2.frequency, muffle ? Math.min(nyq, muffle * 1.6) : nyq, im);
+      // air: 0 = right here (no cut), 1 = across a clearing (~1.9 kHz); a
+      // moving source (`far`) goes duller still as it gets further off
+      const a = on ? clamp01(t.air) : 0;
+      const airHz = a > 0 || far !== 1 ? Math.max(500, Math.min(nyq, (a > 0 ? 16000 * Math.pow(0.12, a) : nyq) / Math.pow(far, on ? 1.1 : 0))) : nyq;
+      set(air.frequency, airHz, im);
+      set(output.gain, 1 - 0.45 * a, im);
+      // the woods: the echo stays put while the direct sound falls away, so
+      // further off more of what you hear is reverb
+      const out = on ? Math.max(0, t.outdoor) : 0;
+      set(wetOut.gain, out * Math.min(2.5, Math.pow(far, 0.6) / live), im);
+    },
+    dispose() { for (const n of all) { try { n.disconnect(); } catch { /* */ } } },
+  };
+}
+
 const outdoorImpulses = new WeakMap<BaseAudioContext, AudioBuffer>();
 function outdoorImpulse(ctx: BaseAudioContext): AudioBuffer {
   const have = outdoorImpulses.get(ctx);
@@ -265,14 +396,9 @@ function outdoorImpulse(ctx: BaseAudioContext): AudioBuffer {
  * lab knobs for how the space sounds.
  */
 export type LoopSpace = {
-  /** distance / reference distance */
+  /** distance / reference distance - the sound's own "in the scene" tuning
+   *  (sfx_<id>_air / outdoor / mono ...) is what it sounds like at 1 */
   far: number;
-  /** reverb level at the reference distance (0 = dry) */
-  reverb: number;
-  /** low-pass cutoff (Hz) at the reference distance; closer = brighter */
-  toneHz: number;
-  /** 1 = fold the recording to mono (one instrument in one spot), 0 = keep its stereo */
-  mono: number;
 };
 
 export function useCampsiteAudioLoop(
@@ -284,6 +410,7 @@ export function useCampsiteAudioLoop(
     fadeMs = DEFAULT_LOOP_FADE_MS,
     panRef,
     timeRef,
+    syncTo,
     spaceRef,
   }: {
     volume: number;
@@ -305,6 +432,11 @@ export function useCampsiteAudioLoop(
     panRef?: MutableRefObject<number>;
     /** Optional playback position, updated from the live media element clock. */
     timeRef?: MutableRefObject<number>;
+    /** Optional: another loop's timeRef to stay locked to - a stem of the same
+     *  song (the gramophone's vocals follow its music). Drift past ~0.15 s is
+     *  corrected with a seek, and while the leader is past the end of THIS
+     *  file the loop holds silent instead of wrapping round on its own. */
+    syncTo?: MutableRefObject<number>;
     /** Optional: make the (panned) loop sit IN the scene - mono point
      *  source, air absorption and outdoor reverb that follow the distance.
      *  Only used together with panRef. */
@@ -314,7 +446,7 @@ export function useCampsiteAudioLoop(
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pannerRef = useRef<StereoPannerNode | null>(null);
   const loopGainRef = useRef<GainNode | null>(null);
-  const spaceNodesRef = useRef<{ mono: GainNode; bypass: GainNode; airLp: BiquadFilterNode; wet: GainNode; dry: GainNode } | null>(null);
+  const spaceNodesRef = useRef<SceneChain | null>(null);
   // 0..1, eased toward `enabled` over fadeMs. A plain ref rather than state:
   // it moves every frame a transition is running, and driving that through
   // React would mean a re-render per frame for no reason - nothing else
@@ -346,48 +478,14 @@ export function useCampsiteAudioLoop(
           const source = ctx.createMediaElementSource(a);
           const panner = ctx.createStereoPanner();
           const gain = ctx.createGain();
-          if (spaceRef) {
-            /*
-             * source -> mono fold -> gain -+-> air low-pass -> pan -> dry -> out
-             *                              +-> reverb send -> convolver -> wet -> out
-             * The reverb isn't panned: it's the woods all around you.
-             */
-            const mono = ctx.createGain();
-            mono.channelCount = 1;
-            mono.channelCountMode = "explicit";
-            mono.channelInterpretation = "speakers";
-            const stereoBypass = ctx.createGain();
-            const airLp = ctx.createBiquadFilter();
-            airLp.type = "lowpass";
-            airLp.Q.value = 0.5;
-            airLp.frequency.value = 4000;
-            const dry = ctx.createGain();
-            const conv = ctx.createConvolver();
-            conv.buffer = outdoorImpulse(ctx);
-            const wet = ctx.createGain();
-            wet.gain.value = 0;
-            const wetTone = ctx.createBiquadFilter();
-            wetTone.type = "lowpass";
-            wetTone.frequency.value = 2600;
-            source.connect(mono);
-            mono.connect(gain);
-            source.connect(stereoBypass);
-            stereoBypass.connect(gain);
-            stereoBypass.gain.value = 0;
-            gain.connect(airLp);
-            airLp.connect(panner);
-            panner.connect(dry);
-            dry.connect(ctx.destination);
-            gain.connect(conv);
-            conv.connect(wetTone);
-            wetTone.connect(wet);
-            wet.connect(ctx.destination);
-            spaceNodesRef.current = { mono, bypass: stereoBypass, airLp, wet, dry };
-          } else {
-            source.connect(gain);
-            gain.connect(panner);
-            panner.connect(ctx.destination);
-          }
+          // source -> gain -> in-the-scene chain -> pan -> out (+ the woods' wet, unpanned)
+          const chain = sceneChain(ctx);
+          source.connect(gain);
+          gain.connect(chain.input);
+          chain.output.connect(panner);
+          chain.wetOut.connect(ctx.destination);
+          panner.connect(ctx.destination);
+          spaceNodesRef.current = chain;
           pannerRef.current = panner;
           loopGainRef.current = gain;
         } catch {
@@ -451,6 +549,11 @@ export function useCampsiteAudioLoop(
         if (gainRef.current > 0 && !playingRef.current) {
           playingRef.current = true;
           if (tune.start > 0 && a.currentTime < tune.start) { try { a.currentTime = tune.start; } catch { /* not seekable yet */ } }
+          // a follower stem coming back in: jump to the leader's place BEFORE
+          // playing, so not even a frame of the old position is heard
+          if (syncTo && Number.isFinite(syncTo.current) && (!Number.isFinite(a.duration) || syncTo.current < a.duration - 0.05)) {
+            try { a.currentTime = syncTo.current; } catch { /* not seekable yet */ }
+          }
           tryPlay();
         }
         a.playbackRate = Math.max(0.05, tune.rate);
@@ -460,14 +563,23 @@ export function useCampsiteAudioLoop(
           if (tune.end > tune.start && a.currentTime >= tune.end) a.currentTime = Math.max(0, tune.start);
           else if (tune.start > 0 && a.currentTime < tune.start - 0.05) a.currentTime = tune.start;
         }
-        const needGraph = IS_IOS || tune.vol > 1 || Math.abs(tune.pan) > 0.001;
+        const needGraph = IS_IOS || tune.vol > 1 || Math.abs(tune.pan) > 0.001 || sceneOn(tune);
         const g = needGraph || elementGraphs.has(a) ? (panRef ? null : graphFor(a)) : null;
-        if (g) g.pan.pan.value = Math.max(-1, Math.min(1, tune.pan));
+        if (g) {
+          g.pan.pan.value = Math.max(-1, Math.min(1, tune.pan));
+          g.chain?.apply(tune);
+        }
         if (timeRef) timeRef.current = Number.isFinite(a.currentTime) ? a.currentTime : 0;
+        let beyondEnd = false;
+        if (syncTo && playingRef.current && Number.isFinite(syncTo.current)) {
+          const want = syncTo.current;
+          beyondEnd = Number.isFinite(a.duration) && want >= a.duration - 0.05;
+          if (!beyondEnd && Math.abs(a.currentTime - want) > 0.15) { try { a.currentTime = want; } catch { /* not seekable yet */ } }
+        }
         // clamped: a liveMultiplier may boost past 1 (the banjo up close),
         // and an <audio> element throws on any volume outside 0..1
         const live = liveMultiplier && Number.isFinite(liveMultiplier.current) ? liveMultiplier.current : 1;
-        const level = Math.max(0, perceptualGain(volume) * live * gainRef.current);
+        const level = beyondEnd ? 0 : Math.max(0, perceptualGain(volume) * live * gainRef.current);
         const gainNode = g?.gain ?? loopGainRef.current;
         if (gainNode && IS_IOS) {
           // iOS: the element's volume is ignored - the whole level goes on the gain
@@ -485,21 +597,10 @@ export function useCampsiteAudioLoop(
           pannerRef.current.pan.value = Math.max(-1, Math.min(1, p));
         }
         const sp = spaceNodesRef.current;
-        if (sp && spaceRef) {
-          const s = spaceRef.current;
-          const far = Math.max(0.15, Number.isFinite(s.far) ? s.far : 1);
-          const t = sp.airLp.context.currentTime;
-          // air soaks up the highs with distance (brighter up close)
-          const hz = Math.max(700, Math.min(16000, (s.toneHz > 0 ? s.toneHz : 4000) / Math.pow(far, 1.1)));
-          sp.airLp.frequency.setTargetAtTime(hz, t, 0.08);
-          // the woods' reverb stays put while the direct sound falls away, so
-          // the further off he is the more of what you hear is the echo
+        if (sp) {
+          const far = spaceRef && Number.isFinite(spaceRef.current.far) ? spaceRef.current.far : 1;
           const liveNow = liveMultiplier && Number.isFinite(liveMultiplier.current) ? liveMultiplier.current : 1;
-          const wetLevel = Math.max(0, s.reverb) * Math.min(2.5, Math.pow(far, 0.6) / Math.max(0.35, liveNow));
-          sp.wet.gain.setTargetAtTime(wetLevel, t, 0.08);
-          const monoOn = (s.mono ?? 1) >= 0.5;
-          sp.mono.gain.value = monoOn ? 1 : 0;
-          sp.bypass.gain.value = monoOn ? 0 : 1;
+          sp.apply(tune, { far, live: spaceRef ? liveNow : 1 });
         }
       }
       raf = requestAnimationFrame(tick);
@@ -509,7 +610,7 @@ export function useCampsiteAudioLoop(
       cancelAnimationFrame(raf);
       offGesture?.();
     };
-  }, [url, volume, enabled, liveMultiplier, fadeMs, panRef, timeRef, spaceRef]);
+  }, [url, volume, enabled, liveMultiplier, fadeMs, panRef, timeRef, syncTo, spaceRef]);
 
 }
 
@@ -563,10 +664,13 @@ export function useCampsiteOneShot(url: string) {
 
   // The lab's per-sound tuning (getSoundTune) is applied here: speed, delay,
   // a start offset into the file, an end point, boost and pan.
-  return useCallback((volume: number, rate = 1): PlayingSound | null => {
+  // onEnded fires once the cue has finished (or was faded, or never started).
+  return useCallback((volume: number, rate = 1, onEnded?: () => void): PlayingSound | null => {
     const t = getSoundTune(url);
     const v = perceptualGain(volume);
-    if (v <= 0 || t.vol <= 0) return null;
+    let ended = false;
+    const finish = () => { if (!ended) { ended = true; onEnded?.(); } };
+    if (v <= 0 || t.vol <= 0) { finish(); return null; }
     const r = (Number.isFinite(rate) && rate > 0 ? rate : 1) * Math.max(0.05, t.rate);
 
     // fast path: decoded buffer on a running context
@@ -580,12 +684,24 @@ export function useCampsiteOneShot(url: string) {
       gain.gain.value = v * Math.max(0, t.vol);
       const pan = ctx.createStereoPanner();
       pan.pan.value = Math.max(-1, Math.min(1, t.pan));
-      src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
+      // in the scene: through its own chain (made per play - one-shots overlap)
+      const chain = sceneOn(t) ? sceneChain(ctx) : null;
+      src.connect(gain);
+      if (chain) {
+        chain.apply(t, { immediate: true });
+        gain.connect(chain.input); chain.output.connect(pan); chain.wetOut.connect(ctx.destination);
+      } else gain.connect(pan);
+      pan.connect(ctx.destination);
       const when = ctx.currentTime + Math.max(0, t.delay);
       const offset = Math.max(0, Math.min(buf.duration - 0.01, t.start));
       if (t.end > t.start) src.start(when, offset, Math.max(0.01, t.end - offset));
       else src.start(when, offset);
-      src.onended = () => { try { src.disconnect(); gain.disconnect(); pan.disconnect(); } catch { /* */ } };
+      src.onended = () => {
+        try { src.disconnect(); gain.disconnect(); pan.disconnect(); } catch { /* */ }
+        // the reverb tails ring on a moment past the source
+        if (chain) window.setTimeout(() => chain.dispose(), 2200);
+        finish();
+      };
       return {
         fade: (ms = 120) => {
           const now = ctx.currentTime;
@@ -599,31 +715,33 @@ export function useCampsiteOneShot(url: string) {
 
     // fallback: an <audio> clone
     const template = templateRef.current;
-    if (!template) { console.warn("[sounds] one-shot not loaded yet", { url }); return null; }
+    if (!template) { console.warn("[sounds] one-shot not loaded yet", { url }); finish(); return null; }
     const node = template.cloneNode(true) as HTMLAudioElement;
     node.volume = Math.min(1, v * Math.min(1, t.vol));
     node.playbackRate = r;
     node.preservesPitch = false;
-    if (IS_IOS || t.vol > 1 || Math.abs(t.pan) > 0.001) {
+    node.addEventListener("ended", finish, { once: true });
+    if (sceneOn(t) || IS_IOS || t.vol > 1 || Math.abs(t.pan) > 0.001) {
       const g = graphFor(node);
       if (g) {
         g.gain.gain.value = IS_IOS ? v * Math.max(0, t.vol) : Math.max(1, t.vol);
         g.pan.pan.value = Math.max(-1, Math.min(1, t.pan));
+        g.chain?.apply(t, { immediate: true });
       }
     }
     const go = () => {
-      if ((node as AudioWithCancel).__cancelled) return;
+      if ((node as AudioWithCancel).__cancelled) { finish(); return; }
       const begin = () => {
         if (t.start > 0) { try { node.currentTime = t.start; } catch { /* not seekable yet */ } }
-        void node.play().catch((err: unknown) => console.warn("[sounds] one-shot BLOCKED", { url, error: String(err), gestureUnlocked }));
-        if (t.end > t.start) window.setTimeout(() => node.pause(), ((t.end - Math.max(0, t.start)) / r) * 1000);
+        void node.play().catch((err: unknown) => { console.warn("[sounds] one-shot BLOCKED", { url, error: String(err), gestureUnlocked }); finish(); });
+        if (t.end > t.start) window.setTimeout(() => { node.pause(); finish(); }, ((t.end - Math.max(0, t.start)) / r) * 1000);
       };
       if (t.start > 0 && node.readyState < 1) node.addEventListener("loadedmetadata", begin, { once: true });
       else begin();
     };
     if (t.delay > 0) window.setTimeout(go, t.delay * 1000);
     else go();
-    return { fade: (ms = 120) => fadeOutAudio(node, ms) };
+    return { fade: (ms = 120) => { fadeOutAudio(node, ms); window.setTimeout(finish, ms); } };
   }, [url]);
 }
 

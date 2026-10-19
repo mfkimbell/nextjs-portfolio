@@ -40,3 +40,15 @@ export type BearVoiceState = {
 };
 
 export type BearVoiceStateRef = MutableRefObject<BearVoiceState>;
+
+/**
+ * Something that just happened in the camp that the bears should know about.
+ * The site sends the id; the bear coordinator (agent/src/scene-events.ts) owns
+ * what it means - the line the bears say about it, and what they remember of
+ * it in later answers. Keep the two lists in step.
+ *
+ *   fish.burned    - the visitor threw the fish in the fire (sent once the
+ *                    bears have finished watching it burn)
+ *   tent.finished  - the last of the four voices from inside the tent
+ */
+export type SceneEventId = "fish.burned" | "tent.finished";

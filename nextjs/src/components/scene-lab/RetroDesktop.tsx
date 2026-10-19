@@ -844,6 +844,7 @@ const SS = 3;
 const FPS = 24;
 
 export function useRetroDesktopTexture(stateRef: React.MutableRefObject<PcState>, lit = false) {
+  const maxAnisotropy = useThree((st) => st.gl.capabilities.getMaxAnisotropy());
   const litRef = useRef(lit);
   litRef.current = lit;
   const canvas = useMemo(() => {
@@ -855,10 +856,15 @@ export function useRetroDesktopTexture(stateRef: React.MutableRefObject<PcState>
   const texture = useMemo(() => {
     const t = new THREE.CanvasTexture(canvas);
     t.colorSpace = THREE.SRGBColorSpace;
-    t.minFilter = THREE.LinearFilter;
+    // Mipmapped: from across the cabin the 960x768 desktop lands on ~30 px of
+    // screen, and plain linear minification just picked a few wallpaper texels
+    // (the icons and windows vanished and the screen read as blank teal).
+    t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
     t.magFilter = THREE.LinearFilter;
+    t.anisotropy = maxAnisotropy;
     return t;
-  }, [canvas]);
+  }, [canvas, maxAnisotropy]);
   const images = useMemo<IconImages>(() => ({
     github: plainImage(PC_GITHUB_LOGO),
     linkedin: plainImage(PC_LINKEDIN_LOGO),

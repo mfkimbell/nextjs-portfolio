@@ -1029,9 +1029,28 @@ export function CabinCat({
     action.play();
     action.time = Math.random() * clip.duration;
     mixer.update(0);
-    // an invisible box round the posed cat to pet - steadier to hit than
-    // raycasting the skinned mesh itself
-    model.updateWorldMatrix(true, true);
+    // the invisible hit box is measured a couple of frames from now (below)
+    measureHitIn.current = 2;
+    return () => {
+      action.stop();
+      mixer.uncacheRoot(model);
+    };
+  }, [model, mixer, gltf.animations, rig]);
+
+  /*
+   * An invisible box round the posed cat to pet - steadier to hit than
+   * raycasting the skinned mesh itself. Measured only once the cat has been
+   * through a render or two: at mount the skinned meshes' bind matrices still
+   * belong to wherever the clone was made, so the box came out in the wrong
+   * frame entirely (under the floor, a fifth the size) and nothing could
+   * click or hover the cats.
+   */
+  const measureHitIn = useRef(-1);
+  useFrame(() => {
+    if (measureHitIn.current < 0) return;
+    if (measureHitIn.current-- > 0) return;
+    model.updateWorldMatrix(true, false);
+    model.updateMatrixWorld(true);
     const inv = new THREE.Matrix4().copy(model.matrixWorld).invert();
     const box = new THREE.Box3();
     const v = new THREE.Vector3();
@@ -1049,11 +1068,7 @@ export function CabinCat({
       const size = box.getSize(new THREE.Vector3()).multiplyScalar(1.08);
       setHit({ center: box.getCenter(new THREE.Vector3()), size });
     }
-    return () => {
-      action.stop();
-      mixer.uncacheRoot(model);
-    };
-  }, [model, mixer, gltf.animations, rig]);
+  });
 
   // ---- petting state
   const pet = useRef({

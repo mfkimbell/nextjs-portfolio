@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BearVoiceState, BearVoiceStateRef } from "@/lib/bearVoiceState";
+import type { BearVoiceState, BearVoiceStateRef, SceneEventId } from "@/lib/bearVoiceState";
 import { applyLipSyncFrame, createLipSyncAnalyzer } from "@/lib/bearLipSync";
 
 type VoiceStatus = "idle" | "connecting" | "active" | "disconnected" | "error";
@@ -39,6 +39,9 @@ export type BearVoiceAgent = {
   visitorSpeech?: { text: string; final: boolean } | null;
   start: () => Promise<void>;
   reactToFishFire: () => void;
+  /** Tell the bears something just happened in the camp (LiveKit): they say
+   *  their line about it, and it is part of what they know from then on. */
+  notifySceneEvent?: (event: SceneEventId) => void;
   requestMicrophone: () => Promise<void>;
   beginConversation?: (opts?: { microphone?: boolean }) => Promise<boolean>;
   sendTextMessage?: (message: string) => Promise<boolean>;

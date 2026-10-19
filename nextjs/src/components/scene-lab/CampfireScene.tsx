@@ -22,7 +22,7 @@ import { roles } from "@/lib/experience";
 import { projects } from "@/lib/projects";
 import { SKILLS, skillIcon } from "@/lib/skills";
 import { Canvas, createPortal, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Clone, OrbitControls, PerformanceMonitor, Stars, useAnimations, useGLTF, useProgress, useTexture } from "@react-three/drei";
+import { Clone, Html, OrbitControls, PerformanceMonitor, Stars, useAnimations, useGLTF, useProgress, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
@@ -38,7 +38,9 @@ import { BEAR_DANCE_EVENT, bearDanceState, loadBearDanceClip } from "@/lib/bearD
 import { BEAR_PHONE_EVENT, bearPhoneState, loadBearPhone, PHONE_IN_HAND_AT, PHONE_TOSS_AT, type BearPhoneAssets } from "@/lib/bearPhone";
 import { locationShown } from "@/components/scene-lab/sceneActivity";
 import { perfStats, SCENE_READY_EVENT } from "@/lib/perfStats";
-import type { BearVoiceStateRef } from "@/lib/bearVoiceState";
+import type { BearVoiceStateRef, SceneEventId } from "@/lib/bearVoiceState";
+import tentVoicesJson from "@/config/tentVoices.json";
+import TentDialogue from "@/components/bear-dialogue/TentDialogue";
 import { clampSpring, stepSpring } from "@/lib/bear-animation";
 import { getBanjoFingerPhase } from "@/lib/banjo-performance";
 
@@ -80,8 +82,25 @@ const CRT_MUSIC_URL = "/sound/CRT music.mp3";
 const AXE_SPIN_URL = "/sound2/axe-spinning-in-air-sound.mp3";
 const AXE_HIT_WOOD_URL = "/sound2/axehitwood.mp3";
 const WOOD_ROLLING_URL = "/sound2/wood-rolling-needs-to-be-looped.mp3";
-const GRAMOPHONE_SONG_URL = "/sound2/gramaphone_song.mp3";
+/*
+ * The gramophone's song as two stems that line up from 0:00 (together they
+ * are the old sound2/gramaphone_song.mp3 mix): the music, which owns the clock,
+ * and the vocals, which follow it. Under both, the record's crackle.
+ * Click the gramophone: just the vocals cut while the interruption plays (the
+ * music and crackle carry on), then the singer comes back in at wherever the
+ * song has reached, still in sync.
+ */
+const GRAMOPHONE_MUSIC_URL = "/sound2/bear_necessities_track.mp3";
+const GRAMOPHONE_LYRICS_URL = "/sound2/singing_bear_lyrics.mp3";
+const GRAMOPHONE_CRACKLE_URL = "/sound2/record%20scratch.mp3";
+const GRAMOPHONE_INTERRUPTION_URL = "/sound2/gramaphone_interruption.mp3";
+/** where the vocals stem is (it follows the music's gramophoneSongClock) */
+const gramophoneLyricsClock = { current: 0 };
 const PC_STARTUP_URL = "/sound2/scene3computerstart.mp3";
+/** Voices from inside the A-frame tent: one per click, in order, each with a
+ *  speech bubble over the tent. Audio and words both live in tentVoices.json.
+ *  After the last one the tent goes quiet (and stops being clickable) for good. */
+const TENT_VOICES = tentVoicesJson as ReadonlyArray<{ audio: string; speaker: string; text: string }>;
 /** Gramophone volume multiplier, eased toward a lower level while the camera
  *  is in close on the cats or the computer (written in CampfireWorld's frame
  *  loop, read by the gramophone's audio loop). */
@@ -609,7 +628,13 @@ const LAPTOP_URL = "/bear/1/Laptop%20by%20Kenney%20-%20GnbwSUiVty.glb";
 // baseScale 0.16 puts the body at ~1.75 x 1.53 x 2.0 m, matching the height of
 // the low-poly tent already pitched across camp; the anchor lifts min-Y to y=0.
 // Original file kept alongside as "Tent by Quaternius - 5Q7qIrfDxA.glb".
-const TENT_AFRAME_URL = "/bear/1/tent_a_frame.glb";
+/** The same tent plus the hand from inside it (public/hand.glb, skinned tan
+ *  in Blender - blender/tent_hand.blend). One 4.6 s clip, timed to tent line 2:
+ *  the fingers curl round the left door flap's edge with the hand's own grip
+ *  animation, drag it aside (a "Pull" morph on the tent), tug twice, let go. */
+const TENT_AFRAME_HAND_URL = "/bear/1/tent_a_frame_hand.glb";
+/** which tent line (0-based) the hand grabs the flap during */
+const TENT_HAND_LINE = 1;
 const OLD_BEAR_TABLE_URL = "/bear/3/Table%20by%20Hunter%20Paramore%20-%207qAyGZnerYt.glb";
 const OLD_BEAR_CHAIR_URL = "/bear/3/Chair%20by%20Quaternius%20-%20iMNqRzPwwe.glb";
 const OLD_BEAR_COMPUTER_URL = "/laptop.glb";
@@ -4515,6 +4540,49 @@ function GLBModel({ url }: { url: string }) {
       }
     });
   }, [model]);
+  return <primitive object={model} />;
+}
+
+/**
+ * The A-frame tent with the hand that reaches out of it. Plays its one clip
+ * from the start each time `playing` turns on; otherwise the clip sits on its
+ * first frame (flap at rest) and the hand is hidden.
+ */
+function TentWithHand({ url, playing }: { url: string; playing: boolean }) {
+  const gltf = useGLTF(url) as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
+  const model = useMemo(() => skeletonClone(gltf.scene) as THREE.Group, [gltf.scene]);
+  const mixer = useMemo(() => new THREE.AnimationMixer(model), [model]);
+  const action = useMemo(() => {
+    const clip = gltf.animations[0];
+    if (!clip) return null;
+    const a = mixer.clipAction(clip);
+    a.setLoop(THREE.LoopOnce, 1);
+    a.clampWhenFinished = true;
+    return a;
+  }, [mixer, gltf.animations]);
+  const hand = useMemo(() => model.getObjectByName("HandRig") ?? null, [model]);
+  useEffect(() => {
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; }
+    });
+  }, [model]);
+  // rest: frame 0 applied, hand away
+  useEffect(() => {
+    if (!action) return;
+    if (playing) {
+      action.reset().play();
+      if (hand) hand.visible = true;
+    } else {
+      action.reset().play(); action.paused = true; mixer.update(0);
+      if (hand) hand.visible = false;
+    }
+  }, [playing, action, mixer, hand]);
+  useEffect(() => () => { mixer.stopAllAction(); }, [mixer]);
+  useFrame((_, dt) => {
+    if (!action || action.paused) return;
+    mixer.update(Math.min(dt, 0.1));
+  });
   return <primitive object={model} />;
 }
 
@@ -10510,6 +10578,8 @@ function Animal({
     const rots: { bone: THREE.Object3D; interp: THREE.Interpolant }[] = [];
     // scale: the clips stretch the arms 25% (paws kept their size) so the moves read
     const scales: { bone: THREE.Object3D; interp: THREE.Interpolant }[] = [];
+    // the dance raises the shoulder sockets to where a person's are, so the arm moves read
+    const poss: { bone: THREE.Object3D; interp: THREE.Interpolant }[] = [];
     let centerPos: { bone: THREE.Object3D; interp: THREE.Interpolant; sitStart: THREE.Vector3 } | null = null;
     const sitClip = gltf.animations.find((c) => c.name === "sit_log");
     for (const track of clip.tracks) {
@@ -10524,6 +10594,7 @@ function Animal({
         for (let i = 0; i < v.length; i++) if (Math.abs(v[i] - 1) > 1e-3) { flat = false; break; }
         if (!flat) scales.push({ bone, interp: interpolantOf(track) });
       }
+      if (prop === "position" && /^shoulder_[LR]$/.test(boneName)) poss.push({ bone, interp: interpolantOf(track) });
       if (prop === "position" && boneName === "center") {
         // move by how far the clip carries "center" from the sitting pose,
         // so a bear whose rig sits a little differently still stands right
@@ -10532,7 +10603,7 @@ function Animal({
         centerPos = { bone, interp: interpolantOf(track), sitStart };
       }
     }
-    return { clip, rots, scales, centerPos: centerPos as typeof centerPos, food: bones.get("Food") ?? null, handR: bones.get("hand_R") ?? null };
+    return { clip, rots, scales, poss, centerPos: centerPos as typeof centerPos, food: bones.get("Food") ?? null, handR: bones.get("hand_R") ?? null };
   }, [model, gltf.animations]);
   const danceRig = useMemo(() => (dancer && danceClip ? bindClip(danceClip) : null), [dancer, danceClip, bindClip]);
   // the phone call only moves the arms and the head - they stay sitting on their logs
@@ -10592,6 +10663,12 @@ function Animal({
       if (w <= 0.0005) continue;
       danceV.fromArray(interp.evaluate(t) as unknown as number[]);
       bone.scale.lerp(danceV, w);
+    }
+    for (const { bone, interp } of rig.poss) {
+      save(bone);
+      if (w <= 0.0005) continue;
+      danceV.fromArray(interp.evaluate(t) as unknown as number[]);
+      bone.position.lerp(danceV, w);
     }
     if (rig.centerPos && w > 0.0005) {
       const { bone, interp, sitStart } = rig.centerPos;
@@ -11032,8 +11109,9 @@ function FloppingFish({
     if (phase === "gone") startReturn();
   }, [respawn, phase, startReturn]);
 
-  // Timed respawn is opt-in: fishRespawnDelay 0 means the fish only comes back
-  // when the tent is clicked. (The lab's return preview uses the same path.)
+  // Timed respawn is opt-in: fishRespawnDelay 0 means the fish stays gone (the
+  // tent used to send it back; it has its own voices now). The lab's return
+  // preview uses the same path.
   useEffect(() => {
     if (phase !== "gone") return;
     const delay = returnAfterThrow.current ? 0.6 : config.fishRespawnDelay;
@@ -12640,7 +12718,7 @@ function CabinSector({ config, onSelect, pc, onlyBears, catFocus, catSleepFocus,
           lantern 3 - placed in Blender clear of the wall, the post and the
           lanterns, horn turned to scene 3's camera. One object: drag it and
           the table comes too. */}
-      <Selectable name="cabin_gramophone" onSelect={onSelect} config={config} basePosition={[0.85, 0.04, -1.8]} baseRotationY={THREE.MathUtils.degToRad(205)}>
+      <Selectable name="cabin_gramophone" onSelect={onSelect} config={config} interactive basePosition={[0.85, 0.04, -1.8]} baseRotationY={THREE.MathUtils.degToRad(205)}>
         <SafeAsset label="gramophone">
           <CabinGramophone
             tune={{
@@ -14040,6 +14118,7 @@ function CampfireWorld({
   cameraLivePoseRef,
   bearVoiceRef,
   onFishImpact,
+  onSceneEvent,
   chatChoice,
 }: {
   config: CampfireSceneConfig;
@@ -14106,6 +14185,8 @@ function CampfireWorld({
   /** Live remote-audio state for the two scene-one bears. */
   bearVoiceRef?: BearVoiceStateRef;
   onFishImpact?: () => void;
+  /** Something the bears should react to happened (see SceneEventId). */
+  onSceneEvent?: (event: SceneEventId) => void;
   /** Site: before the bears start, arrows over the telephone, microphone and
    *  typewriter ask how the visitor wants to talk; onChoose gets the pick. */
   chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void; /** the telephone / mic / typewriter can be clicked to pick or switch channel (arrows or not) */ clickable?: boolean };
@@ -14150,12 +14231,34 @@ function CampfireWorld({
   const [woodPlay, setWoodPlay] = useState(0);
   const [woodEmpty, setWoodEmpty] = useState(false);
   const handleWoodEmpty = useCallback(() => setWoodEmpty(true), []);
-  // Fish thrown in the fire -> the tent becomes clickable, and a click on it
-  // flops a new fish out and back to the original spot.
-  const [fishGone, setFishGone] = useState(false);
-  const [fishRespawn, setFishRespawn] = useState(0);
-  const handleFishGone = useCallback(() => setFishGone(true), []);
-  const handleFishBack = useCallback(() => setFishGone(false), []);
+  // The A-frame tent: each click plays the next voice from inside it, one at
+  // a time (a click while one is still talking does nothing). When the last
+  // one finishes, the bears answer it and the tent is done.
+  // (Hooks can't run in a loop; the JSON is expected to list exactly four.)
+  const tentVoices = [
+    useCampsiteOneShot(TENT_VOICES[0].audio),
+    useCampsiteOneShot(TENT_VOICES[1].audio),
+    useCampsiteOneShot(TENT_VOICES[2].audio),
+    useCampsiteOneShot(TENT_VOICES[3].audio),
+  ];
+  const [tentLine, setTentLine] = useState(0);
+  // the line playing right now (its index), or null - drives the bubble too
+  const [tentTalking, setTentTalking] = useState<number | null>(null);
+  const tentDone = tentLine >= tentVoices.length;
+  const playTentLine = useCallback(() => {
+    if (tentTalking !== null || tentDone) return;
+    const line = tentLine;
+    const last = line === tentVoices.length - 1;
+    setTentTalking(line);
+    setTentLine(line + 1);
+    tentVoices[line](tipSoundVolume, 1, () => {
+      setTentTalking(null);
+      if (last) onSceneEvent?.("tent.finished");
+    });
+  // tentVoices are stable per url
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tentTalking, tentDone, tentLine, tipSoundVolume, onSceneEvent]);
+  const tentBubble = tentTalking === null ? null : { ...TENT_VOICES[tentTalking], key: tentTalking };
   // Logs hitting the ground make no knock of their own - the pile only plays
   // the rolling loop (it borrowed the fishing rod's clatter before).
   const handleWoodLand = useCallback(() => {}, []);
@@ -14272,10 +14375,9 @@ function CampfireWorld({
         onFireWhooshSound?.();
       }
     }
-    // after the fish is in the fire, the tent sends out another one
-    if (name === "campfire_tent" && fishGone && !editing && config.fishReturnOn >= 0.5) {
-      setFishGone(false);
-      setFishRespawn((n) => n + 1);
+    // the tent: the next voice from inside it
+    if (name === "campfire_tent" && !editing) {
+      if (!tentDone) playTentLine();
       return;
     }
     // knock-overs (the site only - in the lab a click selects them to move)
@@ -14303,7 +14405,7 @@ function CampfireWorld({
       if (name === "campfire_wood_pile" && !woodEmpty && !editing) { setWoodPlay((n) => n + 1); return; }
     }
     onSelectProp(name);
-  }, [onSelectProp, fireBurstOn, onFireWhooshSound, crittersOn, act, bagDown, hikeBagDown, woodEmpty, fishGone, config.fishReturnOn, editing, chatChoice, rodPlay, knock]);
+  }, [onSelectProp, fireBurstOn, onFireWhooshSound, crittersOn, act, bagDown, hikeBagDown, woodEmpty, tentDone, playTentLine, editing, chatChoice, rodPlay, knock]);
 
   /*
    * Click the tube to pull the camera in; the screen's last plate lets it go.
@@ -15165,19 +15267,25 @@ function CampfireWorld({
             name="campfire_tent"
             onSelect={onSelect}
             config={config}
-            /* Only an affordance once the fish has been thrown in the fire:
-               then a click flops a new fish out of it (see FloppingFish).
-               It stays selectable so the lab can still drag it. */
-            interactive={fishGone && !editing && config.fishReturnOn >= 0.5}
+            /* Clickable until its four voices have all played (and not while
+               one is talking). It stays selectable so the lab can still drag it. */
+            interactive={!tentDone && tentTalking === null && !editing}
             basePosition={[4.6, 0, -4.2]}
             baseRotationY={-0.83}
             baseScale={0.16}
           >
             <group position={[0, 0.176, 0]}>
               <SafeAsset label="a-frame tent">
-                <GLBModel url={TENT_AFRAME_URL} />
+                <TentWithHand url={TENT_AFRAME_HAND_URL} playing={tentTalking === TENT_HAND_LINE} />
               </SafeAsset>
             </group>
+            {/* who's talking in there - above the ridge (the tent is ~9.5
+                source units tall before baseScale) */}
+            <Html position={[0, 13, 0]} center zIndexRange={[30, 20]} style={{ pointerEvents: "none" }}>
+              <div style={{ transform: "translateY(-50%)" }}>
+                <TentDialogue line={tentBubble} config={config} />
+              </div>
+            </Html>
           </Selectable>
           {/* Camera on tripod. Source is ~3.8 m tall sitting on y=0, so
               baseScale=0.26 lands it around 1 m. */}
@@ -15555,9 +15663,6 @@ function CampfireWorld({
                 onImpact={handleFishImpact}
                 onSelect={onSelect}
                 replayOnTune={editing || panel == null}
-                respawn={fishRespawn}
-                onGone={handleFishGone}
-                onBack={handleFishBack}
               />
             </SafeAsset>
           )}
@@ -15699,6 +15804,7 @@ export default function CampfireScene({
   cameraLivePoseRef,
   bearVoiceRef,
   onFishImpact,
+  onSceneEvent,
   chatChoice,
 }: {
   config: CampfireSceneConfig;
@@ -15735,6 +15841,8 @@ export default function CampfireScene({
   /** Optional because the scene lab has no voice client. */
   bearVoiceRef?: BearVoiceStateRef;
   onFishImpact?: () => void;
+  /** Something the bears should react to happened (see SceneEventId). */
+  onSceneEvent?: (event: SceneEventId) => void;
   /** Site: before the bears start, arrows over the telephone, microphone and
    *  typewriter ask how the visitor wants to talk; onChoose gets the pick. */
   chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void; /** the telephone / mic / typewriter can be clicked to pick or switch channel (arrows or not) */ clickable?: boolean };
@@ -15846,13 +15954,40 @@ export default function CampfireScene({
     enabled: panel === LOCATION_CABIN,
   });
   // The porch gramophone's record, playing whenever you're at the cabin.
-  useCampsiteAudioLoop(GRAMOPHONE_SONG_URL, {
-    volume: master * clampUnit(Number.isFinite(config.gramophoneSongVolume) ? config.gramophoneSongVolume : 0.35),
-    enabled: panel === LOCATION_CABIN,
-    fadeMs: 1200,
-    liveMultiplier: gramophoneDuck,
-    timeRef: gramophoneSongClock,
+  // A click on it (see onSelect) silences only the SINGER while the
+  // interruption plays: the music and the needle's crackle carry on, and the
+  // vocals come back in at wherever the song has got to (they follow the
+  // music's clock), so the two stems stay in sync.
+  const [gramophoneInterrupted, setGramophoneInterrupted] = useState(false);
+  // after an interruption the singer slips back in quickly, not the slow
+  // swell used for walking up to the cabin
+  const [lyricsResuming, setLyricsResuming] = useState(false);
+  useEffect(() => { setLyricsResuming(false); }, [panel]);
+  const gramophoneVolume = master * clampUnit(Number.isFinite(config.gramophoneSongVolume) ? config.gramophoneSongVolume : 0.35);
+  const musicOn = panel === LOCATION_CABIN;
+  const lyricsOn = musicOn && !gramophoneInterrupted;
+  const lyricsFadeMs = gramophoneInterrupted ? 120 : lyricsResuming ? 300 : 1200;
+  useCampsiteAudioLoop(GRAMOPHONE_MUSIC_URL, {
+    volume: gramophoneVolume, enabled: musicOn, fadeMs: 1200,
+    liveMultiplier: gramophoneDuck, timeRef: gramophoneSongClock,
   });
+  useCampsiteAudioLoop(GRAMOPHONE_LYRICS_URL, {
+    volume: gramophoneVolume, enabled: lyricsOn, fadeMs: lyricsFadeMs,
+    liveMultiplier: gramophoneDuck, timeRef: gramophoneLyricsClock, syncTo: gramophoneSongClock,
+  });
+  // the needle on the record: under the song, and on through the interruption
+  useCampsiteAudioLoop(GRAMOPHONE_CRACKLE_URL, {
+    volume: gramophoneVolume * 0.6, enabled: panel === LOCATION_CABIN, fadeMs: 1200,
+    liveMultiplier: gramophoneDuck,
+  });
+  const playGramophoneInterruption = useCampsiteOneShot(GRAMOPHONE_INTERRUPTION_URL);
+  const interruptGramophone = () => {
+    if (gramophoneInterrupted) return;
+    setGramophoneInterrupted(true);
+    const resume = () => { setLyricsResuming(true); setGramophoneInterrupted(false); };
+    const sound = playGramophoneInterruption(master * clampUnit(Number.isFinite(config.gramophoneInterruptionVolume) ? config.gramophoneInterruptionVolume : 0.8), 1, resume);
+    if (!sound) resume();
+  };
   // -1..1, written every frame inside the canvas (CampfireAnimals) from the
   // banjo bear's live head position relative to the camera - makes the loop
   // genuinely space-aware instead of centered: orbit around him and he
@@ -15866,10 +16001,9 @@ export default function CampfireScene({
   // Puts the banjo IN the scene rather than in your headphones: mono at
   // Smokey's spot, duller with distance, and the woods' reverb around it.
   // `far` is written every frame by CampfireAnimals; the knobs come from the lab.
-  const banjoSpaceRef = useRef<LoopSpace>({ far: 1, reverb: 0.35, toneHz: 3200, mono: 1 });
-  banjoSpaceRef.current.reverb = Number.isFinite(config.banjoReverb) ? config.banjoReverb : 0.35;
-  banjoSpaceRef.current.toneHz = Number.isFinite(config.banjoTone) ? config.banjoTone : 3200;
-  banjoSpaceRef.current.mono = Number.isFinite(config.banjoMono) ? config.banjoMono : 1;
+  // its in-the-scene sound (mono, air, woods echo) is the banjo's own entry in
+  // the lab's "Every sound" list; this only carries how far off he is right now
+  const banjoSpaceRef = useRef<LoopSpace>({ far: 1 });
   useCampsiteAudioLoop(BANJO_URL_SOUND, {
     volume: master * clampUnit(config.banjoVolume),
     enabled: panel === LOCATION_CAMPFIRE,
@@ -15952,6 +16086,8 @@ export default function CampfireScene({
   // here for the same reason (its own sound set already covers it).
   const selectWithSound = (name: string) => {
     if (editing && name && !name.startsWith("crt_")) playClickCue();
+    // the site only: in the lab a click selects the gramophone to move it
+    if (name === "cabin_gramophone" && !editing) { interruptGramophone(); return; }
     selectHandler(name);
   };
 
@@ -16027,6 +16163,7 @@ export default function CampfireScene({
         cameraLivePoseRef={cameraLivePoseRef}
         bearVoiceRef={bearVoiceRef}
         onFishImpact={onFishImpact}
+        onSceneEvent={onSceneEvent}
         chatChoice={chatChoice}
       />
       <PerfProbe onSample={perfOn ? setPerf : () => {}} />
@@ -16075,6 +16212,7 @@ idlePreload(CONTROLLER_URL);
 idlePreload(GLASSES_URL);
 idlePreload(SMOKEY_HAT_URL);
 idlePreload(TENT_URL);
+idlePreload(TENT_AFRAME_HAND_URL);
 idlePreload(HONEY_WAND_URL);
 idlePreload(WOOD_PILE_URL);
 idlePreload(FISHING_ROD_URL);
