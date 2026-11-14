@@ -290,8 +290,24 @@ export const useLiveKitBearAgent = (
         audioElementsRef.current.push(element);
         console.log("LiveKit remote audio track attached", { participant: participant.identity, trackSid: track.sid });
         void element.play().catch((playError: unknown) => {
+          // livekit-client's attach() starts its own play() on this element a
+          // moment earlier, so ours often lands as an AbortError ("interrupted
+          // by a new play request") while the audio plays fine. Only a real
+          // autoplay block matters, and that one is retried on the visitor's
+          // next click or key press instead of making them click Talk again.
+          if (!(playError instanceof DOMException) || playError.name !== "NotAllowedError") {
+            console.debug("LiveKit audio element play() interrupted (harmless)", playError);
+            return;
+          }
           console.warn("LiveKit audio playback was blocked", playError);
-          setError("LiveKit audio playback was blocked by the browser. Click Talk again to unlock audio.");
+          setError("Your browser paused the bears' audio. Click anywhere to hear them.");
+          const unlock = () => {
+            void startAudioSafely(room).catch(() => {});
+            void getSharedAudioContext()?.resume().catch(() => {});
+            void element.play().then(() => setError(null)).catch(() => {});
+          };
+          window.addEventListener("pointerdown", unlock, { once: true });
+          window.addEventListener("keydown", unlock, { once: true });
         });
         monitorAudioTrack(track, participant.identity);
       });

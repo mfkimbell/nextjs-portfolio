@@ -8,7 +8,7 @@ import { perfStats } from "@/lib/perfStats";
  * TEMPORARY performance readout for measuring phones. Sits above everything
  * (title screen included) and measures the page itself with its own frame
  * counter, so the start-up stalls show up even while the 3D scene is still
- * loading. ?noperf hides it.
+ * loading. Off on the live site: add ?perf to the URL to show it.
  */
 const T0 = typeof performance !== "undefined" ? performance.now() : 0;
 
@@ -19,7 +19,7 @@ export default function PerfOverlay() {
   const { progress, loaded, total } = useProgress();
 
   useEffect(() => {
-    setShow(!new URLSearchParams(window.location.search).has("noperf"));
+    setShow(new URLSearchParams(window.location.search).has("perf"));
   }, []);
 
   useEffect(() => {
@@ -57,7 +57,7 @@ export default function PerfOverlay() {
       <div className="text-white">{p.scene || "starting"} &middot; {p.gfx || "?"} &middot; up {up.toFixed(0)}s</div>
       <div>{f.fps.toFixed(0)} fps &middot; avg {f.avg.toFixed(1)}ms &middot; worst {f.worstShown.toFixed(0)}ms</div>
       <div>{f.long} freezes over 100ms</div>
-      <div>loading {Math.round(progress)}% ({loaded}/{total}) &middot; {p.prewarmedAt ? `ready at ${((p.prewarmedAt - T0) / 1000).toFixed(1)}s` : "not ready yet"}</div>
+      <div>loading {Number.isFinite(progress) ? Math.min(100, Math.round(progress)) : 100}% ({loaded}/{total}) &middot; {p.prewarmedAt ? `ready at ${((p.prewarmedAt - T0) / 1000).toFixed(1)}s` : "not ready yet"}</div>
       {fresh ? (
         <>
           <div>{p.calls} calls &middot; {(p.tris / 1000).toFixed(0)}k tris &middot; {p.progs} shaders</div>
