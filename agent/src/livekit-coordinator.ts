@@ -9,6 +9,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { correctionFactById, correctionFacts } from "./correction-facts/index.js";
 import { sceneEventById } from "./scene-events/index.js";
+import { disableLocalInference } from "./local-inference/index.js";
 import { applyFactCorrection, buildSpeechCommands, removeRepeatedSentences, type PlannedExchange, type SpeechCommand } from "./livekit-orchestrator/index.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -436,4 +437,7 @@ export default defineAgent({
   },
 });
 
-cli.runApp(new ServerOptions({ agent: fileURLToPath(import.meta.url), agentName: "bear-coordinator" }));
+// The coordinator does listen, so it keeps the end-of-turn model unless
+// LIVEKIT_LOCAL_EOT=off (falls back to the STT's own endpointing).
+if (process.env.LIVEKIT_LOCAL_EOT === "off") disableLocalInference();
+cli.runApp(new ServerOptions({ agent: fileURLToPath(import.meta.url), agentName: "bear-coordinator", numIdleProcesses: Math.max(1, Number(process.env.LIVEKIT_IDLE_PROCESSES) || 1), port: Number(process.env.LIVEKIT_HEALTH_PORT) || undefined }));

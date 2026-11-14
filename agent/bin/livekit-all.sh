@@ -3,9 +3,9 @@
 # the rest and exit too, so Heroku restarts the whole dyno cleanly.
 set -u
 cd "$(dirname "$0")/.."
-LIVEKIT_BEAR_ID=smokey LIVEKIT_AGENT_NAME=smokey-agent node dist/livekit-agent.js start & smokey=$!
-LIVEKIT_BEAR_ID=maple LIVEKIT_AGENT_NAME=maple-agent node dist/livekit-agent.js start & maple=$!
-node dist/livekit-coordinator.js start & coordinator=$!
+LIVEKIT_HEALTH_PORT=8081 LIVEKIT_BEAR_ID=smokey LIVEKIT_AGENT_NAME=smokey-agent node dist/livekit-agent.js start & smokey=$!
+LIVEKIT_HEALTH_PORT=8082 LIVEKIT_BEAR_ID=maple LIVEKIT_AGENT_NAME=maple-agent node dist/livekit-agent.js start & maple=$!
+LIVEKIT_HEALTH_PORT=8083 node dist/livekit-coordinator.js start & coordinator=$!
 stop() { kill "$smokey" "$maple" "$coordinator" 2>/dev/null; wait; }
 trap 'stop; exit 0' TERM INT
 wait -n

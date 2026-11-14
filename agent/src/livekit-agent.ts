@@ -5,6 +5,7 @@ import { type AudioFrame, RoomEvent } from "@livekit/rtc-node";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pitchShiftFrames } from "./livekit-audio/index.js";
+import { disableLocalInference } from "./local-inference/index.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(sourceDirectory, "../../nextjs/.env") });
@@ -146,4 +147,9 @@ export default defineAgent({
   },
 });
 
-cli.runApp(new ServerOptions({ agent: fileURLToPath(import.meta.url), agentName }));
+// The bears only speak lines they are handed, so they never need the
+// end-of-turn model (see local-inference).
+disableLocalInference();
+// One spare process per worker (LiveKit defaults to 4, and treats 0 as "default"),
+// and an optional health port so several workers can share one dyno.
+cli.runApp(new ServerOptions({ agent: fileURLToPath(import.meta.url), agentName, numIdleProcesses: Math.max(1, Number(process.env.LIVEKIT_IDLE_PROCESSES) || 1), port: Number(process.env.LIVEKIT_HEALTH_PORT) || undefined }));
