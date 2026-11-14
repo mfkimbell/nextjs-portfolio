@@ -43,7 +43,7 @@ export default function TentDialogue({ line, config }: { line: { speaker: string
           animate={{ opacity: 1, scale: 1, y: 0, rotate: -2 }}
           exit={animate ? { opacity: 0, scale: 0.4, y: 12, transition: { duration: 0.18 } } : { opacity: 0, transition: { duration: 0 } }}
           transition={animate ? { type: "spring", stiffness: Math.max(120, config.bearDialoguePopStiffness), damping: 16, mass: 0.7 } : { duration: 0 }}
-          style={{ "--bear-dialogue-font": font.style.fontFamily, width: `${widthRem}rem`, containerType: "inline-size", transformOrigin: "bottom center" } as CSSProperties}
+          style={{ "--bear-dialogue-font": font.style.fontFamily, width: `calc(${widthRem} * min(1rem, 2.4dvh))` /* shrinks on short screens, like the bears' bubbles */, containerType: "inline-size", transformOrigin: "bottom center" } as CSSProperties}
           className={`${font.className} bear-dialogue-font pointer-events-none select-none text-stone-700`}
         >
           <DialoguePlaque

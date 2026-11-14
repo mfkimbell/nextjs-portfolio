@@ -30,6 +30,15 @@ const bubblePathVariants = [
   "M118 36 C78 32 45 54 48 92 C15 111 20 163 54 177 C39 218 69 255 114 250 C142 279 196 274 218 250 C266 272 324 264 346 241 C395 266 452 260 474 235 C522 262 576 259 605 236 C652 263 712 267 740 241 C778 267 830 276 858 249 C907 257 950 226 941 186 C977 168 982 116 948 95 C958 56 928 30 884 37 C835 17 781 28 758 52 C700 21 639 27 604 51 C553 23 497 26 472 52 C416 22 355 27 333 53 C274 24 211 27 189 53 C164 39 139 33 118 36 Z",
 ];
 
+/*
+ * The bubbles' size unit. Everything inside a bubble scales with its width,
+ * so on a short screen (a phone on its side: ~330px of page) a desktop-width
+ * bubble swallowed the whole view. Below ~670px of height the unit shrinks
+ * with the height, keeping the bubble the same share of the screen as on a
+ * desktop - small, in its corner. Taller windows are unchanged (1rem).
+ */
+const BUBBLE_REM = "min(1rem, 2.4dvh)";
+
 const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeChannel, opacity, blurPx, scale, bottomRem, font, motionOn, popStiffness, leftTiltDeg, rightTiltDeg, widthRem, minHeightRem, roundness, waveAmplitude, waveSpeed, waveSpacing, textSizeRem, textPadTopRem, textPadRightRem, textPadBottomRem, textPadLeftRem, textColor, borderOn, borderWidthPx, borderColor, nameTagXRem, nameTagYRem, nameTagScale, nameTagAnchor, nameTagInsetXRem, nameTagInsetYRem, mapleNameTagXRem, mapleNameTagYRem, mapleNameTagScale, mapleNameTagInsetXRem, mapleNameTagInsetYRem, nameTagWaveAmplitude, nameTagWaveSpeed, nameTagWaveSpacing, nameTagRoundness, nameTagOutlineOn, nameTagOutlineWidthPx, nameTagOutlineColor, smokeyTagFill, smokeyTagShadow, mapleTagFill, mapleTagShadow, youTagFill, youTagShadow, smokeyNameTiltDeg, mapleNameTiltDeg, smokeyIconSizeRem, smokeyIconInsetXRem, smokeyIconInsetYRem, smokeyIconMarginXRem, smokeyIconMarginYRem, smokeyIconKeepInside, smokeyIconTiltDeg, smokeyIconOpacity, smokeyIconBorderOn, smokeyIconBorderWidthPx, smokeyIconBorderColor, smokeyIconShadowXRem, smokeyIconShadowYRem, smokeyIconShadowBlurPx, smokeyIconShadowLayers, smokeyIconShadowOpacity, smokeyIconShadowColor, smokeyIconGlowPx, smokeyIconGlowPasses, smokeyIconGlowOpacity, smokeyIconGlowColor }: BearDialogueProps) => {
   const [mode, setMode] = useState<DialogueMode>("speak");
   const [message, setMessage] = useState("");
@@ -257,7 +266,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         initial={animateDialogue ? popIn : false}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={popTransition}
-        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(84vw, ${Math.min(widthRem, 24)}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
+        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `calc(${bottomRem} * ${BUBBLE_REM})`, width: `min(84vw, calc(${Math.min(widthRem, 24)} * ${BUBBLE_REM}))`, minWidth: `min(78vw, calc(18 * ${BUBBLE_REM}))`, containerType: "inline-size" } as CSSProperties}
         className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={Math.min(widthRem, 24)} minHeight={`${Math.min(minHeightRem, 18)}em`}>
@@ -290,7 +299,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         animate={{ opacity: 1, rotate: leftTiltDeg, scale: 1, y: 0 }}
         exit={popExit}
         transition={popTransition}
-        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(92vw, ${Math.min(widthRem, 30)}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
+        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `calc(${bottomRem} * ${BUBBLE_REM})`, width: `min(92vw, calc(${Math.min(widthRem, 30)} * ${BUBBLE_REM}))`, minWidth: `min(78vw, calc(18 * ${BUBBLE_REM}))`, containerType: "inline-size" } as CSSProperties}
         className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={Math.min(widthRem, 30)} minHeight={`${Math.max(minHeightRem * 0.6, 10)}em`}>
@@ -343,7 +352,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         animate={{ opacity: 1, rotate: leftTiltDeg, scale: 1, y: 0 }}
         exit={popExit}
         transition={popTransition}
-        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(92vw, ${widthRem}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
+        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `calc(${bottomRem} * ${BUBBLE_REM})`, width: `min(92vw, calc(${widthRem} * ${BUBBLE_REM}))`, minWidth: `min(78vw, calc(18 * ${BUBBLE_REM}))`, containerType: "inline-size" } as CSSProperties}
         className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={widthRem} minHeight={`${Math.max(minHeightRem * 0.7, 8)}em`}>
@@ -378,7 +387,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         animate={{ opacity: 1, rotate: leftTiltDeg, scale: 1, y: 0 }}
         exit={popExit}
         transition={popTransition}
-        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(92vw, ${widthRem}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
+        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `calc(${bottomRem} * ${BUBBLE_REM})`, width: `min(92vw, calc(${widthRem} * ${BUBBLE_REM}))`, minWidth: `min(78vw, calc(18 * ${BUBBLE_REM}))`, containerType: "inline-size" } as CSSProperties}
         className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={widthRem} minHeight={`${Math.max(minHeightRem, 12)}em`}>
@@ -434,7 +443,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
       animate={{ opacity: 1, rotate: bubbleTilt, scale: 1, y: 0 }}
       exit={popExit}
       transition={popTransition}
-      style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(92vw, ${widthRem}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
+      style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `calc(${bottomRem} * ${BUBBLE_REM})`, width: `min(92vw, calc(${widthRem} * ${BUBBLE_REM}))`, minWidth: `min(78vw, calc(18 * ${BUBBLE_REM}))`, containerType: "inline-size" } as CSSProperties}
       className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute z-30 text-stone-700 ${bubblePosition}`}
     >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={widthRem} minHeight={`${Math.max(minHeightRem, 18)}em`}>
