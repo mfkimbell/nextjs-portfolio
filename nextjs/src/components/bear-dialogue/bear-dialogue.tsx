@@ -258,7 +258,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={popTransition}
         style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(84vw, ${Math.min(widthRem, 24)}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
-        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
+        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={Math.min(widthRem, 24)} minHeight={`${Math.min(minHeightRem, 18)}em`}>
             <p style={{ fontSize: "2.25em", lineHeight: 1.1, padding: "3.5em 3.5em 0" }} className="relative text-center font-normal text-[#6e6b5c]">Your turn, partner.</p>
@@ -291,7 +291,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         exit={popExit}
         transition={popTransition}
         style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(92vw, ${Math.min(widthRem, 30)}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
-        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
+        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={Math.min(widthRem, 30)} minHeight={`${Math.max(minHeightRem * 0.6, 10)}em`}>
           <div aria-hidden="false" className="absolute z-20 h-0 w-0" style={{ left: `${(plaqueCorner.x * 100).toFixed(2)}%`, top: `${(plaqueCorner.y * 100).toFixed(2)}%` }}>
@@ -344,7 +344,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         exit={popExit}
         transition={popTransition}
         style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(92vw, ${widthRem}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
-        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
+        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={widthRem} minHeight={`${Math.max(minHeightRem * 0.7, 8)}em`}>
           <div aria-hidden="false" className="absolute z-20 h-0 w-0" style={{ left: `${(plaqueCorner.x * 100).toFixed(2)}%`, top: `${(plaqueCorner.y * 100).toFixed(2)}%` }}>
@@ -379,7 +379,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         exit={popExit}
         transition={popTransition}
         style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(92vw, ${widthRem}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
-        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
+        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={widthRem} minHeight={`${Math.max(minHeightRem, 12)}em`}>
           <div aria-hidden="false" className="absolute z-20 h-0 w-0" style={{ left: `${(plaqueCorner.x * 100).toFixed(2)}%`, top: `${(plaqueCorner.y * 100).toFixed(2)}%` }}>
@@ -435,7 +435,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
       exit={popExit}
       transition={popTransition}
       style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `${bottomRem}rem`, width: `min(92vw, ${widthRem}rem)`, minWidth: "min(78vw, 18rem)", containerType: "inline-size" } as CSSProperties}
-      className={`${dialogueFont.className} bear-dialogue-font pointer-events-none absolute z-30 text-stone-700 ${bubblePosition}`}
+      className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute z-30 text-stone-700 ${bubblePosition}`}
     >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={widthRem} minHeight={`${Math.max(minHeightRem, 18)}em`}>
           {headSrc ? <img src={headSrc} alt="" style={smokeyIconStyle(smokeyIcon, headCorner)} className={SMOKEY_ICON_CLASS} /> : null}

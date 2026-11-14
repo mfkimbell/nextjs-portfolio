@@ -9,7 +9,7 @@ import CampsiteTitleIntro from "@/components/scene-lab/CampsiteTitleIntro";
 import ForceLandscape from "@/components/ForceLandscape";
 import ViewportDebug from "@/components/ViewportDebug";
 import PerfOverlay from "@/components/PerfOverlay";
-import { Mic, MicOff } from "lucide-react";
+import { ArrowLeft, Mic, MicOff } from "lucide-react";
 import { useProgress } from "@react-three/drei";
 import { perfStats, SCENE_READY_EVENT } from "@/lib/perfStats";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
@@ -139,6 +139,12 @@ export default function CampsiteHome() {
     // "talk": this is where the browser's microphone prompt appears
     const ok = await liveKitBearAgent.setMicrophone?.(true);
     if (ok === false) setChatMode(null);   // refused: back to the three choices
+  }, [liveKitBearAgent]);
+  // Back to the three choices (telephone / microphone / typewriter): the mic
+  // goes off too, so leaving "talk" doesn't keep listening.
+  const backToChoices = useCallback(() => {
+    setChatMode(null);
+    void liveKitBearAgent.setMicrophone?.(false);
   }, [liveKitBearAgent]);
   const selectTwilioTransport = useCallback(() => {
     liveKitBearAgent.stop();
@@ -319,6 +325,18 @@ export default function CampsiteHome() {
         {/* the phone number now shows in a dialogue bubble (BearDialogue, chatMode "phone") */}
 
         {/* (to switch channel, click the telephone, microphone or typewriter) */}
+        {/* Voice chat: a back arrow to the three choices, beside the mute button */}
+        {!showTitle && chatMode === "mic" ? (
+          <button
+            type="button"
+            onClick={backToChoices}
+            aria-label="Back to the ways to talk to the bears"
+            title="Back"
+            className="pointer-events-auto absolute bottom-4 right-16 z-40 rounded-full p-2 text-white/90 drop-shadow-[0_2px_6px_rgba(0,0,0,0.75)] transition hover:scale-110 hover:text-white"
+          >
+            <ArrowLeft size={30} strokeWidth={2} />
+          </button>
+        ) : null}
         {/* Voice chat: a plain white mic / muted-mic icon, bottom-right, to mute yourself */}
         {!showTitle && chatMode === "mic" ? (
           <button
@@ -340,7 +358,7 @@ export default function CampsiteHome() {
           </div>
         ) : null}
         {/* the bubbles follow you to every scene, not just the campfire */}
-        {!showTitle && (dialogueStarted || chatMode != null) && !(choosing && !activeBearAgent.isRemoteSpeaking) ? <ConfiguredBearDialogue agent={activeBearAgent} chatMode={chatMode ?? undefined} config={config} phoneNumber={BEAR_PHONE_NUMBER} onCall={onCall} onChangeChannel={() => setChatMode(null)} /> : null}
+        {!showTitle && (dialogueStarted || chatMode != null) && !(choosing && !activeBearAgent.isRemoteSpeaking) ? <ConfiguredBearDialogue agent={activeBearAgent} chatMode={chatMode ?? undefined} config={config} phoneNumber={BEAR_PHONE_NUMBER} onCall={onCall} onChangeChannel={backToChoices} /> : null}
 
 
       {/* A plain starry night covers the 3D scene while it loads and
