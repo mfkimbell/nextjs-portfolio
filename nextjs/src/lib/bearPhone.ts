@@ -43,7 +43,7 @@ let assets: Promise<BearPhoneAssets | null> | null = null;
 /** The clip and the phone mesh (its local transform on the paw's bone is kept). */
 export function loadBearPhone(): Promise<BearPhoneAssets | null> {
   if (!assets) {
-    assets = import("three-stdlib")
+    assets = import("three/examples/jsm/loaders/GLTFLoader.js")
       .then(({ GLTFLoader }) => new GLTFLoader().loadAsync(BEAR_PHONE_URL))
       .then((g) => {
         const clip = g.animations[0];

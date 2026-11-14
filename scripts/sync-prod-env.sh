@@ -8,7 +8,7 @@ ENV_FILE=nextjs/.env
 HEROKU_APP=mitchell-portfolio-bears
 
 val() { # last definition wins, leading/trailing spaces and quotes stripped
-  grep -E "^[[:space:]]*$1=" "$ENV_FILE" | tail -1 | sed -E "s/^[[:space:]]*$1=//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//"
+  grep -E "^[[:space:]]*$1=" "$ENV_FILE" | tail -1 | sed -E "s/^[[:space:]]*$1=//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//" || true
 }
 need() { local v; v="$(val "$1")"; [ -n "$v" ] || { echo "missing $1 in $ENV_FILE" >&2; exit 1; }; printf %s "$v"; }
 
@@ -24,7 +24,8 @@ heroku_vars=(
   "OPENAI_API_KEY=$OPENAI_API_KEY" "ELEVEN_API_KEY=$ELEVEN"
 )
 for k in LIVEKIT_SMOKEY_ELEVENLABS_VOICE_ID LIVEKIT_MAPLE_ELEVENLABS_VOICE_ID LIVEKIT_MAPLE_OVERLAP_MS; do
-  v="$(val $k)"; [ -n "$v" ] && heroku_vars+=("$k=$v")
+  v="$(val "$k")"
+  if [ -n "$v" ]; then heroku_vars+=("$k=$v"); fi
 done
 heroku config:set -a "$HEROKU_APP" "${heroku_vars[@]}" >/dev/null
 echo "set: $(printf '%s\n' "${heroku_vars[@]}" | cut -d= -f1 | tr '\n' ' ')"

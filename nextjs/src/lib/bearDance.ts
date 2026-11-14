@@ -19,7 +19,7 @@ let clipPromise: Promise<import("three").AnimationClip | null> | null = null;
  */
 export function loadBearDanceClip(): Promise<import("three").AnimationClip | null> {
   if (!clipPromise) {
-    clipPromise = import("three-stdlib")
+    clipPromise = import("three/examples/jsm/loaders/GLTFLoader.js")
       .then(({ GLTFLoader }) => new GLTFLoader().loadAsync(BEAR_DANCE_URL))
       .then((g) => g.animations[0] ?? null)
       .catch((error) => { console.warn("[dance] could not load the dance clip", error); clipPromise = null; return null; });
