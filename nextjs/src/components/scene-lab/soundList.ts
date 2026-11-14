@@ -48,7 +48,6 @@ export const SOUND_LIST: readonly SoundEntry[] = [
   // the voices from inside the A-frame tent: off to the right, and heard
   // through the canvas (muffled, in a small enclosed space)
   { id: "tent1", label: "Tent voice 1", url: "/sound2/tent-1.mp3", where: "Campfire", defaults: { pan: 0.85, vol: 1.4, scene: 1, mono: 1, muffle: 1100, room: 0.35, air: 0.15, outdoor: 0.15 } },
-  { id: "tent2", label: "Tent voice 2", url: "/sound2/tent-2.mp3", where: "Campfire", defaults: { pan: 0.85, vol: 1.4, scene: 1, mono: 1, muffle: 1100, room: 0.35, air: 0.15, outdoor: 0.15 } },
   { id: "tent3", label: "Tent voice 3", url: "/sound2/tent-3.mp3", where: "Campfire", defaults: { pan: 0.85, vol: 1.4, scene: 1, mono: 1, muffle: 1100, room: 0.35, air: 0.15, outdoor: 0.15 } },
   { id: "tent4", label: "Tent voice 4", url: "/sound2/tent-4.mp3", where: "Campfire", defaults: { pan: 0.85, vol: 1.4, scene: 1, mono: 1, muffle: 1100, room: 0.35, air: 0.15, outdoor: 0.15 } },
   // scene 2 - arcade

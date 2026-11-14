@@ -14234,12 +14234,11 @@ function CampfireWorld({
   // The A-frame tent: each click plays the next voice from inside it, one at
   // a time (a click while one is still talking does nothing). When the last
   // one finishes, the bears answer it and the tent is done.
-  // (Hooks can't run in a loop; the JSON is expected to list exactly four.)
+  // (Hooks can't run in a loop; the JSON is expected to list exactly three.)
   const tentVoices = [
     useCampsiteOneShot(TENT_VOICES[0].audio),
     useCampsiteOneShot(TENT_VOICES[1].audio),
     useCampsiteOneShot(TENT_VOICES[2].audio),
-    useCampsiteOneShot(TENT_VOICES[3].audio),
   ];
   const [tentLine, setTentLine] = useState(0);
   // the line playing right now (its index), or null - drives the bubble too

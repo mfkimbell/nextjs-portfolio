@@ -1,0 +1,4 @@
+web: node dist/index.js
+smokey: LIVEKIT_BEAR_ID=smokey LIVEKIT_AGENT_NAME=smokey-agent node dist/livekit-agent.js start
+maple: LIVEKIT_BEAR_ID=maple LIVEKIT_AGENT_NAME=maple-agent node dist/livekit-agent.js start
+coordinator: node dist/livekit-coordinator.js start
