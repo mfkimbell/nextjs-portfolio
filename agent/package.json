@@ -5,10 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "livekit:dev": "LIVEKIT_BEAR_ID=smokey LIVEKIT_AGENT_NAME=smokey-agent tsx src/livekit-agent.ts dev",
-    "livekit:maple": "LIVEKIT_BEAR_ID=maple LIVEKIT_AGENT_NAME=maple-agent tsx src/livekit-agent.ts dev",
-    "livekit:coordinator": "tsx src/livekit-coordinator.ts dev",
-    "livekit:start": "LIVEKIT_BEAR_ID=smokey LIVEKIT_AGENT_NAME=smokey-agent tsx src/livekit-agent.ts start",
+    "livekit:dev": "tsx src/livekit-coordinator.ts dev",
+    "livekit:start": "node dist/livekit-coordinator.js start",
     "build": "tsc",
     "heroku-postbuild": "npm run build",
     "start": "node dist/index.js",

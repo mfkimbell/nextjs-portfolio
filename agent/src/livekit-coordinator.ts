@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { correctionFactById, correctionFacts } from "./correction-facts/index.js";
 import { sceneEventById } from "./scene-events/index.js";
 import { disableLocalInference } from "./local-inference/index.js";
+import { joinBears } from "./livekit-bears/index.js";
 import { applyFactCorrection, buildSpeechCommands, removeRepeatedSentences, type PlannedExchange, type SpeechCommand } from "./livekit-orchestrator/index.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -266,6 +267,17 @@ export default defineAgent({
     });
     await session.start({ room: ctx.room, agent: voice.Agent.create({ instructions: "Transcribe the visitor without replying." }) });
     await ctx.connect();
+    // Smokey and Maple join from this same job (see livekit-bears): one
+    // process per visitor instead of three. The site sends their pitches.
+    const metadata = JSON.parse(ctx.job.metadata || "{}") as { smokeyPitch?: unknown; maplePitch?: unknown };
+    await joinBears(ctx, { smokey: metadata.smokeyPitch, maple: metadata.maplePitch });
+    // The bears count as agents, so when the visitor's browser leaves the
+    // visit is over: end the job (and the bears with it).
+    ctx.room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      if (!participant.identity.startsWith("bear-browser-")) return;
+      const visitorsLeft = [...ctx.room.remoteParticipants.values()].some((p) => p.identity.startsWith("bear-browser-"));
+      if (!visitorsLeft) ctx.shutdown("visitor left");
+    });
 
     const prepareCommand = (command: SpeechCommand) => publish(ctx, { type: "bear.prepare", ...command });
     const playCommand = (command: SpeechCommand | undefined) => command
@@ -437,7 +449,9 @@ export default defineAgent({
   },
 });
 
-// The coordinator does listen, so it keeps the end-of-turn model unless
-// LIVEKIT_LOCAL_EOT=off (falls back to the STT's own endpointing).
-if (process.env.LIVEKIT_LOCAL_EOT === "off") disableLocalInference();
+// Skip LiveKit's local end-of-turn model (an extra process holding a native
+// model). It only steers AgentSession's own replies, and this session never
+// replies: turns start from the STT's final transcripts (UserInputTranscribed).
+// LIVEKIT_LOCAL_EOT=on loads it anyway.
+if (process.env.LIVEKIT_LOCAL_EOT !== "on") disableLocalInference();
 cli.runApp(new ServerOptions({ agent: fileURLToPath(import.meta.url), agentName: "bear-coordinator", numIdleProcesses: Math.max(1, Number(process.env.LIVEKIT_IDLE_PROCESSES) || 1), port: Number(process.env.LIVEKIT_HEALTH_PORT) || undefined }));

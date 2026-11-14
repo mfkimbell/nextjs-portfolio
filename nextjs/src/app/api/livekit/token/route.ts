@@ -23,20 +23,17 @@ export async function POST(request: Request) {
       ttl: "15m",
     });
     token.addGrant({ room, roomJoin: true, canPublish: true, canSubscribe: true });
+    // One agent: the coordinator, which brings Smokey and Maple into the room
+    // itself (agent/src/livekit-bears) and gets their pitches from here.
     token.roomConfig = new RoomConfiguration({
       agents: [
         new RoomAgentDispatch({
-          agentName: "smokey-agent",
+          agentName: "bear-coordinator",
           metadata: JSON.stringify({
-            voice: typeof body.voice === "string" ? body.voice : undefined,
-            pitch: typeof body.smokeyPitch === "number" ? body.smokeyPitch : undefined,
+            smokeyPitch: typeof body.smokeyPitch === "number" ? body.smokeyPitch : undefined,
+            maplePitch: typeof body.maplePitch === "number" ? body.maplePitch : undefined,
           }),
         }),
-        new RoomAgentDispatch({
-          agentName: "maple-agent",
-          metadata: JSON.stringify({ pitch: typeof body.maplePitch === "number" ? body.maplePitch : undefined }),
-        }),
-        new RoomAgentDispatch({ agentName: "bear-coordinator" }),
       ],
     });
     return NextResponse.json({ token: await token.toJwt(), url: required("LIVEKIT_URL"), room });

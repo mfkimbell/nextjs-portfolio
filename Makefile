@@ -26,29 +26,21 @@ agent:
 	$(PNPM_AGENT) --dir agent dev
 
 livekit:
-	@set -e; \
-	$(PNPM_AGENT) --dir agent livekit:dev & smokey_pid=$$!; \
-	$(PNPM_AGENT) --dir agent livekit:maple & maple_pid=$$!; \
-	$(PNPM_AGENT) --dir agent livekit:coordinator & coordinator_pid=$$!; \
-	cleanup() { kill $$smokey_pid $$maple_pid $$coordinator_pid 2>/dev/null || true; }; \
-	trap cleanup EXIT INT TERM; \
-	wait $$smokey_pid $$maple_pid $$coordinator_pid
+	$(PNPM_AGENT) --dir agent livekit:dev
 
 # Every backend piece the bears need, without the website:
 #   Twilio side  - the ConversationRelay agent (phone calls) + the ngrok tunnel
 #                  Twilio reaches it through
-#   LiveKit side - the Smokey, Maple and coordinator workers (talk / type on the site)
+#   LiveKit side - the coordinator worker, which brings Smokey and Maple in (talk / type on the site)
 # Ctrl-C stops them all.
 backend:
 	@set -e; \
 	$(PNPM_AGENT) --dir agent dev & agent_pid=$$!; \
 	ngrok http --domain=$(NGROK_DOMAIN) $(AGENT_PORT) & ngrok_pid=$$!; \
-	$(PNPM_AGENT) --dir agent livekit:dev & smokey_pid=$$!; \
-	$(PNPM_AGENT) --dir agent livekit:maple & maple_pid=$$!; \
-	$(PNPM_AGENT) --dir agent livekit:coordinator & coordinator_pid=$$!; \
-	cleanup() { kill $$agent_pid $$ngrok_pid $$smokey_pid $$maple_pid $$coordinator_pid 2>/dev/null || true; }; \
+	$(PNPM_AGENT) --dir agent livekit:dev & livekit_pid=$$!; \
+	cleanup() { kill $$agent_pid $$ngrok_pid $$livekit_pid 2>/dev/null || true; }; \
 	trap cleanup EXIT INT TERM; \
-	wait $$agent_pid $$ngrok_pid $$smokey_pid $$maple_pid $$coordinator_pid
+	wait $$agent_pid $$ngrok_pid $$livekit_pid
 
 ngrok:
 	ngrok http --domain=$(NGROK_DOMAIN) $(AGENT_PORT)

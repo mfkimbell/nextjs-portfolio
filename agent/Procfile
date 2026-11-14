@@ -1,2 +1,2 @@
 web: node dist/index.js
-livekit: bash bin/livekit-all.sh
+livekit: node dist/livekit-coordinator.js start
