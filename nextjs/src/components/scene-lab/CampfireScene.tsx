@@ -22,6 +22,7 @@ import { roles } from "@/lib/experience";
 import { projects } from "@/lib/projects";
 import { SKILLS, skillIcon } from "@/lib/skills";
 import { Canvas, createPortal, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
+import { Mic, MicOff } from "lucide-react";
 import { Clone, Html, OrbitControls, PerformanceMonitor, Stars, useAnimations, useGLTF, useProgress, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
@@ -14189,7 +14190,7 @@ function CampfireWorld({
   onSceneEvent?: (event: SceneEventId) => void;
   /** Site: before the bears start, arrows over the telephone, microphone and
    *  typewriter ask how the visitor wants to talk; onChoose gets the pick. */
-  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void; /** the telephone / mic / typewriter can be clicked to pick or switch channel (arrows or not) */ clickable?: boolean };
+  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void; /** the telephone / mic / typewriter can be clicked to pick or switch channel (arrows or not) */ clickable?: boolean; /** talking: the mic's live / muted icon floats beside the 3D microphone (clicking the mic toggles it) */ micState?: "live" | "muted" | null };
 }) {
   /*
    * Clicking the fire throws embers up out of it.
@@ -15368,6 +15369,19 @@ function CampfireWorld({
             <SafeAsset label="microphone">
               <MicrophoneStand extraHeight={config.campfireMicHeight ?? 0} shine={config.campfireMicShine ?? 0.45} gloss={config.campfireMicGloss ?? 0.82} metalness={config.campfireMicMetalness ?? 1} />
             </SafeAsset>
+            {/* Talking: the mic's state floats beside its head. Clicks pass
+                through to the microphone, which toggles mute. */}
+            {chatChoice?.micState ? (
+              <Html position={[0.42, 1.5 + (config.campfireMicHeight ?? 0), 0]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
+                <div
+                  aria-live="polite"
+                  aria-label={chatChoice.micState === "muted" ? "Microphone muted - click the microphone to unmute" : "Microphone on - click the microphone to mute"}
+                  className={`rounded-full p-1.5 drop-shadow-[0_2px_6px_rgba(0,0,0,0.75)] ${chatChoice.micState === "muted" ? "text-red-300" : "text-white/90"}`}
+                >
+                  {chatChoice.micState === "muted" ? <MicOff size={26} strokeWidth={2} /> : <Mic size={26} strokeWidth={2} />}
+                </div>
+              </Html>
+            ) : null}
           </Selectable>
           {/* Soju bottle floating just above the fish so it lands clearly in
               the current camera view. Drag/scale in the drawer to place it
@@ -15844,7 +15858,7 @@ export default function CampfireScene({
   onSceneEvent?: (event: SceneEventId) => void;
   /** Site: before the bears start, arrows over the telephone, microphone and
    *  typewriter ask how the visitor wants to talk; onChoose gets the pick. */
-  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void; /** the telephone / mic / typewriter can be clicked to pick or switch channel (arrows or not) */ clickable?: boolean };
+  chatChoice?: { show: boolean; onChoose: (choice: ChatChoice) => void; /** the telephone / mic / typewriter can be clicked to pick or switch channel (arrows or not) */ clickable?: boolean; /** talking: the mic's live / muted icon floats beside the 3D microphone (clicking the mic toggles it) */ micState?: "live" | "muted" | null };
 }) {
   const cameraChangeHandler = onCameraChange ?? (() => {});
   const selectHandler = onSelect ?? (() => {});

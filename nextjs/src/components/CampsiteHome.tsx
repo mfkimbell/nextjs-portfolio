@@ -9,7 +9,6 @@ import CampsiteTitleIntro from "@/components/scene-lab/CampsiteTitleIntro";
 import ForceLandscape from "@/components/ForceLandscape";
 import ViewportDebug from "@/components/ViewportDebug";
 import PerfOverlay from "@/components/PerfOverlay";
-import { ArrowLeft, Mic, MicOff } from "lucide-react";
 import { useProgress } from "@react-three/drei";
 import { perfStats, SCENE_READY_EVENT } from "@/lib/perfStats";
 import SceneLabClient from "@/components/scene-lab/SceneLabClient";
@@ -127,6 +126,8 @@ export default function CampsiteHome() {
     })();
   }, [bearVoiceAgent, liveKitBearAgent, voiceTransport]);
   const chooseChatMode = useCallback(async (choice: ChatChoice) => {
+    // already talking: the microphone itself is the mute switch
+    if (choice === "mic" && chatMode === "mic") { liveKitBearAgent.toggleMute(); return; }
     setChatMode(choice);
     if (choice === "phone") {           // just shows the number; Twilio's /call webhook takes the call
       await liveKitBearAgent.setMicrophone?.(false);
@@ -139,7 +140,7 @@ export default function CampsiteHome() {
     // "talk": this is where the browser's microphone prompt appears
     const ok = await liveKitBearAgent.setMicrophone?.(true);
     if (ok === false) setChatMode(null);   // refused: back to the three choices
-  }, [liveKitBearAgent]);
+  }, [liveKitBearAgent, chatMode]);
   // Back to the three choices (telephone / microphone / typewriter): the mic
   // goes off too, so leaving "talk" doesn't keep listening.
   const backToChoices = useCallback(() => {
@@ -317,7 +318,7 @@ export default function CampsiteHome() {
           bearVoiceRef={activeBearAgent.voiceRef}
           onFishImpact={activeBearAgent.reactToFishFire}
           onSceneEvent={activeBearAgent.notifySceneEvent}
-          chatChoice={{ show: choosing, onChoose: chooseChatMode, clickable: !showTitle && greeted && panel === 0 }}
+          chatChoice={{ show: choosing, onChoose: chooseChatMode, clickable: !showTitle && greeted && panel === 0, micState: !showTitle && chatMode === "mic" ? (liveKitBearAgent.isMuted ? "muted" : "live") : null }}
         />
 
         {/* (no "how do you want to talk" banner - the three arrows say it) */}
@@ -325,31 +326,8 @@ export default function CampsiteHome() {
         {/* the phone number now shows in a dialogue bubble (BearDialogue, chatMode "phone") */}
 
         {/* (to switch channel, click the telephone, microphone or typewriter) */}
-        {/* Voice chat: a back arrow to the three choices, beside the mute button */}
-        {!showTitle && chatMode === "mic" ? (
-          <button
-            type="button"
-            onClick={backToChoices}
-            aria-label="Back to the ways to talk to the bears"
-            title="Back"
-            className="pointer-events-auto absolute bottom-4 right-16 z-40 rounded-full p-2 text-white/90 drop-shadow-[0_2px_6px_rgba(0,0,0,0.75)] transition hover:scale-110 hover:text-white"
-          >
-            <ArrowLeft size={30} strokeWidth={2} />
-          </button>
-        ) : null}
-        {/* Voice chat: a plain white mic / muted-mic icon, bottom-right, to mute yourself */}
-        {!showTitle && chatMode === "mic" ? (
-          <button
-            type="button"
-            onClick={liveKitBearAgent.toggleMute}
-            aria-pressed={liveKitBearAgent.isMuted}
-            aria-label={liveKitBearAgent.isMuted ? "Unmute microphone" : "Mute microphone"}
-            title={liveKitBearAgent.isMuted ? "Unmute" : "Mute"}
-            className="pointer-events-auto absolute bottom-4 right-4 z-40 rounded-full p-2 text-white/90 drop-shadow-[0_2px_6px_rgba(0,0,0,0.75)] transition hover:scale-110 hover:text-white"
-          >
-            {liveKitBearAgent.isMuted ? <MicOff size={30} strokeWidth={2} /> : <Mic size={30} strokeWidth={2} />}
-          </button>
-        ) : null}
+        {/* Voice chat: no screen buttons - the 3D microphone is the mute switch
+            (its icon floats beside it), and the telephone / typewriter switch channel */}
 
         {false && !showTitle && panel === 0 ? (
           <div className="pointer-events-auto absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 gap-1 rounded-full border border-white/20 bg-black/70 p-1 text-[0.65rem] text-white shadow-lg backdrop-blur-md">

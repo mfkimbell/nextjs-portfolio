@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type ReactElement } from "react";
 import localFont from "next/font/local";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowLeft, CornerDownLeft, Mic, Pencil } from "lucide-react";
+import { ArrowLeft, CornerDownLeft } from "lucide-react";
 import { type BearDialogueProps } from "./bear-dialogue.types";
 import DialoguePlaque from "./dialogue-plaque";
 import { headTextReserve, NO_TEXT_RESERVE, SMOKEY_ICON_CLASS, smokeyIconStyle, type HeadCorner, type SmokeyIconSettings } from "./smokey-icon";
@@ -48,7 +48,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
   const lastSpeakerRef = useRef<string | null>(null);
   const lastSpokenTextRef = useRef<string | null>(null);
   const reducedMotion = useReducedMotion();
-  const { activeSpeakerName, dialoguePhase, error, isRemoteSpeaking, microphonePermission, requestMicrophone, sendTextMessage, spokenText: anySpokenText, spokenByBear, start, status, visitorSpeech } = agent;
+  const { activeSpeakerName, dialoguePhase, error, isRemoteSpeaking, microphonePermission, sendTextMessage, spokenText: anySpokenText, spokenByBear, status, visitorSpeech } = agent;
   // live captions: a finished sentence the bears never answered shouldn't hang around forever
   const [captionStale, setCaptionStale] = useState(false);
   useEffect(() => {
@@ -194,19 +194,6 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
     }
   }, [isRemoteSpeaking]);
 
-  const handleSpeak = () => {
-    setMode("speak");
-    if (needsMicrophone) {
-      void requestMicrophone();
-      return;
-    }
-    void start();
-  };
-
-  const handleType = () => {
-    setMode("type");
-  };
-
   const handleMessageChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     setMessage(event.target.value);
   };
@@ -257,34 +244,10 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
 
   let content: ReactElement | null = null;
   const showLine = talking || mode === "type" || Boolean(error);
-  if (!showLine && !chatMode && dialoguePhase === "your-turn") {
-    content = (
-      <motion.section
-        key="your-turn"
-        exit={popExit}
-        aria-label="Your turn to talk to the bears"
-        initial={animateDialogue ? popIn : false}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={popTransition}
-        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `calc(${bottomRem} * ${BUBBLE_REM})`, width: `min(84vw, calc(${Math.min(widthRem, 24)} * ${BUBBLE_REM}))`, minWidth: `min(78vw, calc(18 * ${BUBBLE_REM}))`, containerType: "inline-size" } as CSSProperties}
-        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
-      >
-        <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={Math.min(widthRem, 24)} minHeight={`${Math.min(minHeightRem, 18)}em`}>
-            <p style={{ fontSize: "2.25em", lineHeight: 1.1, padding: "3.5em 3.5em 0" }} className="relative text-center font-normal text-[#6e6b5c]">Your turn, partner.</p>
-            <div className="relative mt-4 flex justify-center gap-3">
-              <button type="button" onClick={handleSpeak} aria-label="Speak to the bears" className="rounded-full border-2 border-[#51493a] bg-[#ffe78f] p-3 text-[#51493a] shadow-[0_3px_0_#b9904e] transition hover:-translate-y-0.5"><Mic size={20} strokeWidth={2.5} /></button>
-              <button type="button" onClick={handleType} aria-label="Type to the bears" className="rounded-full border-2 border-[#51493a] bg-[#fff8e5] p-3 text-[#51493a] shadow-[0_3px_0_#b9904e] transition hover:-translate-y-0.5"><Pencil size={20} strokeWidth={2.5} /></button>
-            </div>
-             <div className={`${nameTagAnchor >= 0.5 ? "absolute z-20 h-0 w-0" : "absolute -bottom-3 right-7 rotate-[3deg]"} ${nameTagAnchor >= 0.5 ? "" : "px-5 py-1.5 text-sm font-normal text-[#fffdf4]"}`} style={nameTagAnchor >= 0.5 ? { right: `${(plaqueCorner.x * 100).toFixed(2)}%`, bottom: `${(plaqueCorner.y * 100).toFixed(2)}%` } : undefined}>
-             <div style={{ padding: "0.375em 1.25em", fontSize: "0.875em", ...(nameTagAnchor >= 0.5 ? { transformOrigin: "top left", transform: `translate(${-nameTagInsetXRem}em, ${-nameTagInsetYRem}em) rotate(3deg)` } : {}) }} className={`${nameTagAnchor >= 0.5 ? "absolute left-0 top-0 whitespace-nowrap" : ""} font-normal text-[#fffdf4]`}>
-               <JellyBackdrop fill={youTagFill} shadowColor={youTagShadow} phaseOffset={1.9} stroke={nameTagOutlineColor} strokeWidthPx={nameTagOutlineOn >= 0.5 ? nameTagOutlineWidthPx : 0} shadowYPx={3} amplitude={nameTagWaveAmplitude} speed={nameTagWaveSpeed} spacing={nameTagWaveSpacing} roundness={nameTagRoundness} motionOn={motionOn} />
-               <span className="relative">You</span>
-             </div>
-             </div>
-         </DialoguePlaque>
-      </motion.section>
-    );
-  } else if (chatMode === "phone" && !talking) {
+  // (The "Your turn, partner." bubble that used to sit here is gone: it popped
+  //  up in every pause between lines, and the 3D arrows over the telephone,
+  //  mic and typewriter already ask how the visitor wants to talk.)
+  if (chatMode === "phone" && !talking) {
     /*
      * "Call us": the same plaque as the bears' and the visitor's bubbles, a
      * tag on its top-left corner, and the bears' number - tappable on a phone.
@@ -303,6 +266,12 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={Math.min(widthRem, 30)} minHeight={`${Math.max(minHeightRem * 0.6, 10)}em`}>
+          {/* back to the three ways to talk: top-right corner */}
+          {onChangeChannel ? (
+            <button type="button" onClick={onChangeChannel} aria-label="Back to the ways to talk" title="Back" className="absolute right-[1.6em] top-[1.3em] z-30 rounded-full p-[0.25em] opacity-60 transition hover:bg-black/5 hover:opacity-100" style={{ color: textColor }}>
+              <ArrowLeft size="1.5em" strokeWidth={2.5} />
+            </button>
+          ) : null}
           <div aria-hidden="false" className="absolute z-20 h-0 w-0" style={{ left: `${(plaqueCorner.x * 100).toFixed(2)}%`, top: `${(plaqueCorner.y * 100).toFixed(2)}%` }}>
             <div style={{ padding: "0.375em 1.25em", fontSize: "0.875em", transformOrigin: "bottom right", transform: tagTransform }} className="absolute bottom-0 right-0 whitespace-nowrap font-normal tracking-wide text-[#fffdf4]">
               <JellyBackdrop fill={smokeyTagFill} shadowColor={smokeyTagShadow} phaseOffset={0.7} {...nameTagJelly} />
@@ -324,20 +293,14 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
             )}
             <p style={{ fontSize: `${textSizeRem * 0.7}em` }} className="mt-2 font-normal opacity-70">Smokey and Maple pick up on the first ring.</p>
             </>}
-            {onChangeChannel ? (
-              <div className="mt-1 flex justify-start">
-                <button type="button" onClick={onChangeChannel} aria-label="Back" title="Back" className="rounded-full p-1 opacity-60 transition hover:bg-black/5 hover:opacity-100" style={{ color: textColor }}>
-                  <ArrowLeft size={22} strokeWidth={2.5} />
-                </button>
-              </div>
-            ) : null}
           </div>
         </DialoguePlaque>
       </motion.section>
     );
   } else if (chatMode === "mic" && !talking && visitorSpeech?.text && !captionStale) {
     /*
-     * Live captions while the visitor talks into the mic: the same "You"
+     * Live captions while the visitor talks into the mic, in the top-right
+     * corner (the bears' bubbles take the bottom corners): the same "You"
      * plaque as the typing bubble, filling in word by word (LiveKit's
      * streaming transcription, forwarded by the coordinator), with a soft
      * "..." while the sentence is still coming. Stays up until a bear answers.
@@ -348,12 +311,12 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         key="visitor-caption"
         aria-label="What you said"
         aria-live="polite"
-        initial={animateDialogue ? { ...popIn, rotate: leftTiltDeg } : false}
-        animate={{ opacity: 1, rotate: leftTiltDeg, scale: 1, y: 0 }}
+        initial={animateDialogue ? { ...popIn, y: -18, rotate: rightTiltDeg } : false}
+        animate={{ opacity: 1, rotate: rightTiltDeg, scale: 1, y: 0 }}
         exit={popExit}
         transition={popTransition}
-        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, bottom: `calc(${bottomRem} * ${BUBBLE_REM})`, width: `min(92vw, calc(${widthRem} * ${BUBBLE_REM}))`, minWidth: `min(78vw, calc(18 * ${BUBBLE_REM}))`, containerType: "inline-size" } as CSSProperties}
-        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
+        style={{ "--bear-dialogue-font": dialogueFont.style.fontFamily, top: `calc(${bottomRem} * ${BUBBLE_REM})`, width: `min(92vw, calc(${widthRem} * ${BUBBLE_REM}))`, minWidth: `min(78vw, calc(18 * ${BUBBLE_REM}))`, containerType: "inline-size" } as CSSProperties}
+        className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute right-4 sm:right-8 z-30 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={widthRem} minHeight={`${Math.max(minHeightRem * 0.7, 8)}em`}>
           <div aria-hidden="false" className="absolute z-20 h-0 w-0" style={{ left: `${(plaqueCorner.x * 100).toFixed(2)}%`, top: `${(plaqueCorner.y * 100).toFixed(2)}%` }}>
@@ -391,6 +354,12 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
         className={`${dialogueFont.className} bear-dialogue-font pointer-events-none [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_textarea]:pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 text-stone-700`}
       >
         <DialoguePlaque opacity={opacity} blurPx={blurPx} scale={scale} borderOn={borderOn} borderWidthPx={borderWidthPx} borderColor={borderColor} motionOn={motionOn} waveAmplitude={waveAmplitude} waveSpeed={waveSpeed} waveSpacing={waveSpacing} roundness={roundness} designWidthRem={widthRem} minHeight={`${Math.max(minHeightRem, 12)}em`}>
+          {/* back to the three ways to talk: top-right corner */}
+          {onChangeChannel ? (
+            <button type="button" onClick={onChangeChannel} aria-label="Back to the ways to talk" title="Back" className="absolute right-[1.6em] top-[1.3em] z-30 rounded-full p-[0.25em] opacity-60 transition hover:bg-black/5 hover:opacity-100" style={{ color: textColor }}>
+              <ArrowLeft size="1.5em" strokeWidth={2.5} />
+            </button>
+          ) : null}
           <div aria-hidden="false" className="absolute z-20 h-0 w-0" style={{ left: `${(plaqueCorner.x * 100).toFixed(2)}%`, top: `${(plaqueCorner.y * 100).toFixed(2)}%` }}>
             <div style={{ padding: "0.375em 1.25em", fontSize: "0.875em", transformOrigin: "bottom right", transform: youTransform }} className="absolute bottom-0 right-0 whitespace-nowrap font-normal tracking-wide text-[#fffdf4]">
               <JellyBackdrop fill={youTagFill} shadowColor={youTagShadow} phaseOffset={1.9} {...nameTagJelly} />
@@ -412,12 +381,7 @@ const BearDialogue = ({ agent, chatMode, phoneNumber, onCall = false, onChangeCh
               className="block w-full resize-none border-0 bg-transparent p-0 outline-none disabled:opacity-60"
             />
             {typedError ? <p className="mt-2 text-sm font-normal text-[#a63e32]">{typedError}</p> : null}
-            <div className={`mt-1 flex ${onChangeChannel ? "justify-between" : "justify-end"}`}>
-              {onChangeChannel ? (
-                <button type="button" onClick={onChangeChannel} aria-label="Back" title="Back" className="rounded-full p-1 opacity-60 transition hover:bg-black/5 hover:opacity-100" style={{ color: textColor }}>
-                  <ArrowLeft size={22} strokeWidth={2.5} />
-                </button>
-              ) : null}
+            <div className="mt-1 flex justify-end">
               <button
                 type="button"
                 onClick={() => void handleSubmitMessage()}
