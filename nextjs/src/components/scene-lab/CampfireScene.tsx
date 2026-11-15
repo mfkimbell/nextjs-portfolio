@@ -2342,7 +2342,11 @@ function useHoverGlow(target: GlowTarget, lit: boolean, cursorLit: boolean = lit
     }
     if (!root) return;
     if (!lit) { restore(); return; }
-    if (!cache.current) {
+    // Snapshot afresh each time the glow comes on (the materials are in their
+    // true state here: the glow was restored when it went off). Keeping the
+    // first hover's snapshot forever undid the light switches - a lamp turned
+    // off would light back up the next time the pointer left it.
+    {
       const mats: GlowCache["mats"] = [];
       root.traverse((o) => {
         const m = o as THREE.Mesh;
@@ -5955,7 +5959,7 @@ function DeskWaterFish({
 }
 
 let rectAreaLightReady = false;
-function DeskStringLight({ config, campScale }: { config: CampfireSceneConfig; campScale: number }) {
+function DeskStringLight({ config, campScale, lit = true }: { config: CampfireSceneConfig; campScale: number; /** the van's switch: off = dark, but still mounted (see DeskCampLampLight) */ lit?: boolean }) {
   if (!rectAreaLightReady) {
     RectAreaLightUniformsLib.init();
     rectAreaLightReady = true;
@@ -5979,7 +5983,7 @@ function DeskStringLight({ config, campScale }: { config: CampfireSceneConfig; c
         width={config.deskStringLightWidth}
         height={config.deskStringLightHeight}
         color={color}
-        intensity={config.deskStringLightIntensity}
+        intensity={lit ? config.deskStringLightIntensity : 0}
       />
       {/* Positioning aid, not scenery - flip "Show the bar" off when placed.
           Unlit and untoneMapped so it reads as the light itself, and pushed a
@@ -6286,10 +6290,17 @@ function DeskCampLampLight({
   lamp,
   position,
   config,
+  lit = true,
 }: {
   lamp: DeskCampLamp;
   position: THREE.Vector3;
   config: CampfireSceneConfig;
+  /**
+   * The site's light switch (van / dock lantern). Off keeps the light MOUNTED
+   * at intensity 0: unmounting it changed three's light count, which
+   * recompiles every material in the scene - a hitch on every click.
+   */
+  lit?: boolean;
 }) {
   const c = config as unknown as Record<string, number>;
   const on = c[`deskLamp${lamp.id}On`] ?? 1;
@@ -6335,7 +6346,7 @@ function DeskCampLampLight({
   // their spot source forward out of the bodywork; the swarm deliberately
   // stays on lightPos, because insects gather at the bulb, not out in the
   // cone ahead of it.
-  const bugs = (c[`deskLamp${lamp.id}Bugs`] ?? 0) >= 0.5 ? (
+  const bugs = lit && (c[`deskLamp${lamp.id}Bugs`] ?? 0) >= 0.5 ? (
     <BugSwarm
       origin={lightPos}
       // baseScale on the camping Selectable is 1, so the accumulated scale IS
@@ -6344,7 +6355,7 @@ function DeskCampLampLight({
       {...bugSwarmProps(config, bugColor, `deskLamp${lamp.id}` as BugSwarmScope)}
     />
   ) : null;
-  const intensity = c[`deskLamp${lamp.id}Intensity`] ?? 0.2;
+  const intensity = lit ? c[`deskLamp${lamp.id}Intensity`] ?? 0.2 : 0;
   const reach = c[`deskLamp${lamp.id}Reach`] ?? 4.5;
   const decay = c[`deskLamp${lamp.id}Decay`] ?? 2;
 
@@ -7036,7 +7047,7 @@ function CampingWithSelectableTrees({
     const anchor = lampAnchors.find((a) => a.lamp.id === "SmallB");
     if (!anchor) return null;
     const cr = config as unknown as Record<string, number>;
-    const lit = config.deskCampLampEnabled >= 0.5 && (cr.deskLampSmallBOn ?? 1) >= 0.5;
+    const lit = dockLit && config.deskCampLampEnabled >= 0.5 && (cr.deskLampSmallBOn ?? 1) >= 0.5;
     /*
      * That bulb IN CAMP SPACE.
      *
@@ -7075,7 +7086,7 @@ function CampingWithSelectableTrees({
       fade: lit ? config.deskFishShadeFade : 0,
       soft: config.deskFishShadeSoft,
     };
-  }, [dockShade, lampAnchors, lanterns, config]);
+  }, [dockShade, lampAnchors, lanterns, config, dockLit]);
 
   return (
     <>
@@ -7100,16 +7111,17 @@ function CampingWithSelectableTrees({
       {vanLit ? <StringBulbBloom positions={bulbGlow} config={config} /> : null}
       {/* Fixtures still IN the diorama. The lanterns' own lights are rendered
           inside their Selectables below, so they travel with them. */}
-      {config.deskCampLampEnabled >= 0.5 && lampAnchors.filter((a) => !a.owner && lampOn(a.lamp.id)).map(({ lamp, mesh, position }) => (
-        <DeskCampLampLight key={`${lamp.id}-${mesh}`} lamp={lamp} position={position} config={config} />
+      {config.deskCampLampEnabled >= 0.5 && lampAnchors.filter((a) => !a.owner).map(({ lamp, mesh, position }) => (
+        <DeskCampLampLight key={`${lamp.id}-${mesh}`} lamp={lamp} position={position} config={config} lit={lampOn(lamp.id)} />
       ))}
       {/* Sits in the camp's own frame alongside the lamps, so it tracks the
           diorama when that is dragged, spun or resized. baseScale on the
           camping Selectable is 1, so the accumulated scale IS its override. */}
-      {vanLit ? <DeskStringLight
+      <DeskStringLight
         config={config}
         campScale={config.objectOverrides?.["old_bear_camping"]?.scale ?? 1}
-      /> : null}
+        lit={vanLit}
+      />
       {/* Fish under the river surface. Camp-local like the lamps, so they
           stay in the water when the diorama is moved. They swim BELOW y
           0.561 (the surface), so they only read once deskWaterOpacity is
@@ -7150,9 +7162,9 @@ function CampingWithSelectableTrees({
         >
           <primitive object={l.group} />
           {config.deskCampLampEnabled >= 0.5 && lampAnchors
-            .filter((a) => a.owner === l.name && lampOn(a.lamp.id))
+            .filter((a) => a.owner === l.name)
             .map(({ lamp, mesh, position }) => (
-              <DeskCampLampLight key={`${lamp.id}-${mesh}`} lamp={lamp} position={position} config={config} />
+              <DeskCampLampLight key={`${lamp.id}-${mesh}`} lamp={lamp} position={position} config={config} lit={lampOn(lamp.id)} />
             ))}
         </Selectable>
       ))}
