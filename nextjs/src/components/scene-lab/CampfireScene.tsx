@@ -21,7 +21,7 @@ import { RetroCrtTv, Table, Chair, meleeMenuHit, meleePageBackHit, meleeGridHit,
 import { roles } from "@/lib/experience";
 import { projects } from "@/lib/projects";
 import { SKILLS, skillIcon } from "@/lib/skills";
-import { Canvas, createPortal, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
+import { Canvas, createPortal, events as pointerEvents, useFrame, useThree, type RootState, type ThreeEvent } from "@react-three/fiber";
 import { Mic, MicOff } from "lucide-react";
 import { Clone, Html, OrbitControls, PerformanceMonitor, Stars, useAnimations, useGLTF, useProgress, useTexture } from "@react-three/drei";
 import * as THREE from "three";
@@ -2496,6 +2496,36 @@ function TapTarget({ of }: { of: React.RefObject<THREE.Object3D | null> }) {
     </mesh>
   );
 }
+
+/*
+ * Where a pointer is on the canvas, for R3F's raycaster.
+ *
+ * R3F reads event.offsetX/offsetY, which iOS Safari doesn't map through CSS
+ * transforms. On a phone held upright the whole site is rotated 90deg
+ * (ForceLandscape: translateX(100dvw) rotate(90deg), origin top-left), so taps
+ * were raycast from the wrong spot and nothing - the telephone, mic or
+ * typewriter included - could be tapped. This works from clientX/Y and the
+ * canvas's on-screen box instead, undoing that rotation; unrotated, it is the
+ * same answer as before.
+ */
+function canvasPoint(event: { clientX: number; clientY: number }, el: HTMLElement, width: number, height: number): [number, number] {
+  const r = el.getBoundingClientRect();
+  const rotated = typeof window !== "undefined" && window.matchMedia("(orientation: portrait)").matches
+    && !!el.closest(".force-landscape");
+  if (rotated) {
+    // local x runs DOWN the screen, local y runs right-to-left
+    return [((event.clientY - r.top) / Math.max(1, r.height)) * width, ((r.right - event.clientX) / Math.max(1, r.width)) * height];
+  }
+  return [((event.clientX - r.left) / Math.max(1, r.width)) * width, ((event.clientY - r.top) / Math.max(1, r.height)) * height];
+}
+const rotationAwareEvents: typeof pointerEvents = (store) => ({
+  ...pointerEvents(store),
+  compute(event: { clientX: number; clientY: number }, state: RootState) {
+    const [x, y] = canvasPoint(event, state.gl.domElement, state.size.width, state.size.height);
+    state.pointer.set((x / state.size.width) * 2 - 1, -(y / state.size.height) * 2 + 1);
+    state.raycaster.setFromCamera(state.pointer, state.camera);
+  },
+});
 
 function SelectableInner({
   name, onSelect, config, basePosition = [0, 0, 0], baseRotationY = 0,
@@ -10616,7 +10646,7 @@ function Animal({
         centerPos = { bone, interp: interpolantOf(track), sitStart };
       }
     }
-    return { clip, rots, scales, poss, centerPos: centerPos as typeof centerPos, food: bones.get("Food") ?? null, handR: bones.get("hand_R") ?? null };
+    return { clip, rots, scales, poss, centerPos: centerPos as typeof centerPos, food: bones.get("Food") ?? null, handR: bones.get("hand_R") ?? null, tail: bones.get("tail_01") ?? null };
   }, [model, gltf.animations]);
   const danceRig = useMemo(() => (dancer && danceClip ? bindClip(danceClip) : null), [dancer, danceClip, bindClip]);
   // the phone call only moves the arms and the head - they stay sitting on their logs
@@ -10682,6 +10712,19 @@ function Animal({
       if (w <= 0.0005) continue;
       danceV.fromArray(interp.evaluate(t) as unknown as number[]);
       bone.position.lerp(danceV, w);
+    }
+    /*
+     * The tail, tucked away while they dance. The retargeted dance stands the
+     * bears up with the pelvis turned so that the tail (left in its sitting
+     * pose) ends up in FRONT, between the legs, pointing forward - it read as
+     * something very different. Shrunk to nothing and pulled into the hips as
+     * they get up (by the same weight), and back as they sit down. Restored
+     * with every other overlaid bone before the mixer runs next frame.
+     */
+    if (dance?.active && rig.tail && w > 0.0005) {
+      save(rig.tail);
+      rig.tail.scale.multiplyScalar(1 - 0.999 * w);
+      rig.tail.position.multiplyScalar(1 - w);
     }
     if (rig.centerPos && w > 0.0005) {
       const { bone, interp, sitStart } = rig.centerPos;
@@ -16149,6 +16192,7 @@ export default function CampfireScene({
       camera={{ position: [config.cameraX, config.cameraY, config.cameraZ], fov: config.fov, near: 0.01, far: 500 }}
       gl={{ antialias: aaOn, alpha: false, powerPreference: "high-performance" }}
       onPointerMissed={() => selectHandler("")}
+      events={rotationAwareEvents}
     >
       <Matte />
       {gfxForce === 0 && !autoLow ? (
